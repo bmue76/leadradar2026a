@@ -1,81 +1,140 @@
-import fs from "node:fs";
-import path from "node:path";
-import { Pool } from "pg";
-import { PrismaPg } from "@prisma/adapter-pg";
+/**
+ * LeadRadar2026A Seed (idempotent)
+ *
+ * Prisma 7 note:
+ * - PrismaClient must be constructed with either `adapter` or `accelerateUrl`.
+ * - We use PostgreSQL driver adapter (@prisma/adapter-pg) for local dev.
+ */
+
 import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
 
-function loadEnvFile(relPath) {
-  const abs = path.resolve(process.cwd(), relPath);
-  if (!fs.existsSync(abs)) return;
-
-  const raw = fs.readFileSync(abs, "utf8");
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-
-    const eq = trimmed.indexOf("=");
-    if (eq <= 0) continue;
-
-    const key = trimmed.slice(0, eq).trim();
-    let val = trimmed.slice(eq + 1).trim();
-
-    if (
-      (val.startsWith('"') && val.endsWith('"')) ||
-      (val.startsWith("'") && val.endsWith("'"))
-    ) {
-      val = val.slice(1, -1);
-    }
-
-    if (process.env[key] === undefined) {
-      process.env[key] = val;
-    }
-  }
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) {
+  throw new Error("[seed] DATABASE_URL is missing. Check .env.local / prisma.config.ts setup.");
 }
 
-loadEnvFile(".env.local");
-loadEnvFile(".env");
-
-if (!process.env.DATABASE_URL) {
-  console.error("Missing DATABASE_URL. Create .env.local (see .env.example).");
-  process.exit(1);
-}
-
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-const adapter = new PrismaPg(pool);
+const adapter = new PrismaPg({ connectionString });
 const prisma = new PrismaClient({ adapter });
 
 async function main() {
+  // 1) Tenant: Atlex GmbH (idempotent)
   const tenant = await prisma.tenant.upsert({
     where: { slug: "atlex" },
     update: { name: "Atlex GmbH" },
     create: { slug: "atlex", name: "Atlex GmbH" },
   });
 
-  const user = await prisma.user.upsert({
-    where: { email: "owner@atlex.test" },
-    update: {
-      tenantId: tenant.id,
-      role: "TENANT_OWNER",
-      name: "Beat",
-    },
-    create: {
-      tenantId: tenant.id,
-      email: "owner@atlex.test",
-      role: "TENANT_OWNER",
-      name: "Beat",
-    },
+  // 2) Minimal demo user (idempotent)
+  await prisma.user.upsert({
+    where: { email: "beat@atlex.ch" },
+    update: { tenantId: tenant.id, role: "TENANT_OWNER" },
+    create: { tenantId: tenant.id, email: "beat@atlex.ch", role: "TENANT_OWNER" },
   });
 
-  console.log("[seed] tenant:", { id: tenant.id, slug: tenant.slug, name: tenant.name });
-  console.log("[seed] user:", { id: user.id, email: user.email, role: user.role, tenantId: user.tenantId });
+  // 3) Demo Form "Kontakt" (idempotent)
+  const existingForm = await prisma.form.findFirst({
+    where: { tenantId: tenant.id, name: "Kontakt" },
+    select: { id: true },
+  });
+
+  const form =
+    existingForm ??
+    (await prisma.form.create({
+      data: {
+        tenantId: tenant.id,
+        name: "Kontakt",
+        description: "Demo-Formular für Tests (TP 1.x/2.x).",
+        status: "ACTIVE",
+        config: { version: 1 },
+      },
+      select: { id: true },
+    }));
+
+  // 4) Fields (createMany + skipDuplicates => no duplicates on re-run)
+  await prisma.formField.createMany({
+    data: [
+      {
+        tenantId: tenant.id,
+        formId: form.id,
+        key: "firstName",
+        label: "Vorname",
+        type: "TEXT",
+        required: false,
+        isActive: true,
+        sortOrder: 10,
+        placeholder: "Vorname",
+      },
+      {
+        tenantId: tenant.id,
+        formId: form.id,
+        key: "lastName",
+        label: "Nachname",
+        type: "TEXT",
+        required: false,
+        isActive: true,
+        sortOrder: 20,
+        placeholder: "Nachname",
+      },
+      {
+        tenantId: tenant.id,
+        formId: form.id,
+        key: "email",
+        label: "E-Mail",
+        type: "EMAIL",
+        required: false,
+        isActive: true,
+        sortOrder: 30,
+        placeholder: "name@firma.ch",
+      },
+      {
+        tenantId: tenant.id,
+        formId: form.id,
+        key: "company",
+        label: "Firma",
+        type: "TEXT",
+        required: false,
+        isActive: true,
+        sortOrder: 40,
+        placeholder: "Firmenname",
+      },
+      {
+        tenantId: tenant.id,
+        formId: form.id,
+        key: "phone",
+        label: "Telefon",
+        type: "PHONE",
+        required: false,
+        isActive: true,
+        sortOrder: 50,
+        placeholder: "+41 ...",
+      },
+      {
+        tenantId: tenant.id,
+        formId: form.id,
+        key: "notes",
+        label: "Notizen",
+        type: "TEXTAREA",
+        required: false,
+        isActive: true,
+        sortOrder: 60,
+        placeholder: "Kurz notieren…",
+      },
+    ],
+    skipDuplicates: true,
+  });
+
+  console.log(`[seed] tenant=${tenant.slug} (${tenant.id})`);
+  console.log(`[seed] form="Kontakt" (${form.id}) ensured`);
+  console.log(`[seed] fields ensured (skipDuplicates)`);
 }
 
 main()
   .catch((e) => {
-    console.error("[seed] FAILED:", e);
+    console.error("[seed] failed:", e);
     process.exitCode = 1;
   })
   .finally(async () => {
-    await prisma.$disconnect().catch(() => {});
-    await pool.end().catch(() => {});
+    await prisma.$disconnect();
   });
+

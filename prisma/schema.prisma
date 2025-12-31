@@ -1,3 +1,9 @@
+/**
+ * LeadRadar2026A — Prisma Schema (Prisma ORM v7)
+ * IMPORTANT (Prisma v7):
+ * - Connection URLs (DATABASE_URL, directUrl, shadowDatabaseUrl) are configured in prisma.config.ts (NOT here).
+ */
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -6,45 +12,177 @@ datasource db {
   provider = "postgresql"
 }
 
-enum UserRole {
-  TENANT_OWNER
-  TENANT_ADMIN
-  SUPPORT
-  PLATFORM_ADMIN
-}
-
-enum TenantStatus {
+//
+// Enums (minimal start, extendable)
+//
+enum FormStatus {
+  DRAFT
   ACTIVE
-  SUSPENDED
-  DELETED
+  ARCHIVED
 }
 
+enum FieldType {
+  TEXT
+  TEXTAREA
+  SINGLE_SELECT
+  MULTI_SELECT
+  EMAIL
+  PHONE
+}
+
+enum AttachmentType {
+  IMAGE
+  PDF
+  OTHER
+}
+
+enum ExportJobStatus {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+}
+
+enum ExportJobType {
+  CSV
+}
+
+//
+// Core base models
+//
 model Tenant {
-  id            String       @id @default(cuid())
-  slug          String       @unique
-  name          String
-  status        TenantStatus @default(ACTIVE)
-  retentionDays Int          @default(365)
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
-
-  users         User[]
-
-  @@index([slug])
+  // Relations
+  users           User[]
+  forms           Form[]
+  formFields      FormField[] // <-- required opposite for FormField.tenant
+  leads           Lead[]
+  leadAttachments LeadAttachment[] // <-- required opposite for LeadAttachment.tenant
+  exportJobs      ExportJob[]
 }
 
 model User {
   id        String   @id @default(cuid())
   tenantId  String?
-  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
-
   email     String   @unique
-  name      String?
-  role      UserRole @default(TENANT_ADMIN)
+  role      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+}
+
+//
+// TP 1.0 — Core Domain Models (Forms / Fields / Leads / Attachments / ExportJob)
+//
+model Form {
+  id          String     @id @default(cuid())
+  tenantId    String
+  name        String
+  description String?
+  status      FormStatus @default(DRAFT)
+  config      Json?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fields FormField[]
+  leads  Lead[]
+
+  @@index([tenantId, status])
+}
+
+model FormField {
+  id          String    @id @default(cuid())
+  tenantId    String
+  formId      String
+  key         String
+  label       String
+  type        FieldType
+  required    Boolean   @default(false)
+  isActive    Boolean   @default(true)
+  sortOrder   Int       @default(0)
+  placeholder String?
+  helpText    String?
+  config      Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  form   Form   @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@unique([formId, key])
+  @@index([tenantId, formId, isActive, sortOrder])
+}
+
+model Lead {
+  id       String @id @default(cuid())
+  tenantId String
+  formId   String
+
+  // Idempotency (Mobile retry-safe)
+  clientLeadId String
+
+  capturedAt DateTime @default(now())
+  values     Json
+  meta       Json?
+
+  // Soft-delete prepared
+  isDeleted       Boolean   @default(false)
+  deletedAt       DateTime?
+  deletedReason   String?
+  deletedByUserId String?
+
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  form        Form             @relation(fields: [formId], references: [id], onDelete: Cascade)
+  attachments LeadAttachment[]
+
+  @@unique([tenantId, clientLeadId])
+  @@index([tenantId, formId, capturedAt])
+}
+
+model LeadAttachment {
+  id       String @id @default(cuid())
+  tenantId String
+  leadId   String
+
+  type       AttachmentType
+  filename   String
+  mimeType   String
+  sizeBytes  Int
+  storageKey String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([tenantId])
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, leadId])
+}
+
+model ExportJob {
+  id       String @id @default(cuid())
+  tenantId String
+
+  type   ExportJobType   @default(CSV)
+  status ExportJobStatus @default(QUEUED)
+
+  params           Json?
+  resultStorageKey String?
+
+  queuedAt   DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status, updatedAt])
 }
