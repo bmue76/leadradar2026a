@@ -1,16 +1,14 @@
-# LeadRadar2026A – API
+# LeadRadar2026A — API Contracts
 
-## Auth (Phase 1)
-- Admin: Header Auth x-user-id (DEV/PoC) oder API-Key (GoLive)
-- Mobile: tenantSlug Header + device binding (Activation)
+## Namespaces
+- `/api/platform/v1/*` — Platform/Health/Meta
+- `/api/admin/v1/*` — Admin UI
+- `/api/mobile/v1/*` — Mobile App
 
-## Standard Errors (Beispiele)
-- UNAUTHENTICATED (401)
-- FORBIDDEN (403)
-- NOT_FOUND (404 leak-safe)
-- INVALID_BODY / INVALID_QUERY (400)
-- KEY_CONFLICT (409)
-- NOT_READY / NO_FILE (409/404)
+## Standard Responses
+### Success
+```json
+{ "ok": true, "data": {}, "traceId": "..." }
 
-## Idempotency
-- Leads: clientLeadId + tenantId unique
+
+eof

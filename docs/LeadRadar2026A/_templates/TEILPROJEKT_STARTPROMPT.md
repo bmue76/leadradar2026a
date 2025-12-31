@@ -1,33 +1,36 @@
-# Template – Startprompt (Teilprojekt-Chat)
+# Teilprojekt X.Y — <Name> (Startprompt)
 
-Titel: LeadRadar2026A – Teilprojekt X.Y – <Name>
+## Kontext
+<kurz: warum, wo im Roadmap, Abhängigkeiten>
 
-Kontext:
-- Master-Regeln gelten (siehe docs/LeadRadar2026A/01_HANDBOOK.md)
-- Offline Phase-1: aus, aber vorbereitet (idempotency etc.)
+## Scope (IN)
+- ...
 
-Scope:
-- <klar abgrenzen>
+## Nicht-Scope (OUT)
+- ...
 
-Ziele:
-- <bullets>
+## DB → API → UI
+### DB
+- ...
 
-Nicht im Scope:
-- <bullets>
+### API
+- ...
 
-Betroffene Pfade:
-- <liste>
+### UI (Screen)
+- ...
 
-Akzeptanzkriterien (AC):
-- [ ] ...
-- [ ] ...
+## Acceptance Criteria (DoD-relevant)
+- npm run typecheck → 0 Errors
+- npm run lint → 0 Errors (Warnings ok)
+- npm run build → grün (wenn betroffen)
+- Reproduzierbarer Proof (curl/UI/Test)
+- Docs + Schlussrapport committed
+- git status clean + Push + Hash im Rapport
 
-Tests/Proof:
-- <curl / UI / scripts>
+## Proof/Smoke
+- <konkrete Commands>
 
-Docs Deliverables:
-- docs/LeadRadar2026A/<kapitel>.md (Update)
-- docs/teilprojekt-X.Y-<name>.md (Rapport)
-
-Git Deliverables:
-- commit + push + hash
+## Deliverables
+- <Dateien>
+- <Schlussrapport Pfad>
+- <Commit Msg Vorschlag>

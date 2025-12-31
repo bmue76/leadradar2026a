@@ -1,27 +1,36 @@
-# LeadRadar2026A – Living Handbook
+# LeadRadar2026A — Handbook (verbindlich)
 
-## Projektprinzipien (GoLive-ready)
-- Screen-by-screen Entwicklung (DB → API → UI), jeder Schritt getestet.
-- Keine Offline-Funktion im Phase-1 Build, aber Architektur vorbereitet (clientLeadId, idempotency).
-- Tenant-first, leak-safe Queries, Standard Responses + traceId.
-- Masterchat = Steuerung, Teilprojekt-Chats = Umsetzung.
+## Prozess pro Teilprojekt (immer gleich)
+**DB → API → UI(Screen) → Tests/Proof → Schlussrapport → Commit/Push**
 
-## Konventionen
-### API Namespaces
-- /api/admin/v1/*
-- /api/mobile/v1/*
-- /api/platform/v1/*
+## Non-Negotiables
+### Tenant-Scope & Leak-Safety
+- Jede tenant-owned Entity ist **tenantId-scoped**
+- Mismatch (falscher Tenant/ID) ⇒ **404 NOT_FOUND** (kein Leak)
 
-### Response Shape
-- jsonOk/jsonError + x-trace-id (lib/api.ts)
+### API Standards
+- Responses: `jsonOk/jsonError`
+- `traceId` im Body + `x-trace-id` Header
+- Validation ausschließlich via Zod + `validateBody/validateQuery` aus `src/lib/http.ts`
 
-### Validation + Errors
-- Zod + lib/http.ts (validateBody/validateQuery)
-- konsistente Error Codes (siehe 03_API.md)
+### Code-Regeln
+- Keine Snippets: bei Änderungen immer komplette Dateien.
+- Alles copy/paste-fähig (Git Bash), bevorzugt `cat > ... <<'EOF'`.
+- Pfade mit Klammern bei `git add` immer quoten.
 
-### Tenant Scope
-- tenantId enforced in jeder tenant-owned Query
-- leak-safe: 404 statt “existence leaks”
+## Prisma v7 Hinweis (wichtig)
+- Connection URL liegt in `prisma.config.ts` (nicht mehr im schema).
+- `prisma generate` muss explizit laufen (postinstall/prebuild/pretypecheck).
 
-## Changelog (Entscheidungen)
-- YYYY-MM-DD: Entscheidung – Kurztext – Impact
+## UX/Polish ist Teil des DoD
+- Jeder Screen: Loading/Empty/Error States
+- Klare Texte, sinnvolle Defaults
+- Keine Debug-UI im Produkt
+
+## Definition of Done (DoD)
+- `npm run typecheck` → 0 Errors
+- `npm run lint` → 0 Errors (Warnings ok)
+- `npm run build` → grün, wenn build-relevant
+- Reproduzierbarer Proof (curl/UI/Test)
+- Docs aktualisiert + Schlussrapport committed
+- `git status` clean + Push + Hash im Rapport

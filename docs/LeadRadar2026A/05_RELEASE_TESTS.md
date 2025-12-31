@@ -1,14 +1,17 @@
-# LeadRadar2026A – Tests & Release
+# LeadRadar2026A — Release Tests (Smoke/Regression)
 
-## Definition of Done (DoD)
-- typecheck grün
-- build grün (wenn betroffen)
-- API smoke / UI smoke
-- docs aktualisiert
-- git status clean + commit + push
+## Smoke (immer)
+1) `npm run typecheck` → 0 Errors
+2) `npm run lint` → 0 Errors
+3) `npm run build` → grün
 
-## Smoke Checklist (Minimal)
-- /api/*/health 200 + x-trace-id
-- Admin: whoami 200
-- Forms: create/list/detail OK
-- Leads: create/list/export OK
+## Runtime Smoke (lokal)
+- `npm run dev`
+- `curl -i http://localhost:3000/api/platform/v1/health`
+- `curl -i http://localhost:3000/api/admin/v1/health`
+- `curl -i http://localhost:3000/api/mobile/v1/health`
+
+Erwartungen:
+- Status 200
+- Header `x-trace-id` gesetzt
+- Body `ok:true` + `traceId`
