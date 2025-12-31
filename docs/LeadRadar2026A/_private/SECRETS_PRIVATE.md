@@ -1,0 +1,16 @@
+# PRIVATE – Secrets (NICHT committen)
+
+## DB
+POSTGRES_URL=postgresql://...
+Owner: Beat / Atlex GmbH
+Stored in: 1Password → "LeadRadar2026A – DB"
+
+## Stripe
+STRIPE_SECRET_KEY=...
+STRIPE_WEBHOOK_SECRET=...
+Stored in: 1Password → "LeadRadar2026A – Stripe"
+
+## Admin Owner
+OWNER_USER_ID=...
+TENANT_ID=...
+TENANT_SLUG=atlex
