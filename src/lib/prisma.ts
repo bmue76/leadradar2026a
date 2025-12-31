@@ -1,47 +1,72 @@
+/**
+ * LeadRadar2026A – Prisma Client
+ *
+ * Some Prisma setups (Driver Adapters) REQUIRE passing PrismaClientOptions (e.g. { adapter }).
+ * If we call `new PrismaClient()` in such a project, Prisma will throw at module-eval time,
+ * causing Next to render an HTML 500 error page before our route handler can respond with jsonError.
+ *
+ * This module creates PrismaClient in a way that supports both:
+ * - "classic" Prisma engine: new PrismaClient()
+ * - "driver adapter" Prisma: new PrismaClient({ adapter })
+ */
+
 import { PrismaClient } from "@prisma/client";
-import { PrismaPg } from "@prisma/adapter-pg";
+import { createRequire } from "module";
 
-type GlobalPrisma = typeof globalThis & {
-  __prisma?: PrismaClient;
-  __prismaPg?: PrismaPg;
-};
+const require = createRequire(import.meta.url);
 
-const g = globalThis as GlobalPrisma;
+type PrismaSingleton = { prisma?: PrismaClient };
+const globalForPrisma = globalThis as unknown as PrismaSingleton;
 
-function createClient(): PrismaClient {
-  const connectionString = process.env.DATABASE_URL;
-
-  // Nicht beim Import hard-crashen – erst wenn DB wirklich gebraucht wird.
-  if (!connectionString) {
-    throw new Error(
-      "DATABASE_URL is not set. Add it to .env.local (gitignored) or set it as an environment variable."
-    );
+function createClientWithPgAdapter(): PrismaClient {
+  const url = process.env.DATABASE_URL;
+  if (!url || !url.trim()) {
+    throw new Error("DATABASE_URL is missing/empty. Set it in .env.local before starting the dev server.");
   }
 
-  // Adapter re-using in dev (Hot Reload)
-  const adapter = g.__prismaPg ?? new PrismaPg({ connectionString });
-  if (process.env.NODE_ENV !== "production") g.__prismaPg = adapter;
+  // Adapter dependencies must exist in repo if driver adapters are enabled.
+  // npm i pg @prisma/adapter-pg
+  const pg = require("pg") as typeof import("pg");
+  const adapterPkg = require("@prisma/adapter-pg") as typeof import("@prisma/adapter-pg");
 
-  return new PrismaClient({ adapter });
+  const pool = new pg.Pool({ connectionString: url });
+  const adapter = new adapterPkg.PrismaPg(pool);
+
+  // Prisma Client types don't always include `adapter` (preview/driverAdapters).
+  // Runtime accepts it; we cast safely via unknown.
+  const options = { adapter } as unknown as ConstructorParameters<typeof PrismaClient>[0];
+  return new PrismaClient(options);
 }
 
-export function getPrisma(): PrismaClient {
-  if (!g.__prisma) g.__prisma = createClient();
-  return g.__prisma;
-}
+function createPrismaClient(): PrismaClient {
+  try {
+    // Works for classic Prisma setups
+    return new PrismaClient();
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
 
-/**
- * Optional convenience export:
- * Allows `import { prisma } from "@/lib/prisma"` with lazy init.
- */
-export const prisma: PrismaClient = new Proxy({} as PrismaClient, {
-  get(_target, prop: PropertyKey) {
-    const client = getPrisma();
+    const needsOptions =
+      msg.includes("PrismaClientOptions") ||
+      msg.includes("needs to be constructed with a non-empty") ||
+      msg.includes("non-empty, valid `PrismaClientOptions`");
 
-    const value = (client as unknown as Record<PropertyKey, unknown>)[prop];
-    if (typeof value === "function") {
-      return (value as (...args: unknown[]) => unknown).bind(client);
+    if (!needsOptions) throw e;
+
+    // Driver adapter setup detected -> attempt adapter-pg
+    try {
+      return createClientWithPgAdapter();
+    } catch (adapterErr: unknown) {
+      console.error(
+        "Prisma adapter init failed. If you use Driver Adapters, ensure deps are installed (pg, @prisma/adapter-pg).",
+        adapterErr
+      );
+      throw e; // keep original Prisma error as primary signal
     }
-    return value;
-  },
-});
+  }
+}
+
+export const prisma: PrismaClient = globalForPrisma.prisma ?? createPrismaClient();
+
+if (process.env.NODE_ENV !== "production") {
+  globalForPrisma.prisma = prisma;
+}

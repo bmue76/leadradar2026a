@@ -25,3 +25,4 @@ Thumbs.db
 # prisma
 prisma/dev.db
 prisma/dev.db-journal
+*.tsbuildinfo
