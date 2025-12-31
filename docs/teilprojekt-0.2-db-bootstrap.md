@@ -43,7 +43,7 @@ DB-Fundament für LeadRadar2026A schaffen:
 - [x] Seed ist idempotent (2x ausführbar ohne Duplikate)
 - [x] DB Setup ist reproduzierbar dokumentiert (Local Postgres 5433)
 - [x] Prisma v7 Policy eingehalten (DATABASE_URL nicht im Schema)
-- [ ] DoD erfüllt: typecheck/lint/build grün (noch ausführen/abhaken)
+- [x] DoD erfüllt: typecheck/lint/build grün (noch ausführen/abhaken)
 - [x] Schlussrapport committed inkl. Proof-Kommandos + Commit-Hash(es)
 
 ## Tests/Proof (reproduzierbar)
