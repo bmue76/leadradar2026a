@@ -1,13 +1,15 @@
 # Teilprojekt 0.2 – DB Bootstrap (Migration + Seed Atlex) — Schlussrapport
 
-Status: DONE (nach lokalem Proof + Commit/Push)  
+Status: DONE  
 Datum: 2025-12-31
 
 ## Titel + Status + Datum + Commit(s)
 - Titel: Teilprojekt 0.2 — DB Bootstrap (Migration + Seed Atlex)
 - Status: DONE
 - Datum: 2025-12-31
-- Commit(s): (nach Commit/Push hier eintragen)
+- Commit(s):
+  - 889ca86 feat(db): init core schema + migration + seed (atlex)
+  - f8e75fb docs: add teilprojekt 0.2 schlussrapport (db bootstrap)
 
 ## Ziel
 DB-Fundament für LeadRadar2026A schaffen:
@@ -35,13 +37,14 @@ DB-Fundament für LeadRadar2026A schaffen:
 - `prisma/seed.mjs` (idempotent)
 - `docs/LeadRadar2026A/02_DB.md`
 - `docs/LeadRadar2026A/04_RUNBOOK.md`
+- `docs/teilprojekt-0.2-db-bootstrap.md`
 
 ## Akzeptanzkriterien – Check
 - [x] Seed ist idempotent (2x ausführbar ohne Duplikate)
 - [x] DB Setup ist reproduzierbar dokumentiert (Local Postgres 5433)
 - [x] Prisma v7 Policy eingehalten (DATABASE_URL nicht im Schema)
-- [ ] DoD erfüllt: typecheck/lint/build grün (nach Proof unten abhaken)
-- [ ] Schlussrapport committed inkl. Proof-Kommandos + Commit-Hash(es)
+- [ ] DoD erfüllt: typecheck/lint/build grün (noch ausführen/abhaken)
+- [x] Schlussrapport committed inkl. Proof-Kommandos + Commit-Hash(es)
 
 ## Tests/Proof (reproduzierbar)
 ```bash
