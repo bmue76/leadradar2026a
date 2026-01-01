@@ -3,7 +3,10 @@
 Titel: Teilprojekt 1.2 — Admin Shell + Navigation + WhoAmI/Tenant Badge  
 Status: DONE  
 Datum: 2026-01-01  
-Commit(s): TODO (nach Commit/Push eintragen)
+Commit(s):
+- d875f09 feat(admin): add admin shell + navigation + tenant badge
+- d8ca88b fix(admin): tenant badge lint (react-hooks deps) — introduced TS/ESLint issues (superseded)
+- fa25fd7 fix(admin): clean tenant badge props + lint rules
 
 ## Ziel
 Erste kundentaugliche Admin-UI Basis unter `/admin`:
@@ -16,38 +19,24 @@ Erste kundentaugliche Admin-UI Basis unter `/admin`:
 - Admin Route Group `src/app/(admin)/admin/*`
 - Polished Layout: ruhige Oberfläche, responsive Sidebar (mobile overlay)
 - TenantBadge:
-  - lädt Tenant über `adminFetchJson`
-  - zeigt bei Fehlern traceId (Support-fähig)
-- `adminFetchJson` setzt immer `x-tenant-slug` (DEV: localStorage → fallback env)
-- Placeholder Pages sauber (Coming-soon, CTA zurück zum Dashboard)
+  - lädt Tenant über `/api/admin/v1/tenants/current`
+  - Fehler zeigt traceId (Support-fähig) + Retry
+- Tenant Context (DEV-only):
+  - localStorage `lr_admin_tenant_slug` → fallback `NEXT_PUBLIC_DEFAULT_TENANT_SLUG`
+  - UI dispatcht `lr_admin_tenant_slug_changed` für Same-Tab Updates (ohne API-Bypass)
 
-## Dateien/Änderungen
-- `src/app/(admin)/admin/layout.tsx`
-- `src/app/(admin)/admin/page.tsx`
-- `src/app/(admin)/admin/forms/page.tsx`
-- `src/app/(admin)/admin/leads/page.tsx`
-- `src/app/(admin)/admin/exports/page.tsx`
-- `src/app/(admin)/admin/recipients/page.tsx`
-- `src/app/(admin)/admin/settings/page.tsx`
-- `src/app/(admin)/admin/_components/AdminShell.tsx`
-- `src/app/(admin)/admin/_components/AdminShell.module.css`
-- `src/app/(admin)/admin/_components/SidebarNav.tsx`
-- `src/app/(admin)/admin/_components/Topbar.tsx`
-- `src/app/(admin)/admin/_components/TenantBadge.tsx`
-- `src/app/(admin)/admin/_components/UiState.tsx`
-- `src/app/(admin)/admin/_lib/adminFetch.ts`
-- `docs/LeadRadar2026A/04_ADMIN_UI.md`
-- `docs/teilprojekt-1.2-admin-shell.md`
+## CI / Fixes
+- Typecheck-Fehler (TenantBadge Props) + ESLint-Errors (`set-state-in-effect`, `no-explicit-any`) behoben durch fa25fd7.
 
 ## Akzeptanzkriterien – Check
 - [x] `/admin` lädt ohne Errors
 - [x] TenantBadge: ok → Tenant sichtbar / invalid → Error inkl. traceId + Retry
 - [x] Navigation funktioniert + Active State
 - [x] UX States (Loading/Empty/Error) sauber, keine rohen JSON-Objekte
-- [ ] `npm run typecheck` grün (lokal ausführen)
-- [ ] `npm run lint` grün (lokal ausführen)
-- [ ] `npm run build` grün (lokal ausführen)
-- [ ] Doku + Schlussrapport committed, git status clean
+- [x] `npm run typecheck` grün
+- [x] `npm run lint` grün
+- [x] `npm run build` grün
+- [x] Doku + Schlussrapport committed, git status clean
 
 ## Tests/Proof (reproduzierbar)
 1) `npm run dev`
@@ -58,9 +47,5 @@ Erste kundentaugliche Admin-UI Basis unter `/admin`:
 3) Kontroll-Call:
    - `curl -i -H "x-tenant-slug: atlex" http://localhost:3000/api/admin/v1/tenants/current`
 
-## Offene Punkte/Risiken
-- P0: Falls Admin-APIs lokal zusätzlich Auth-Header verlangen (z. B. `x-user-id`), DEV Env setzen.
-- P1: Nächster Screen: Forms List (TP 1.3) – nutzt bestehende Admin Contracts.
-
 ## Next Step
-TP 1.3 — **Admin Forms List** (read + status chips + empty state + CTA “Create form”).
+TP 1.3 — Admin Forms List (read + status chips + empty state + CTA “Create form”).
