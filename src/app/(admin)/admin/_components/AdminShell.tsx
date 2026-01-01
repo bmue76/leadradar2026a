@@ -37,7 +37,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
     () => getDefaultTenantSlug()
   );
 
-  const title = "LeadRadar Admin";
+  const title = "LEADRADAR Admin";
 
   return (
     <div className={styles.root}>
@@ -53,9 +53,13 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
         <aside className={[styles.sidebar, sidebarOpen ? styles.sidebarOpen : ""].join(" ")}>
           <div className={styles.sidebarHeader}>
             <div className={styles.brandRow}>
-              <div className={styles.logo} aria-hidden="true" />
+              {/* Logo Placeholder (UX): Monogram instead of empty square */}
+              <div className={styles.logo} aria-hidden="true">
+                <span className={styles.logoMark}>LR</span>
+              </div>
+
               <div className={styles.brandText}>
-                <div className={styles.brandTitle}>LeadRadar</div>
+                <div className={styles.brandTitle}>LEADRADAR</div>
                 <div className={styles.brandSub}>Admin Console</div>
               </div>
             </div>
