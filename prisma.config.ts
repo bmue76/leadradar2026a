@@ -1,47 +1,76 @@
 import fs from "node:fs";
 import path from "node:path";
-import { defineConfig, env } from "prisma/config";
+import { config as dotenvConfig } from "dotenv";
+import { defineConfig } from "prisma/config";
 
-function loadEnvFile(relPath: string) {
-  const abs = path.resolve(process.cwd(), relPath);
-  if (!fs.existsSync(abs)) return;
+function loadEnv() {
+  const cwd = process.cwd();
 
-  const raw = fs.readFileSync(abs, "utf8");
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
+  const envLocal = path.join(cwd, ".env.local");
+  if (fs.existsSync(envLocal)) dotenvConfig({ path: envLocal });
 
-    const eq = trimmed.indexOf("=");
-    if (eq <= 0) continue;
+  const env = path.join(cwd, ".env");
+  if (fs.existsSync(env)) dotenvConfig({ path: env });
+}
 
-    const key = trimmed.slice(0, eq).trim();
-    let val = trimmed.slice(eq + 1).trim();
+function normalize(v: string | undefined): string | undefined {
+  if (!v) return undefined;
+  const s = v.trim();
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
+    return s.slice(1, -1).trim();
+  }
+  return s;
+}
 
-    if (
-      (val.startsWith('"') && val.endsWith('"')) ||
-      (val.startsWith("'") && val.endsWith("'"))
-    ) {
-      val = val.slice(1, -1);
-    }
-
-    if (process.env[key] === undefined) {
-      process.env[key] = val;
-    }
+function isValidPostgresUrl(urlStr: string): boolean {
+  try {
+    const u = new URL(urlStr);
+    return u.protocol === "postgres:" || u.protocol === "postgresql:";
+  } catch {
+    return false;
   }
 }
 
-loadEnvFile(".env.local");
-loadEnvFile(".env");
+function pickDatabaseUrl(): string {
+  const candidates: Array<string | undefined> = [
+    normalize(process.env.DATABASE_URL),
+    normalize(process.env.POSTGRES_URL_NON_POOLING),
+    normalize(process.env.POSTGRES_URL),
+    normalize(process.env.POSTGRES_PRISMA_URL),
+  ];
 
-type Env = { DATABASE_URL: string };
+  for (const c of candidates) {
+    if (c && isValidPostgresUrl(c)) return c;
+  }
+
+  throw new Error(
+    "No valid Postgres connection string found. Set DATABASE_URL or POSTGRES_URL(_NON_POOLING) in .env.local / .env."
+  );
+}
+
+function deriveShadowSchemaUrl(databaseUrl: string): string {
+  const u = new URL(databaseUrl);
+  u.searchParams.set("schema", "shadow");
+  return u.toString();
+}
+
+loadEnv();
+
+const databaseUrl = pickDatabaseUrl();
+const shadowFromEnv = normalize(process.env.SHADOW_DATABASE_URL);
+
+const shadowDatabaseUrl =
+  shadowFromEnv && isValidPostgresUrl(shadowFromEnv)
+    ? shadowFromEnv
+    : deriveShadowSchemaUrl(databaseUrl);
 
 export default defineConfig({
   schema: "prisma/schema.prisma",
-  migrations: {
-    path: "prisma/migrations",
-    seed: "node prisma/seed.mjs",
-  },
   datasource: {
-    url: env<Env>("DATABASE_URL"),
+    url: databaseUrl,
+    shadowDatabaseUrl,
   },
 });
