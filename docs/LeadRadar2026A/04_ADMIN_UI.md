@@ -1,54 +1,59 @@
-# LeadRadar2026A — Admin UI (Screens)
+# LeadRadar2026A — Admin UI
 
 Stand: 2026-01-01  
-Prinzip: **Screen-by-screen**, UX-polished, tenant-first.
+Ziel: Kundentaugliches Admin-Backend (Apple-clean Basis, Notion-Elemente nur wo nötig: Tabellen/Exporte/Rules/Analytics).
 
-## Zielbild
-- Admin UI unter **/admin**
-- Konsumiert Admin-APIs (same origin)
-- **Tenant-scope non-negotiable**: Jeder Call setzt `x-tenant-slug`
-- Fehler sind support-fähig: **traceId sichtbar** + Retry
+---
 
-## TP 1.2 — Admin Shell (Basis)
-Enthält:
-- Route Group: `src/app/(admin)/admin/*`
+## Grundprinzipien
+- **Tenant-scope (non-negotiable):** Admin UI ruft tenant-owned Daten nur tenantId-scoped ab. UI nutzt `adminFetchJson` und setzt `x-tenant-slug`.
+- **Leak-safe:** Falscher Tenant/ID → `404 NOT_FOUND` (keine Hinweise).
+- **API Standard Responses:** `jsonOk/jsonError` inkl. `traceId` im Body + `x-trace-id` Header. UI zeigt `traceId` im Error-State.
+- **UX Polish von Anfang an:** Loading/Empty/Error States, klare CTA, saubere Focus States, Accessible Modal Behaviour.
+
+---
+
+## Screen Map (Admin)
+### TP 1.2 — Admin Shell (DONE)
 - Shell: Sidebar + Topbar + Content Slot
 - Navigation: Dashboard / Forms / Leads / Exports / Recipients / Settings
-- WhoAmI/Tenant Badge: `GET /api/admin/v1/tenants/current`
-  - Loading / Error / Success
-  - Error zeigt traceId, damit Support reproduzieren kann
+- TenantBadge: `GET /api/admin/v1/tenants/current` inkl. Loading/Error/Retry + traceId
 
-## Tenant Context (DEV-only, ohne API bypass)
-Die API bleibt strikt (Header muss gesetzt sein).  
-Die UI sorgt nur dafür, dass der Header zuverlässig gesendet wird.
+### TP 1.3 — Forms List (DONE)
+Route: `/admin/forms`
 
-### Default
-In `.env.local`:
-- `NEXT_PUBLIC_DEFAULT_TENANT_SLUG=atlex`
+**Features**
+- List: `GET /api/admin/v1/forms`
+- Search: query `q` (debounced ~320ms)
+- Status Filter: `status` (DRAFT/ACTIVE/ARCHIVED)
+- Create Form: Modal → `POST /api/admin/v1/forms`
+- Row Action: “Open” → `/admin/forms/[id]` (Placeholder bis TP 1.4)
 
-### Optionaler Switch (DEV)
-- Topbar enthält DEV-Input “Tenant slug”
-- Speichert in `localStorage` unter `lr_admin_tenant_slug`
-- Admin-Fetch liest in DEV zuerst localStorage, sonst `.env.local`
+**UX States**
+- Loading: Skeleton rows
+- Empty: Erklärung + CTA “Create your first form”
+- Error: freundlich + `traceId` + Retry Button
 
-### Optional: Dev User Header (nur falls Backend lokal verlangt)
-Wenn eure Admin-APIs lokal `x-user-id` erwarten:
-- `NEXT_PUBLIC_DEV_USER_ID=dev-owner` in `.env.local`
-oder über “Dev User” Button (prompt) setzen.
+**Accessibility Basics**
+- Labels an Inputs
+- Modal: ESC schliesst, Enter submit (bei valid), Focus auf Name Input
 
-## UX Patterns (Pflicht)
-- Loading: dezent (Spinner/Skeleton)
-- Error: freundlich + traceId + Retry
-- Empty: next action (CTA)
-- Keine rohen JSON-Objekte im UI
+---
 
-## Repro / Proof
-1) `npm run dev`
-2) Öffnen: `http://localhost:3000/admin`
-3) Erwartung:
-   - Shell erscheint (Sidebar + Topbar)
-   - TenantBadge zeigt Tenant (bei korrektem slug)
-   - Falscher slug → Error State mit traceId + Retry
+## Wiederverwendbare Patterns
+### adminFetchJson
+- Single source of truth für Tenant Header (`x-tenant-slug`)
+- UI zeigt Fehler als Text + `traceId`, niemals rohe JSON.
 
-Kontroll-Call:
-- `curl -i -H "x-tenant-slug: atlex" http://localhost:3000/api/admin/v1/tenants/current`
+### Error Display
+- Standard: Titel, Message, `traceId`, Retry.
+- Optional: “Back to dashboard” Link.
+
+---
+
+## Nächste Schritte
+### TP 1.4 — Form Detail Screen
+- Form Detail + Fields Liste
+- Fields CRUD (create/update/delete)
+- Sort/Reorder UI
+- Proof: UI + curl sanity + Quality Gates
