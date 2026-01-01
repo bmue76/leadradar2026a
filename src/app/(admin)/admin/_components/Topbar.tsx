@@ -1,26 +1,22 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import * as React from "react";
 import TenantBadge from "./TenantBadge";
-import { setTenantSlugClient, setDevUserIdClient } from "../_lib/adminFetch";
+import { setDevUserIdClient, setTenantSlugClient } from "../_lib/adminFetch";
 
 export default function Topbar({
   title,
   tenantSlug,
   onToggleSidebar,
-  onTenantSlugChange,
 }: {
   title: string;
   tenantSlug: string;
   onToggleSidebar: () => void;
-  onTenantSlugChange: (next: string) => void;
 }) {
   const isProd = process.env.NODE_ENV === "production";
-  const [draft, setDraft] = useState(tenantSlug);
+  const [draft, setDraft] = React.useState<string>(tenantSlug);
 
-  useEffect(() => setDraft(tenantSlug), [tenantSlug]);
-
-  const helperText = useMemo(() => {
+  const helperText = React.useMemo(() => {
     if (isProd) return null;
     return "DEV: Tenant slug setzen (localStorage). APIs bleiben strikt tenant-scoped.";
   }, [isProd]);
@@ -58,7 +54,10 @@ export default function Topbar({
               e.preventDefault();
               const next = draft.trim().toLowerCase();
               setTenantSlugClient(next);
-              onTenantSlugChange(next);
+              setDraft(next);
+
+              // Same-tab update (storage event fires only cross-tab)
+              window.dispatchEvent(new Event("lr_admin_tenant_slug_changed"));
             }}
           >
             <label className="lr-devLabel">
@@ -81,7 +80,6 @@ export default function Topbar({
               className="lr-devBtnSecondary"
               type="button"
               onClick={() => {
-                // Optional: falls Backend lokal x-user-id erwartet, kann man hier schnell setzen
                 const v = window.prompt("DEV UserId (optional, z. B. dev-owner). Leer = löschen") ?? "";
                 setDevUserIdClient(v);
                 window.location.reload();
