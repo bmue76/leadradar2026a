@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Image from "next/image";
 import styles from "./AdminShell.module.css";
 import SidebarNav from "./SidebarNav";
 import Topbar from "./Topbar";
@@ -53,9 +54,15 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
         <aside className={[styles.sidebar, sidebarOpen ? styles.sidebarOpen : ""].join(" ")}>
           <div className={styles.sidebarHeader}>
             <div className={styles.brandRow}>
-              {/* Logo Placeholder (UX): Monogram instead of empty square */}
+              {/* Brand Icon */}
               <div className={styles.logo} aria-hidden="true">
-                <span className={styles.logoMark}>LR</span>
+                <Image
+                  src="/brand/leadradar-icon.png"
+                  alt=""
+                  width={28}
+                  height={28}
+                  priority
+                />
               </div>
 
               <div className={styles.brandText}>
