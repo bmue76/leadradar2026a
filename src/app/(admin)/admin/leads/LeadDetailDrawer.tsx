@@ -100,7 +100,10 @@ export default function LeadDetailDrawer(props: {
 
   useEffect(() => {
     if (!open) return;
-    void loadDetail();
+    const t = setTimeout(() => {
+      void loadDetail();
+    }, 0);
+    return () => clearTimeout(t);
   }, [open, loadDetail]);
 
   const doDelete = useCallback(async () => {
@@ -123,7 +126,6 @@ export default function LeadDetailDrawer(props: {
         return;
       }
 
-      // Optimistic: mark lead deleted locally (detail refresh afterwards).
       setLead((prev) => (prev ? { ...prev, isDeleted: true } : prev));
       onMutated(leadId);
       void loadDetail();
@@ -147,7 +149,6 @@ export default function LeadDetailDrawer(props: {
       )) as ApiResponse<{ id: string } | AdminLeadDetail>;
 
       if (!res.ok) {
-        // Endpoint might not exist yet (optional in TP 1.6). Show a friendly message.
         setTraceId(res.traceId ?? null);
         setErrorMessage(
           res.error?.code === "NOT_FOUND"
@@ -169,7 +170,6 @@ export default function LeadDetailDrawer(props: {
 
   return (
     <div className="fixed inset-0 z-50">
-      {/* overlay */}
       <button
         type="button"
         className="absolute inset-0 bg-black/30"
@@ -177,7 +177,6 @@ export default function LeadDetailDrawer(props: {
         aria-label="Close"
       />
 
-      {/* panel */}
       <div className="absolute right-0 top-0 h-full w-full max-w-xl overflow-y-auto bg-white shadow-2xl">
         <div className="flex items-start justify-between gap-4 border-b px-5 py-4">
           <div className="min-w-0">
@@ -202,9 +201,7 @@ export default function LeadDetailDrawer(props: {
                 </>
               ) : null}
             </div>
-            {leadId && (
-              <div className="mt-1 truncate text-xs text-black/40">id: {leadId}</div>
-            )}
+            {leadId && <div className="mt-1 truncate text-xs text-black/40">id: {leadId}</div>}
           </div>
 
           <button
@@ -268,7 +265,6 @@ export default function LeadDetailDrawer(props: {
                 </div>
               )}
 
-              {/* Actions */}
               <div className="mb-5 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
@@ -290,12 +286,9 @@ export default function LeadDetailDrawer(props: {
                   Restore
                 </button>
 
-                <div className="text-xs text-black/40">
-                  Restore is optional (depends on API availability).
-                </div>
+                <div className="text-xs text-black/40">Restore is optional (depends on API availability).</div>
               </div>
 
-              {/* Values */}
               <section className="rounded-xl border bg-white p-4">
                 <div className="mb-3 flex items-center justify-between">
                   <h3 className="text-sm font-semibold">Values</h3>
@@ -334,13 +327,10 @@ export default function LeadDetailDrawer(props: {
                 </div>
               </section>
 
-              {/* Attachments */}
               <section className="mt-4 rounded-xl border bg-white p-4">
                 <div className="mb-3 flex items-center justify-between">
                   <h3 className="text-sm font-semibold">Attachments</h3>
-                  <span className="text-xs text-black/50">
-                    {lead.attachments?.length ?? 0} file(s)
-                  </span>
+                  <span className="text-xs text-black/50">{lead.attachments?.length ?? 0} file(s)</span>
                 </div>
 
                 {lead.attachments && lead.attachments.length > 0 ? (

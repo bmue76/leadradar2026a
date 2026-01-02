@@ -245,13 +245,19 @@ export default function LeadsClient() {
     await loadLeadsFirstPage();
   }, [loadLeadsFirstPage]);
 
-  // initial
+  // initial (deferred to avoid eslint react-hooks/set-state-in-effect)
   useEffect(() => {
-    void loadForms();
+    const t = setTimeout(() => {
+      void loadForms();
+    }, 0);
+    return () => clearTimeout(t);
   }, [loadForms]);
 
   useEffect(() => {
-    void loadLeadsFirstPage();
+    const t = setTimeout(() => {
+      void loadLeadsFirstPage();
+    }, 0);
+    return () => clearTimeout(t);
   }, [loadLeadsFirstPage]);
 
   const onFiltersChanged = useCallback(() => {
@@ -259,13 +265,13 @@ export default function LeadsClient() {
   }, [loadLeadsFirstPage]);
 
   // refresh list after a mutation (delete/restore)
-  const onLeadMutated = useCallback(async (leadId: string) => {
-    // Keep drawer open, refresh list; table should reflect deleted badge / disappearance.
-    await loadLeadsFirstPage();
-
-    // If still open on same lead, keep it selected (drawer will refetch itself).
-    setSelectedLeadId((prev) => (prev === leadId ? leadId : prev));
-  }, [loadLeadsFirstPage]);
+  const onLeadMutated = useCallback(
+    async (leadId: string) => {
+      await loadLeadsFirstPage();
+      setSelectedLeadId((prev) => (prev === leadId ? leadId : prev));
+    },
+    [loadLeadsFirstPage]
+  );
 
   const headerRight = (
     <div className="flex items-center gap-2">
@@ -302,7 +308,6 @@ export default function LeadsClient() {
                 value={formId}
                 onChange={(e) => {
                   setFormId(e.target.value);
-                  // trigger in same tick for snappy UX
                   setTimeout(onFiltersChanged, 0);
                 }}
                 disabled={formsState === "loading"}
@@ -416,9 +421,7 @@ export default function LeadsClient() {
         />
       )}
 
-      {listState === "idle" && items.length === 0 && (
-        <EmptyPanel />
-      )}
+      {listState === "idle" && items.length === 0 && <EmptyPanel />}
 
       {listState === "idle" && items.length > 0 && (
         <>
@@ -426,9 +429,7 @@ export default function LeadsClient() {
             <div>
               Showing <span className="font-medium text-black/80">{items.length}</span> lead(s)
             </div>
-            <div className="hidden md:block">
-              Captured times are shown in your local timezone.
-            </div>
+            <div className="hidden md:block">Captured times are shown in your local timezone.</div>
           </div>
 
           <LeadsTable
@@ -453,7 +454,6 @@ export default function LeadsClient() {
         onMutated={(id) => void onLeadMutated(id)}
       />
 
-      {/* CTA in footer */}
       <div className="mt-6 text-sm text-black/60">
         Need a form first?{" "}
         <Link href="/admin/forms" className="font-medium text-black underline underline-offset-4">
@@ -491,13 +491,11 @@ function EmptyPanel() {
       </div>
       <h2 className="text-lg font-semibold">No leads yet</h2>
       <p className="mt-2 text-sm text-black/60">
-        Create a form, activate it, and start capturing leads in the app. When the first lead arrives, it will show up here.
+        Create a form, activate it, and start capturing leads in the app. When the first lead arrives, it will show up
+        here.
       </p>
       <div className="mt-5 flex items-center justify-center gap-2">
-        <Link
-          href="/admin/forms"
-          className="rounded-md border px-4 py-2 text-sm font-medium hover:bg-black/5"
-        >
+        <Link href="/admin/forms" className="rounded-md border px-4 py-2 text-sm font-medium hover:bg-black/5">
           Create / Manage forms
         </Link>
       </div>
