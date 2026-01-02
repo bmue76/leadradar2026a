@@ -1,27 +1,5 @@
-import Link from "next/link";
+import ExportsClient from "./ExportsClient";
 
-export default function AdminExportsPage() {
-  return (
-    <div className="lr-page">
-      <header className="lr-pageHeader">
-        <h1 className="lr-h1">Exports</h1>
-        <p className="lr-muted">
-          Coming soon: Export Jobs (Create + Listing + Polling + Download). API ist geplant/teilweise vorhanden.
-        </p>
-      </header>
-
-      <section className="lr-panel">
-        <h2 className="lr-h2">Was hier kommt</h2>
-        <ul className="lr-bullets">
-          <li>CSV Export erstellen</li>
-          <li>Job-Status anzeigen (QUEUED/RUNNING/DONE/FAILED)</li>
-          <li>Download mit TraceId-Fehlerhilfe</li>
-        </ul>
-
-        <div className="lr-actions">
-          <Link className="lr-btn" href="/admin">Back to Dashboard</Link>
-        </div>
-      </section>
-    </div>
-  );
+export default function Page() {
+  return <ExportsClient />;
 }
