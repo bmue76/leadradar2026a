@@ -51,3 +51,15 @@ Route: `/admin/forms/[id]`
 - Loading Skeleton
 - Empty Fields CTA “Add your first field”
 - Error State: Nachricht + traceId + Retry (inkl. leak-safe 404)
+
+## /admin/leads — Leads List (TP 1.7)
+**Scope:** Liste + Filter + Cursor Paging + Detail Drawer (ohne neue Page)  
+**APIs:**  
+- GET /api/admin/v1/leads (cursor paging + filter: formId/includeDeleted/from/to/limit)  
+- GET /api/admin/v1/leads/:id  
+- DELETE /api/admin/v1/leads/:id (soft-delete)  
+- POST /api/admin/v1/leads/:id/restore (optional)  
+- GET /api/admin/v1/forms (Form Filter)
+
+**UX:** Loading Skeleton, Empty State, Error State mit traceId + Retry.  
+**Detail Drawer:** Values (key/value), Attachments Liste (Download disabled “coming later”).
