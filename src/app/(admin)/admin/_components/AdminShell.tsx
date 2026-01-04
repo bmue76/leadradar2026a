@@ -34,7 +34,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
 
   const tenantSlug = React.useSyncExternalStore(
     subscribeTenantSlug,
-    () => getTenantSlugClient(),
+    () => getTenantSlugClient() || getDefaultTenantSlug(), // ✅ hydration-safe
     () => getDefaultTenantSlug()
   );
 
@@ -43,26 +43,15 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
   return (
     <div className={styles.root}>
       {sidebarOpen ? (
-        <div
-          className={styles.scrim}
-          onClick={() => setSidebarOpen(false)}
-          aria-hidden="true"
-        />
+        <div className={styles.scrim} onClick={() => setSidebarOpen(false)} aria-hidden="true" />
       ) : null}
 
       <div className={styles.shell}>
         <aside className={[styles.sidebar, sidebarOpen ? styles.sidebarOpen : ""].join(" ")}>
           <div className={styles.sidebarHeader}>
             <div className={styles.brandRow}>
-              {/* Brand Icon */}
               <div className={styles.logo} aria-hidden="true">
-                <Image
-                  src="/brand/leadradar-icon.png"
-                  alt=""
-                  width={28}
-                  height={28}
-                  priority
-                />
+                <Image src="/brand/leadradar-icon.png" alt="" width={28} height={28} priority />
               </div>
 
               <div className={styles.brandText}>

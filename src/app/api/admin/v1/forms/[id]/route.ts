@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { jsonError, jsonOk } from "@/lib/api";
 import { httpError, isHttpError, validateBody } from "@/lib/http";
-import { requireTenantContext } from "@/lib/auth";
+import { requireAdminAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -43,13 +43,13 @@ const UpdateFormSchema = z
 
 export async function GET(req: Request, ctx: unknown) {
   try {
-    const tenant = await requireTenantContext(req);
+    const { tenantId } = await requireAdminAuth(req);
     const { id } = await getParams<{ id: string }>(ctx);
 
     if (!IdSchema.safeParse(id).success) throw httpError(404, "NOT_FOUND", "Not found.");
 
     const form = await prisma.form.findFirst({
-      where: { id, tenantId: tenant.id },
+      where: { id, tenantId },
       include: { fields: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] } },
     });
 
@@ -63,7 +63,7 @@ export async function GET(req: Request, ctx: unknown) {
 
 export async function PATCH(req: Request, ctx: unknown) {
   try {
-    const tenant = await requireTenantContext(req);
+    const { tenantId } = await requireAdminAuth(req);
     const { id } = await getParams<{ id: string }>(ctx);
 
     if (!IdSchema.safeParse(id).success) throw httpError(404, "NOT_FOUND", "Not found.");
@@ -71,7 +71,7 @@ export async function PATCH(req: Request, ctx: unknown) {
     const body = await validateBody(req, UpdateFormSchema);
 
     const res = await prisma.form.updateMany({
-      where: { id, tenantId: tenant.id },
+      where: { id, tenantId },
       data: {
         name: body.name,
         description: body.description === undefined ? undefined : body.description,
@@ -82,7 +82,7 @@ export async function PATCH(req: Request, ctx: unknown) {
     if (res.count === 0) throw httpError(404, "NOT_FOUND", "Not found.");
 
     const updated = await prisma.form.findFirst({
-      where: { id, tenantId: tenant.id },
+      where: { id, tenantId },
       include: { fields: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] } },
     });
 

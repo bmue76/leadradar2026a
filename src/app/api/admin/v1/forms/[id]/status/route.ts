@@ -4,7 +4,7 @@ import { FormStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { jsonError, jsonOk } from "@/lib/api";
 import { httpError, isHttpError, validateBody } from "@/lib/http";
-import { requireTenantContext } from "@/lib/auth";
+import { requireAdminAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -31,7 +31,7 @@ const SetFormStatusSchema = z.object({
 
 export async function PATCH(req: Request, ctx: unknown) {
   try {
-    const tenant = await requireTenantContext(req);
+    const { tenantId } = await requireAdminAuth(req);
     const { id } = await getParams<{ id: string }>(ctx);
 
     if (!IdSchema.safeParse(id).success) throw httpError(404, "NOT_FOUND", "Not found.");
@@ -39,14 +39,14 @@ export async function PATCH(req: Request, ctx: unknown) {
     const body = await validateBody(req, SetFormStatusSchema);
 
     const res = await prisma.form.updateMany({
-      where: { id, tenantId: tenant.id },
+      where: { id, tenantId },
       data: { status: body.status },
     });
 
     if (res.count === 0) throw httpError(404, "NOT_FOUND", "Not found.");
 
     const updated = await prisma.form.findFirst({
-      where: { id, tenantId: tenant.id },
+      where: { id, tenantId },
       select: {
         id: true,
         tenantId: true,

@@ -16,10 +16,7 @@ function loadEnv() {
 function normalize(v: string | undefined): string | undefined {
   if (!v) return undefined;
   const s = v.trim();
-  if (
-    (s.startsWith('"') && s.endsWith('"')) ||
-    (s.startsWith("'") && s.endsWith("'"))
-  ) {
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
     return s.slice(1, -1).trim();
   }
   return s;
@@ -47,30 +44,21 @@ function pickDatabaseUrl(): string {
   }
 
   throw new Error(
-    "No valid Postgres connection string found. Set DATABASE_URL or POSTGRES_URL(_NON_POOLING) in .env.local / .env."
+    "No valid Postgres connection string found. Set DATABASE_URL (preferred) in .env.local / .env."
   );
-}
-
-function deriveShadowSchemaUrl(databaseUrl: string): string {
-  const u = new URL(databaseUrl);
-  u.searchParams.set("schema", "shadow");
-  return u.toString();
 }
 
 loadEnv();
 
 const databaseUrl = pickDatabaseUrl();
-const shadowFromEnv = normalize(process.env.SHADOW_DATABASE_URL);
-
-const shadowDatabaseUrl =
-  shadowFromEnv && isValidPostgresUrl(shadowFromEnv)
-    ? shadowFromEnv
-    : deriveShadowSchemaUrl(databaseUrl);
 
 export default defineConfig({
   schema: "prisma/schema.prisma",
+  migrations: {
+    seed: "tsx prisma/seed.ts",
+  },
   datasource: {
     url: databaseUrl,
-    shadowDatabaseUrl,
+    // shadowDatabaseUrl: optional; let Prisma manage shadow DB automatically in dev
   },
 });

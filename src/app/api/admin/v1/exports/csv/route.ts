@@ -2,7 +2,7 @@ import { z } from "zod";
 import { jsonOk, jsonError, getTraceId } from "@/lib/api";
 import { isHttpError, validateBody } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
-import { requireTenantContext } from "@/lib/tenantContext";
+import { requireAdminAuth } from "@/lib/auth";
 import { runCsvExport } from "@/lib/exportCsv";
 
 export const runtime = "nodejs";
@@ -19,7 +19,7 @@ export async function POST(req: Request) {
   const traceId = getTraceId(req);
 
   try {
-    const { tenantId } = await requireTenantContext(req);
+    const { tenantId } = await requireAdminAuth(req);
     const body = await validateBody(req, BodySchema);
 
     // 1) create job QUEUED

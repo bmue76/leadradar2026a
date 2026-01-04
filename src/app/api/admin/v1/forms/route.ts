@@ -4,7 +4,7 @@ import { Prisma, FormStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { jsonError, jsonOk } from "@/lib/api";
 import { isHttpError, validateBody, validateQuery } from "@/lib/http";
-import { requireTenantContext } from "@/lib/auth";
+import { requireAdminAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -52,10 +52,10 @@ function mapPrismaUniqueConflict(
 
 export async function GET(req: Request) {
   try {
-    const tenant = await requireTenantContext(req);
+    const { tenantId } = await requireAdminAuth(req);
     const query = await validateQuery(req, ListFormsQuerySchema);
 
-    const where: Prisma.FormWhereInput = { tenantId: tenant.id };
+    const where: Prisma.FormWhereInput = { tenantId };
     if (query.status) where.status = query.status;
     if (query.q) where.name = { contains: query.q, mode: "insensitive" };
 
@@ -94,12 +94,12 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const tenant = await requireTenantContext(req);
+    const { tenantId } = await requireAdminAuth(req);
     const body = await validateBody(req, CreateFormSchema);
 
     const created = await prisma.form.create({
       data: {
-        tenantId: tenant.id,
+        tenantId,
         name: body.name,
         description: body.description,
         status: body.status ?? FormStatus.DRAFT,

@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 import { jsonError, jsonOk } from "@/lib/api";
 import { isHttpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
-import { requireTenantContext } from "@/lib/tenant";
+import { requireAdminAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -17,11 +17,11 @@ function withDerivedTimestamps<T extends { capturedAt?: Date }>(lead: T) {
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const tenant = await requireTenantContext(req);
+    const tenant = await requireAdminAuth(req);
     const { id } = await ctx.params;
 
     const existing = await prisma.lead.findFirst({
-      where: { id, tenantId: tenant.id },
+      where: { id, tenantId: tenant.tenantId },
       select: { id: true },
     });
     if (!existing) return jsonError(req, 404, "NOT_FOUND", "Not found.");
@@ -35,7 +35,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       },
     });
 
-    if (lead.tenantId !== tenant.id) return jsonError(req, 404, "NOT_FOUND", "Not found.");
+    if (lead.tenantId !== tenant.tenantId) return jsonError(req, 404, "NOT_FOUND", "Not found.");
     return jsonOk(req, { lead: withDerivedTimestamps(lead) });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);

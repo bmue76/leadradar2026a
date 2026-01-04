@@ -30,3 +30,10 @@ Dev Tenant Context:
 - `x-tenant-slug` Header (curl)
 - UI: optional localStorage helper `leadradar.devTenantSlug` oder `DEV_TENANT_SLUG` env
 
+
+## Screen: /login (Apple-clean)
+- Minimal: Wordmark/Logo + Email + Password + Primary CTA “Sign in”
+- Keine Cards, keine Schatten, keine Admin-Grau-Flächen
+- Error: ruhig (kleiner Text, keine roten Banner)
+- Nach Login: Redirect `/admin`
+- Topbar rechts: User Menu (Name/Email) + Logout

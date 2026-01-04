@@ -4,7 +4,7 @@ import { Prisma, FieldType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { jsonError, jsonOk } from "@/lib/api";
 import { httpError, isHttpError, validateBody } from "@/lib/http";
-import { requireTenantContext } from "@/lib/auth";
+import { requireAdminAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -77,7 +77,7 @@ function mapKeyConflict(e: unknown): { status: number; code: string; message: st
 
 export async function PATCH(req: Request, ctx: unknown) {
   try {
-    const tenant = await requireTenantContext(req);
+    const { tenantId } = await requireAdminAuth(req);
     const { id: formId, fieldId } = await getParams<{ id: string; fieldId: string }>(ctx);
 
     if (!IdSchema.safeParse(formId).success) throw httpError(404, "NOT_FOUND", "Not found.");
@@ -86,7 +86,7 @@ export async function PATCH(req: Request, ctx: unknown) {
     const body = await validateBody(req, UpdateFieldSchema);
 
     const res = await prisma.formField.updateMany({
-      where: { id: fieldId, formId, tenantId: tenant.id },
+      where: { id: fieldId, formId, tenantId },
       data: {
         key: body.key,
         label: body.label,
@@ -102,7 +102,7 @@ export async function PATCH(req: Request, ctx: unknown) {
     if (res.count === 0) throw httpError(404, "NOT_FOUND", "Not found.");
 
     const updated = await prisma.formField.findFirst({
-      where: { id: fieldId, formId, tenantId: tenant.id },
+      where: { id: fieldId, formId, tenantId },
     });
 
     if (!updated) throw httpError(404, "NOT_FOUND", "Not found.");
@@ -117,14 +117,14 @@ export async function PATCH(req: Request, ctx: unknown) {
 
 export async function DELETE(req: Request, ctx: unknown) {
   try {
-    const tenant = await requireTenantContext(req);
+    const { tenantId } = await requireAdminAuth(req);
     const { id: formId, fieldId } = await getParams<{ id: string; fieldId: string }>(ctx);
 
     if (!IdSchema.safeParse(formId).success) throw httpError(404, "NOT_FOUND", "Not found.");
     if (!IdSchema.safeParse(fieldId).success) throw httpError(404, "NOT_FOUND", "Not found.");
 
     const res = await prisma.formField.deleteMany({
-      where: { id: fieldId, formId, tenantId: tenant.id },
+      where: { id: fieldId, formId, tenantId },
     });
 
     if (res.count === 0) throw httpError(404, "NOT_FOUND", "Not found.");

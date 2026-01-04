@@ -1,13 +1,13 @@
 import { jsonOk, jsonError } from "@/lib/api";
 import { isHttpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
-import { requireTenantContext } from "@/lib/tenantContext";
+import { requireAdminAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const { tenantId } = await requireTenantContext(req);
+    const { tenantId } = await requireAdminAuth(req);
     const { id } = await ctx.params;
 
     const job = await prisma.exportJob.findFirst({

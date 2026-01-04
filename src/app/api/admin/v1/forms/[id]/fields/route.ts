@@ -4,7 +4,7 @@ import { Prisma, FieldType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { jsonError, jsonOk } from "@/lib/api";
 import { httpError, isHttpError, validateBody } from "@/lib/http";
-import { requireTenantContext } from "@/lib/auth";
+import { requireAdminAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -68,7 +68,7 @@ function mapKeyConflict(e: unknown): { status: number; code: string; message: st
 
 export async function POST(req: Request, ctx: unknown) {
   try {
-    const tenant = await requireTenantContext(req);
+    const { tenantId } = await requireAdminAuth(req);
     const { id: formId } = await getParams<{ id: string }>(ctx);
 
     if (!IdSchema.safeParse(formId).success) throw httpError(404, "NOT_FOUND", "Not found.");
@@ -77,7 +77,7 @@ export async function POST(req: Request, ctx: unknown) {
 
     const created = await prisma.$transaction(async (tx) => {
       const form = await tx.form.findFirst({
-        where: { id: formId, tenantId: tenant.id },
+        where: { id: formId, tenantId },
         select: { id: true },
       });
       if (!form) throw httpError(404, "NOT_FOUND", "Not found.");
@@ -85,7 +85,7 @@ export async function POST(req: Request, ctx: unknown) {
       let sortOrder = body.sortOrder;
       if (sortOrder === undefined) {
         const agg = await tx.formField.aggregate({
-          where: { tenantId: tenant.id, formId },
+          where: { tenantId, formId },
           _max: { sortOrder: true },
         });
         sortOrder = (agg._max.sortOrder ?? -1) + 1;
@@ -93,7 +93,7 @@ export async function POST(req: Request, ctx: unknown) {
 
       return tx.formField.create({
         data: {
-          tenantId: tenant.id,
+          tenantId,
           formId,
           key: body.key,
           label: body.label,

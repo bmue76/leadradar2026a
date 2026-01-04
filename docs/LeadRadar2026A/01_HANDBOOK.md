@@ -34,3 +34,13 @@
 - Reproduzierbarer Proof (curl/UI/Test)
 - Docs aktualisiert + Schlussrapport committed
 - `git status` clean + Push + Hash im Rapport
+
+## Auth (MVP) – Admin Login + Session
+- Session via **httpOnly Cookie** (signiert, HMAC-SHA256)
+- Cookie Policy: SameSite=Lax, Secure in prod
+- Admin Protection:
+  - `/admin/*` redirect to `/login` wenn nicht eingeloggt
+  - `/api/admin/v1/*` → `401 UNAUTHENTICATED`
+- Secrets ausschließlich in `.env.local`:
+  - `AUTH_SESSION_SECRET`
+  - `SEED_OWNER_PASSWORD` (Bootstrap, setzt beim ersten Login `passwordHash`)

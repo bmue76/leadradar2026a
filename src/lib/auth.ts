@@ -1,27 +1,162 @@
+import crypto from "node:crypto";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { httpError } from "@/lib/http";
+import { hashPasswordScrypt, verifyPasswordScrypt, sha256Hex } from "@/lib/password";
 
-/**
- * Admin Tenant Context
- * - Requires x-tenant-slug
- * - Missing header => 401 TENANT_REQUIRED
- * - Unknown slug => 404 NOT_FOUND (leak-safe)
- */
-export async function requireTenantContext(req: Request): Promise<{ id: string; slug: string; name: string }> {
-  const slug = req.headers.get("x-tenant-slug")?.trim();
-  if (!slug) {
-    throw httpError(401, "TENANT_REQUIRED", "Tenant context required (x-tenant-slug).");
+export { hashPasswordScrypt, verifyPasswordScrypt, sha256Hex };
+
+export const AUTH_COOKIE_NAME = "lr_session";
+
+type SessionPayload = {
+  sub: string;           // userId
+  tid: string | null;    // tenantId
+  role: string;
+  iat: number;
+  exp: number;
+};
+
+function base64url(input: Buffer | string): string {
+  const buf = typeof input === "string" ? Buffer.from(input, "utf8") : input;
+  return buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+function base64urlToBuffer(input: string): Buffer {
+  const pad = input.length % 4 === 0 ? "" : "=".repeat(4 - (input.length % 4));
+  const b64 = input.replaceAll("-", "+").replaceAll("_", "/") + pad;
+  return Buffer.from(b64, "base64");
+}
+
+export function getSessionSecret(): string {
+  const secret = process.env.AUTH_SESSION_SECRET;
+  if (secret && secret.length >= 16) return secret;
+
+  if (process.env.NODE_ENV !== "production") {
+    return "dev-only-secret-change-me-please";
   }
+  throw new Error("AUTH_SESSION_SECRET is missing (min 16 chars).");
+}
 
-  const tenant = await prisma.tenant.findUnique({
-    where: { slug },
-    select: { id: true, slug: true, name: true },
+function sign(part: string, secret: string): string {
+  const mac = crypto.createHmac("sha256", secret).update(part).digest();
+  return base64url(mac);
+}
+
+export function createSessionToken(opts: {
+  userId: string;
+  tenantId: string | null;
+  role: string;
+  ttlSeconds?: number;
+}): string {
+  const now = Math.floor(Date.now() / 1000);
+  const ttl = opts.ttlSeconds ?? 60 * 60 * 24 * 30; // 30 days
+
+  const payload: SessionPayload = {
+    sub: opts.userId,
+    tid: opts.tenantId,
+    role: opts.role,
+    iat: now,
+    exp: now + ttl
+  };
+
+  const payloadPart = base64url(JSON.stringify(payload));
+  const sig = sign(payloadPart, getSessionSecret());
+  return `${payloadPart}.${sig}`;
+}
+
+export function verifySessionToken(token: string): SessionPayload | null {
+  try {
+    const [payloadPart, sig] = token.split(".");
+    if (!payloadPart || !sig) return null;
+
+    const expected = sign(payloadPart, getSessionSecret());
+
+    const a = base64urlToBuffer(sig);
+    const b = base64urlToBuffer(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+
+    const payload = JSON.parse(base64urlToBuffer(payloadPart).toString("utf8")) as SessionPayload;
+    const now = Math.floor(Date.now() / 1000);
+
+    if (!payload?.sub) return null;
+    if (payload.exp <= now) return null;
+
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function getCookieFromHeader(cookieHeader: string, name: string): string {
+  const parts = cookieHeader.split(";").map((p) => p.trim());
+  for (const p of parts) {
+    const idx = p.indexOf("=");
+    if (idx <= 0) continue;
+    const k = p.slice(0, idx).trim();
+    if (k !== name) continue;
+    return decodeURIComponent(p.slice(idx + 1).trim());
+  }
+  return "";
+}
+
+function getCookieValue(req: Request, name: string): string {
+  // NextRequest hat `.cookies`, Request nicht. Wir machen beides möglich.
+  const anyReq = req as unknown as { cookies?: { get: (n: string) => { value?: string } | undefined } };
+  if (anyReq.cookies?.get) {
+    return anyReq.cookies.get(name)?.value ?? "";
+  }
+  return getCookieFromHeader(req.headers.get("cookie") ?? "", name);
+}
+
+export function setAuthCookie(res: NextResponse, token: string): void {
+  res.cookies.set({
+    name: AUTH_COOKIE_NAME,
+    value: token,
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 30
+  });
+}
+
+export function clearAuthCookie(res: NextResponse): void {
+  res.cookies.set({
+    name: AUTH_COOKIE_NAME,
+    value: "",
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 0
+  });
+}
+
+export async function getCurrentUserFromRequest(req: Request) {
+  const token = getCookieValue(req, AUTH_COOKIE_NAME);
+  const payload = verifySessionToken(token);
+  if (!payload) return null;
+
+  const user = await prisma.user.findUnique({
+    where: { id: payload.sub },
+    include: { tenant: true }
   });
 
-  // leak-safe: unknown tenant => 404
-  if (!tenant) {
-    throw httpError(404, "NOT_FOUND", "Not found.");
+  if (!user) return null;
+  return { user, tenant: user.tenant };
+}
+
+export async function requireAdminAuth(req: Request) {
+  const current = await getCurrentUserFromRequest(req);
+  if (!current) throw httpError(401, "UNAUTHORIZED", "Nicht eingeloggt.");
+
+  const { user } = current;
+  if (!user.tenantId) throw httpError(403, "FORBIDDEN", "Kein Tenant zugeordnet.");
+
+  const role = String(user.role ?? "").toUpperCase();
+  if (!(role === "OWNER" || role === "ADMIN")) {
+    throw httpError(403, "FORBIDDEN", "Keine Berechtigung.");
   }
 
-  return tenant;
+  return { user, tenantId: user.tenantId, userId: user.id };
 }

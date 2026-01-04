@@ -4,7 +4,7 @@ import { z } from "zod";
 import { jsonError, jsonOk } from "@/lib/api";
 import { validateQuery, isHttpError, httpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
-import { requireTenantContext } from "@/lib/tenant";
+import { requireAdminAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -72,13 +72,13 @@ const LeadListQuerySchema = z
 
 export async function GET(req: Request) {
   try {
-    const tenant = await requireTenantContext(req);
+    const tenant = await requireAdminAuth(req);
     const query = await validateQuery(req, LeadListQuerySchema);
 
     // leak-safe: if formId provided, ensure it belongs to tenant else 404
     if (query.formId) {
       const form = await prisma.form.findFirst({
-        where: { id: query.formId, tenantId: tenant.id },
+        where: { id: query.formId, tenantId: tenant.tenantId },
         select: { id: true },
       });
       if (!form) return jsonError(req, 404, "NOT_FOUND", "Not found.");
@@ -104,7 +104,7 @@ export async function GET(req: Request) {
       : undefined;
 
     const where = {
-      tenantId: tenant.id,
+      tenantId: tenant.tenantId,
       ...(query.includeDeleted ? {} : { isDeleted: false }),
       ...(query.formId ? { formId: query.formId } : {}),
       ...(capturedAtFilter ? { capturedAt: capturedAtFilter } : {}),

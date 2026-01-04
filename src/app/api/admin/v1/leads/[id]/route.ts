@@ -4,7 +4,7 @@ import type { NextRequest } from "next/server";
 import { jsonError, jsonOk } from "@/lib/api";
 import { validateBody, isHttpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
-import { requireTenantContext } from "@/lib/tenant";
+import { requireAdminAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -25,11 +25,11 @@ function withDerivedTimestamps<T extends { capturedAt?: Date }>(lead: T) {
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const tenant = await requireTenantContext(req);
+    const tenant = await requireAdminAuth(req);
     const { id } = await ctx.params;
 
     const lead = await prisma.lead.findFirst({
-      where: { id, tenantId: tenant.id },
+      where: { id, tenantId: tenant.tenantId },
       include: {
         form: { select: { id: true, name: true } },
         attachments: { orderBy: { id: "desc" } },
@@ -47,13 +47,13 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const tenant = await requireTenantContext(req);
+    const tenant = await requireAdminAuth(req);
     const { id } = await ctx.params;
 
     const body = await validateBody(req, DeleteLeadBodySchema);
 
     const existing = await prisma.lead.findFirst({
-      where: { id, tenantId: tenant.id },
+      where: { id, tenantId: tenant.tenantId },
       select: { id: true, isDeleted: true },
     });
 
@@ -62,7 +62,7 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
     // idempotent
     if (existing.isDeleted) {
       const lead = await prisma.lead.findFirst({
-        where: { id, tenantId: tenant.id },
+        where: { id, tenantId: tenant.tenantId },
         include: { form: { select: { id: true, name: true } }, attachments: { orderBy: { id: "desc" } } },
       });
       if (!lead) return jsonError(req, 404, "NOT_FOUND", "Not found.");
@@ -83,7 +83,7 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
     });
 
     // defensive leak-safe
-    if (lead.tenantId !== tenant.id) return jsonError(req, 404, "NOT_FOUND", "Not found.");
+    if (lead.tenantId !== tenant.tenantId) return jsonError(req, 404, "NOT_FOUND", "Not found.");
 
     return jsonOk(req, { lead: withDerivedTimestamps(lead) });
   } catch (e) {

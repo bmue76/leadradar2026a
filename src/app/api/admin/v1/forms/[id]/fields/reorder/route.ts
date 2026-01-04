@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { jsonError, jsonOk } from "@/lib/api";
 import { httpError, isHttpError, validateBody } from "@/lib/http";
-import { requireTenantContext } from "@/lib/auth";
+import { requireAdminAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -33,7 +33,7 @@ const ReorderFieldsSchema = z.object({
 
 export async function POST(req: Request, ctx: unknown) {
   try {
-    const tenant = await requireTenantContext(req);
+    const { tenantId } = await requireAdminAuth(req);
     const { id: formId } = await getParams<{ id: string }>(ctx);
 
     if (!IdSchema.safeParse(formId).success) throw httpError(404, "NOT_FOUND", "Not found.");
@@ -41,13 +41,13 @@ export async function POST(req: Request, ctx: unknown) {
     const body = await validateBody(req, ReorderFieldsSchema);
 
     const form = await prisma.form.findFirst({
-      where: { id: formId, tenantId: tenant.id },
+      where: { id: formId, tenantId },
       select: { id: true },
     });
     if (!form) throw httpError(404, "NOT_FOUND", "Not found.");
 
     const existing = await prisma.formField.findMany({
-      where: { tenantId: tenant.id, formId },
+      where: { tenantId, formId },
       select: { id: true },
     });
 
@@ -66,7 +66,7 @@ export async function POST(req: Request, ctx: unknown) {
       for (let i = 0; i < wantIds.length; i++) {
         const id = wantIds[i]!;
         const res = await tx.formField.updateMany({
-          where: { id, tenantId: tenant.id, formId },
+          where: { id, tenantId, formId },
           data: { sortOrder: i },
         });
         if (res.count === 0) throw httpError(404, "NOT_FOUND", "Not found.");
@@ -74,7 +74,7 @@ export async function POST(req: Request, ctx: unknown) {
     });
 
     const fields = await prisma.formField.findMany({
-      where: { tenantId: tenant.id, formId },
+      where: { tenantId, formId },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
     });
 

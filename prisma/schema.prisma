@@ -1,7 +1,7 @@
 /**
  * LeadRadar2026A — Prisma Schema (Prisma ORM v7)
  * IMPORTANT (Prisma v7):
- * - Connection URLs (DATABASE_URL, directUrl, shadowDatabaseUrl) are configured in prisma.config.ts (NOT here).
+ * - Connection URLs are configured in prisma.config.ts (NOT here).
  */
 
 generator client {
@@ -13,7 +13,7 @@ datasource db {
 }
 
 //
-// Enums (minimal start, extendable)
+// Enums
 //
 enum FormStatus {
   DRAFT
@@ -52,29 +52,49 @@ enum ExportJobType {
 //
 model Tenant {
   id        String   @id @default(cuid())
-  slug      String   @unique
+  slug      String   @unique @default(cuid()) // default so public registration can create tenant without explicitly setting slug
   name      String
+  country   String   // ISO2, e.g. "CH"
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // Relations
   users           User[]
   forms           Form[]
-  formFields      FormField[] // <-- required opposite for FormField.tenant
+  formFields      FormField[]
   leads           Lead[]
-  leadAttachments LeadAttachment[] // <-- required opposite for LeadAttachment.tenant
+  leadAttachments LeadAttachment[]
   exportJobs      ExportJob[]
+
+  @@index([country])
 }
 
 model User {
-  id        String   @id @default(cuid())
-  tenantId  String?
-  email     String   @unique
-  role      String
+  id       String  @id @default(cuid())
+  tenantId String?
+  email    String  @unique
+  role     String
+
+  // Registration profile (Tenant Owner onboarding)
+  firstName String?
+  lastName  String
+  name      String? // legacy/optional display field (nullable)
+
+  // Auth
+  passwordHash    String?
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  passwordResetTokens     PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
+
+  @@index([tenantId])
+  @@index([emailVerifiedAt])
 }
 
 //
@@ -98,20 +118,20 @@ model Form {
 }
 
 model FormField {
-  id          String    @id @default(cuid())
+  id          String   @id @default(cuid())
   tenantId    String
   formId      String
   key         String
   label       String
   type        FieldType
-  required    Boolean   @default(false)
-  isActive    Boolean   @default(true)
-  sortOrder   Int       @default(0)
+  required    Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
   placeholder String?
   helpText    String?
   config      Json?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   form   Form   @relation(fields: [formId], references: [id], onDelete: Cascade)
@@ -185,4 +205,38 @@ model ExportJob {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, status, updatedAt])
+}
+
+//
+// Auth — Password Reset Tokens
+//
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+}
+
+//
+// Auth — Email Verification Tokens (Registration)
+//
+model EmailVerificationToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
 }

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { jsonOk, jsonError } from "@/lib/api";
 import { isHttpError, validateQuery } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
-import { requireTenantContext } from "@/lib/tenantContext";
+import { requireAdminAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -13,7 +13,7 @@ const QuerySchema = z.object({
 
 export async function GET(req: Request) {
   try {
-    const { tenantId } = await requireTenantContext(req);
+    const { tenantId } = await requireAdminAuth(req);
     const q = await validateQuery(req, QuerySchema);
     const limit = q.limit ?? 50;
 

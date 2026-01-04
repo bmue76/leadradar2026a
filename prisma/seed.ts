@@ -1,27 +1,51 @@
-import dotenv from "dotenv";
-
-dotenv.config({ path: ".env.local" });
-dotenv.config({ path: ".env" });
+import { prisma } from "../src/lib/prisma";
+import { hashPassword } from "../src/lib/password";
 
 async function main() {
-  // IMPORTANT: import AFTER dotenv, so prisma picks up DATABASE_URL/POSTGRES_URL correctly
-  const { prisma } = await import("../src/lib/prisma");
-
   const tenant = await prisma.tenant.upsert({
-    where: { slug: "atlex" },
-    update: { name: "Atlex GmbH" },
-    create: { slug: "atlex", name: "Atlex GmbH" },
+    where: { id: "tenant_demo" },
+    update: {
+      name: "Demo AG",
+      country: "CH",
+    },
+    create: {
+      id: "tenant_demo",
+      name: "Demo AG",
+      country: "CH",
+    },
+    select: { id: true, name: true, country: true },
   });
 
-  console.log("seeded tenant:", tenant);
+  const passwordHash = await hashPassword("Admin1234!");
+
+  await prisma.user.upsert({
+    where: { email: "admin@demo.ch" },
+    update: {
+      tenantId: tenant.id,
+      role: "TENANT_OWNER",
+      passwordHash,
+      firstName: "Beat",
+      lastName: "Müller",
+      emailVerifiedAt: new Date(),
+    },
+    create: {
+      email: "admin@demo.ch",
+      tenantId: tenant.id,
+      role: "TENANT_OWNER",
+      passwordHash,
+      firstName: "Beat",
+      lastName: "Müller",
+      emailVerifiedAt: new Date(),
+    },
+  });
+
+  console.log("Seed done:", tenant);
 }
 
 main()
-  .catch((e) => {
+  .then(async () => prisma.$disconnect())
+  .catch(async (e) => {
     console.error(e);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    const { prisma } = await import("../src/lib/prisma");
     await prisma.$disconnect();
+    process.exit(1);
   });

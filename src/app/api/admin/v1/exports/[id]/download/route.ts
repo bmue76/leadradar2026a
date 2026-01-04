@@ -1,7 +1,7 @@
 import { jsonError, getTraceId } from "@/lib/api";
 import { isHttpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
-import { requireTenantContext } from "@/lib/tenantContext";
+import { requireAdminAuth } from "@/lib/auth";
 import { getAbsolutePath, fileExists, streamFileWeb, statFile } from "@/lib/storage";
 
 export const runtime = "nodejs";
@@ -10,7 +10,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   const traceId = getTraceId(req);
 
   try {
-    const { tenantId } = await requireTenantContext(req);
+    const { tenantId } = await requireAdminAuth(req);
     const { id } = await ctx.params;
 
     const job = await prisma.exportJob.findFirst({
