@@ -30,3 +30,17 @@ prisma/dev.db-journal
 # LeadRadar exports (dev storage stub)
 .tmp_exports/
 leadradar-export-*.csv
+
+# local / temp
+cookies.txt
+leadradar2026a@0.1.0
+eslint/
+prisma/migrations__bak_*/
+scripts/
+
+# Next / build
+.next/
+out/
+
+# Logs
+*.log
