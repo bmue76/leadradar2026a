@@ -1,24 +1,17 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-
-// TODO:
-// 1) Nimm den bisherigen Inhalt aus deiner alten login/page.tsx
-// 2) Füge ihn hier ein (inkl. aller Imports/Logik/UI)
-// 3) Wichtig: useSearchParams() bleibt hier drin – NICHT mehr in page.tsx
+import { safeNextPath } from "@/lib/safeRedirect";
+import LoginForm from "./ui/LoginForm";
 
 export default function LoginClient() {
-  const searchParams = useSearchParams();
+  const sp = useSearchParams();
 
-  // Minimaler Platzhalter, damit der Build sicher läuft,
-  // falls du den Inhalt erst gleich rüberkopierst:
-  const reason = searchParams.get("reason");
+  // Nur Admin-Redirects erlauben (harte Allowlist)
+  const next = safeNextPath(sp.get("next"), {
+    fallback: "/admin",
+    allowPrefixes: ["/admin"],
+  });
 
-  return (
-    <main style={{ padding: 32 }}>
-      <h1 style={{ fontSize: 24, fontWeight: 600, marginBottom: 8 }}>Login</h1>
-      {reason ? <p style={{ opacity: 0.75 }}>Hinweis: {reason}</p> : null}
-      <p style={{ opacity: 0.75 }}>Bitte Login UI/Logik aus der bisherigen Page hier einfügen.</p>
-    </main>
-  );
+  return <LoginForm next={next} />;
 }
