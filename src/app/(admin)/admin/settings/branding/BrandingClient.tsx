@@ -17,58 +17,53 @@ function fmtBytes(n: number): string {
   return `${mb.toFixed(1)} MB`;
 }
 
-function extractTenantFromCurrent(json: any): { id: string | null; slug: string | null } {
-  const tenant = json?.data?.tenant ?? json?.tenant ?? null;
-  const id = (tenant?.id ?? json?.data?.id ?? json?.id ?? null) as string | null;
-  const slug = (tenant?.slug ?? json?.data?.slug ?? json?.slug ?? null) as string | null;
+function readTenantRef(): string | null {
+  const v = (document.documentElement.dataset.lrTenantSlug ?? "").trim();
+  return v || null;
+}
 
-  return {
-    id: typeof id === "string" && id.trim() ? id.trim() : null,
-    slug: typeof slug === "string" && slug.trim() ? slug.trim() : null,
-  };
+async function safeJson(res: Response): Promise<any | null> {
+  const ct = (res.headers.get("content-type") ?? "").toLowerCase();
+  if (!ct.includes("application/json")) return null;
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Robust request strategy:
+ * 1) Try WITHOUT tenant headers (if middleware injects x-tenant-id, this works)
+ * 2) If not ok -> retry ONCE with x-tenant-slug from DOM dataset
+ */
+async function fetchWithTenantFallback(url: string, init: RequestInit): Promise<Response> {
+  const first = await fetch(url, { ...init, credentials: "same-origin" });
+  if (first.ok) return first;
+
+  const tenantRef = readTenantRef();
+  if (!tenantRef) return first;
+
+  const headers = new Headers(init.headers ?? undefined);
+  headers.set("x-tenant-slug", tenantRef);
+
+  return fetch(url, { ...init, headers, credentials: "same-origin" });
 }
 
 export function BrandingClient() {
   const inputRef = React.useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState<string | null>(null);
-  const [tenantId, setTenantId] = React.useState<string | null>(null);
+  const [tenantRef, setTenantRef] = React.useState<string | null>(null);
 
+  // keep tenantRef in UI (debug + enables user trust)
   React.useEffect(() => {
-    let alive = true;
+    const update = () => setTenantRef(readTenantRef());
+    update();
 
-    const run = async () => {
-      try {
-        const res = await fetch("/api/admin/v1/tenants/current", { method: "GET", cache: "no-store" });
-        if (!alive) return;
-
-        if (!res.ok) {
-          setMsg("Tenant-Kontext fehlt (tenants/current nicht verfügbar).");
-          return;
-        }
-
-        const json = await res.json();
-        const t = extractTenantFromCurrent(json);
-
-        if (!alive) return;
-
-        if (!t.id) {
-          setMsg("Tenant-Kontext fehlt (keine tenantId).");
-          return;
-        }
-
-        setTenantId(t.id);
-        if (t.slug) document.documentElement.dataset.lrTenantSlug = t.slug;
-      } catch {
-        if (!alive) return;
-        setMsg("Tenant-Kontext fehlt (Netzwerk/Server).");
-      }
-    };
-
-    run();
-    return () => {
-      alive = false;
-    };
+    const obs = new MutationObserver(update);
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-lr-tenant-slug"] });
+    return () => obs.disconnect();
   }, []);
 
   const notifyLogoChanged = (logoUpdatedAtIso: string) => {
@@ -95,11 +90,6 @@ export function BrandingClient() {
       return;
     }
 
-    if (!tenantId) {
-      setMsg("Tenant-Kontext fehlt (tenantId nicht geladen). Bitte Seite neu laden.");
-      return;
-    }
-
     setBusy(true);
     setMsg(null);
 
@@ -107,26 +97,27 @@ export function BrandingClient() {
       const fd = new FormData();
       fd.append("file", file);
 
-      const res = await fetch("/api/admin/v1/tenants/current/logo", {
+      const res = await fetchWithTenantFallback("/api/admin/v1/tenants/current/logo", {
         method: "POST",
-        headers: { "x-tenant-id": tenantId },
         body: fd,
       });
 
-      const json = (await res.json()) as
-        | { ok: true; data: { branding: { logoUpdatedAt?: string } } }
-        | { ok: false; error: { message: string } };
+      const j = await safeJson(res);
 
-      if (!res.ok || !("ok" in json) || json.ok !== true) {
+      if (!res.ok) {
         const m =
-          (json as any)?.error?.message ??
+          j?.error?.message ??
           `Upload fehlgeschlagen (HTTP ${res.status}).`;
-        setMsg(m);
+        const ref = readTenantRef();
+        setMsg(ref ? `${m} (tenantRef: ${ref})` : m);
         return;
       }
 
-      const v = json.data.branding.logoUpdatedAt ?? new Date().toISOString();
-      notifyLogoChanged(v);
+      const updatedAt =
+        j?.data?.branding?.logoUpdatedAt ??
+        new Date().toISOString();
+
+      notifyLogoChanged(updatedAt);
       setMsg("Logo hochgeladen.");
     } catch {
       setMsg("Upload fehlgeschlagen (Netzwerk/Server).");
@@ -136,33 +127,30 @@ export function BrandingClient() {
   };
 
   const onRemove = async () => {
-    if (!tenantId) {
-      setMsg("Tenant-Kontext fehlt (tenantId nicht geladen). Bitte Seite neu laden.");
-      return;
-    }
-
     setBusy(true);
     setMsg(null);
+
     try {
-      const res = await fetch("/api/admin/v1/tenants/current/logo", {
+      const res = await fetchWithTenantFallback("/api/admin/v1/tenants/current/logo", {
         method: "DELETE",
-        headers: { "x-tenant-id": tenantId },
       });
 
-      const json = (await res.json()) as
-        | { ok: true; data: { branding: { logoUpdatedAt?: string } } }
-        | { ok: false; error: { message: string } };
+      const j = await safeJson(res);
 
-      if (!res.ok || !("ok" in json) || json.ok !== true) {
+      if (!res.ok) {
         const m =
-          (json as any)?.error?.message ??
+          j?.error?.message ??
           `Entfernen fehlgeschlagen (HTTP ${res.status}).`;
-        setMsg(m);
+        const ref = readTenantRef();
+        setMsg(ref ? `${m} (tenantRef: ${ref})` : m);
         return;
       }
 
-      const v = json.data.branding.logoUpdatedAt ?? new Date().toISOString();
-      notifyLogoChanged(v);
+      const updatedAt =
+        j?.data?.branding?.logoUpdatedAt ??
+        new Date().toISOString();
+
+      notifyLogoChanged(updatedAt);
       setMsg("Logo entfernt.");
     } catch {
       setMsg("Entfernen fehlgeschlagen (Netzwerk/Server).");
@@ -180,6 +168,9 @@ export function BrandingClient() {
           Cropping, kein Stretching — nur Anzeige mit{" "}
           <code>max-height</code>, <code>width:auto</code>,{" "}
           <code>object-fit:contain</code>.
+        </p>
+        <p className={styles.pTiny}>
+          TenantRef (Topbar → DOM): <code>{tenantRef ?? "—"}</code>
         </p>
       </div>
 
