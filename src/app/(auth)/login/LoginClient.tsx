@@ -1,17 +1,10 @@
-"use client";
-
-import { useSearchParams } from "next/navigation";
-import { safeNextPath } from "@/lib/safeRedirect";
 import LoginForm from "./ui/LoginForm";
 
-export default function LoginClient() {
-  const sp = useSearchParams();
+type Props = {
+  next: string;
+  verified: "1" | "0" | null;
+};
 
-  // Nur Admin-Redirects erlauben (harte Allowlist)
-  const next = safeNextPath(sp.get("next"), {
-    fallback: "/admin",
-    allowPrefixes: ["/admin"],
-  });
-
-  return <LoginForm next={next} />;
+export default function LoginClient({ next, verified }: Props) {
+  return <LoginForm next={next} verified={verified} />;
 }

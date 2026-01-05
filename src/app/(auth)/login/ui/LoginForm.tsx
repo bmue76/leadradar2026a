@@ -1,16 +1,19 @@
 "use client";
 
 import * as React from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import styles from "../../_components/AuthForm.module.css";
 
-export default function LoginForm() {
-  const router = useRouter();
-  const sp = useSearchParams();
+export type LoginFormProps = {
+  next?: string;
+  verified?: "1" | "0" | null;
+};
 
-  const verified = sp.get("verified"); // "1" or "0"
-  const [email, setEmail] = React.useState("admin@leadradar.local");
-  const [password, setPassword] = React.useState("CHANGE_ME_OWNER_PASSWORD");
+export default function LoginForm({ next = "/admin", verified = null }: LoginFormProps) {
+  const router = useRouter();
+
+  const [email, setEmail] = React.useState("");
+  const [password, setPassword] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -25,7 +28,8 @@ export default function LoginForm() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
-      const json = await res.json();
+
+      const json = await res.json().catch(() => null);
 
       if (!res.ok || !json?.ok) {
         const msg = json?.error?.message || "Login fehlgeschlagen.";
@@ -33,7 +37,7 @@ export default function LoginForm() {
         return;
       }
 
-      router.push("/admin");
+      router.push(next || "/admin");
       router.refresh();
     } catch {
       setError("Login fehlgeschlagen.");
@@ -64,6 +68,7 @@ export default function LoginForm() {
           autoComplete="email"
           inputMode="email"
           placeholder="name@firma.ch"
+          required
         />
       </div>
 
@@ -78,6 +83,7 @@ export default function LoginForm() {
           type="password"
           autoComplete="current-password"
           placeholder="••••••••"
+          required
         />
       </div>
 
@@ -86,10 +92,10 @@ export default function LoginForm() {
       </button>
 
       <div className={styles.links}>
-        <a className={styles.link} href="/auth/forgot-password">
+        <a className={styles.link} href="/forgot-password">
           Passwort vergessen
         </a>
-        <a className={styles.link} href="/auth/register">
+        <a className={styles.link} href="/register">
           Neu registrieren
         </a>
       </div>
