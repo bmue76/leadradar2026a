@@ -38,6 +38,16 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
     () => getDefaultTenantSlug()
   );
 
+  // Publish tenantRef into DOM immediately (BrandingClient + TenantLogo read it).
+  React.useEffect(() => {
+    const ref = (tenantSlug ?? "").trim();
+    if (ref) {
+      document.documentElement.dataset.lrTenantSlug = ref;
+    } else {
+      delete document.documentElement.dataset.lrTenantSlug;
+    }
+  }, [tenantSlug]);
+
   const title = "LEADRADAR Admin";
 
   return (

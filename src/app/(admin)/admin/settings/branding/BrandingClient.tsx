@@ -32,37 +32,22 @@ async function safeJson(res: Response): Promise<any | null> {
   }
 }
 
-/**
- * Robust request strategy:
- * 1) Try WITHOUT tenant headers (if middleware injects x-tenant-id, this works)
- * 2) If not ok -> retry ONCE with x-tenant-slug from DOM dataset
- */
-async function fetchWithTenantFallback(url: string, init: RequestInit): Promise<Response> {
-  const first = await fetch(url, { ...init, credentials: "same-origin" });
-  if (first.ok) return first;
-
-  const tenantRef = readTenantRef();
-  if (!tenantRef) return first;
-
-  const headers = new Headers(init.headers ?? undefined);
-  headers.set("x-tenant-slug", tenantRef);
-
-  return fetch(url, { ...init, headers, credentials: "same-origin" });
-}
-
 export function BrandingClient() {
   const inputRef = React.useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState<string | null>(null);
   const [tenantRef, setTenantRef] = React.useState<string | null>(null);
 
-  // keep tenantRef in UI (debug + enables user trust)
   React.useEffect(() => {
     const update = () => setTenantRef(readTenantRef());
     update();
 
     const obs = new MutationObserver(update);
-    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-lr-tenant-slug"] });
+    obs.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-lr-tenant-slug"],
+    });
+
     return () => obs.disconnect();
   }, []);
 
@@ -78,7 +63,7 @@ export function BrandingClient() {
 
   const onFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    e.target.value = ""; // allow re-select same file
+    e.target.value = "";
     if (!file) return;
 
     if (!ALLOWED.has(file.type)) {
@@ -90,6 +75,12 @@ export function BrandingClient() {
       return;
     }
 
+    const ref = readTenantRef();
+    if (!ref) {
+      setMsg("TenantRef fehlt (data-lr-tenant-slug). Bitte Seite neu laden.");
+      return;
+    }
+
     setBusy(true);
     setMsg(null);
 
@@ -97,26 +88,22 @@ export function BrandingClient() {
       const fd = new FormData();
       fd.append("file", file);
 
-      const res = await fetchWithTenantFallback("/api/admin/v1/tenants/current/logo", {
+      const res = await fetch("/api/admin/v1/tenants/current/logo", {
         method: "POST",
+        headers: { "x-tenant-slug": ref },
         body: fd,
+        credentials: "same-origin",
       });
 
       const j = await safeJson(res);
 
       if (!res.ok) {
-        const m =
-          j?.error?.message ??
-          `Upload fehlgeschlagen (HTTP ${res.status}).`;
-        const ref = readTenantRef();
-        setMsg(ref ? `${m} (tenantRef: ${ref})` : m);
+        const m = j?.error?.message ?? `Upload fehlgeschlagen (HTTP ${res.status}).`;
+        setMsg(`${m} (tenantRef: ${ref})`);
         return;
       }
 
-      const updatedAt =
-        j?.data?.branding?.logoUpdatedAt ??
-        new Date().toISOString();
-
+      const updatedAt = j?.data?.branding?.logoUpdatedAt ?? new Date().toISOString();
       notifyLogoChanged(updatedAt);
       setMsg("Logo hochgeladen.");
     } catch {
@@ -127,29 +114,31 @@ export function BrandingClient() {
   };
 
   const onRemove = async () => {
+    const ref = readTenantRef();
+    if (!ref) {
+      setMsg("TenantRef fehlt (data-lr-tenant-slug). Bitte Seite neu laden.");
+      return;
+    }
+
     setBusy(true);
     setMsg(null);
 
     try {
-      const res = await fetchWithTenantFallback("/api/admin/v1/tenants/current/logo", {
+      const res = await fetch("/api/admin/v1/tenants/current/logo", {
         method: "DELETE",
+        headers: { "x-tenant-slug": ref },
+        credentials: "same-origin",
       });
 
       const j = await safeJson(res);
 
       if (!res.ok) {
-        const m =
-          j?.error?.message ??
-          `Entfernen fehlgeschlagen (HTTP ${res.status}).`;
-        const ref = readTenantRef();
-        setMsg(ref ? `${m} (tenantRef: ${ref})` : m);
+        const m = j?.error?.message ?? `Entfernen fehlgeschlagen (HTTP ${res.status}).`;
+        setMsg(`${m} (tenantRef: ${ref})`);
         return;
       }
 
-      const updatedAt =
-        j?.data?.branding?.logoUpdatedAt ??
-        new Date().toISOString();
-
+      const updatedAt = j?.data?.branding?.logoUpdatedAt ?? new Date().toISOString();
       notifyLogoChanged(updatedAt);
       setMsg("Logo entfernt.");
     } catch {
@@ -164,13 +153,12 @@ export function BrandingClient() {
       <div className={styles.header}>
         <h1 className={styles.h1}>Branding</h1>
         <p className={styles.p}>
-          Das Logo wird <strong>nicht</strong> verändert. Keine Optimierung, kein
-          Cropping, kein Stretching — nur Anzeige mit{" "}
-          <code>max-height</code>, <code>width:auto</code>,{" "}
+          Das Logo wird <strong>nicht</strong> verändert. Keine Optimierung, kein Cropping,
+          kein Stretching — nur Anzeige mit <code>max-height</code>, <code>width:auto</code>,
           <code>object-fit:contain</code>.
         </p>
         <p className={styles.pTiny}>
-          TenantRef (Topbar → DOM): <code>{tenantRef ?? "—"}</code>
+          TenantRef: <code>{tenantRef ?? "—"}</code>
         </p>
       </div>
 
