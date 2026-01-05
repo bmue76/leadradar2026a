@@ -52,6 +52,13 @@
   border-radius:999px;
 }
 
+.logoSlot{
+  display:flex;
+  align-items:center;
+  /* kleine Distanz, damit es nicht zu "gequetscht" wirkt */
+  margin-left:2px;
+}
+
 .title{
   font-size:14px;
   font-weight:600;

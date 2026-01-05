@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import styles from "./Topbar.module.css";
+import { TenantLogo } from "./TenantLogo";
 
 type TopbarProps = {
   title?: string;
@@ -45,6 +46,10 @@ export default function Topbar({
             </span>
           </button>
         ) : null}
+
+        <div className={styles.logoSlot}>
+          <TenantLogo variant="topbar" />
+        </div>
 
         {title ? <div className={styles.title}>{title}</div> : null}
       </div>
