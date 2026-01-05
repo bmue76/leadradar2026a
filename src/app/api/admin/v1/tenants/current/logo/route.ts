@@ -8,30 +8,46 @@ import {
   statFile,
   streamFileWeb,
 } from "@/lib/storage";
-import * as tenantCtxMod from "@/lib/tenantContext";
-import * as httpMod from "@/lib/http";
+import { requireTenantContext } from "@/lib/tenantContext";
 
 export const runtime = "nodejs";
 
 const BRANDING_ROOT_DIR = ".tmp_branding";
-const MAX_LOGO_BYTES = 2 * 1024 * 1024; // 2 MB (MVP)
-const ALLOWED_MIMES = new Set(["image/png", "image/jpeg", "image/webp"] as const);
+const MAX_LOGO_BYTES = 2 * 1024 * 1024; // 2 MB
+const ALLOWED_MIMES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
-type TenantCtx = { tenantId: string; userId?: string | null; tenantSlug?: string | null };
-type JsonOkFn = <T>(req: Request, data: T, init?: ResponseInit) => Response;
-type JsonErrFn = (
-  req: Request,
-  args: { status: number; code: string; message: string; details?: unknown },
-) => Response;
+type JsonErrorArgs = {
+  status: number;
+  code: string;
+  message: string;
+  details?: unknown;
+};
 
-function getFns() {
-  const requireTenantContext = (tenantCtxMod as unknown as { requireTenantContext: (req: Request) => TenantCtx })
-    .requireTenantContext;
+function makeTraceId(): string {
+  return crypto.randomUUID();
+}
 
-  const jsonOk = (httpMod as unknown as { jsonOk: JsonOkFn }).jsonOk;
-  const jsonError = (httpMod as unknown as { jsonError: JsonErrFn }).jsonError;
+function jsonOk(data: unknown, init?: ResponseInit): Response {
+  const traceId = makeTraceId();
+  const headers = new Headers(init?.headers);
+  headers.set("x-trace-id", traceId);
+  headers.set("Cache-Control", "no-store, must-revalidate");
+  return Response.json({ ok: true, data, traceId }, { ...init, headers });
+}
 
-  return { requireTenantContext, jsonOk, jsonError };
+function jsonError(args: JsonErrorArgs): Response {
+  const traceId = makeTraceId();
+  const headers = new Headers();
+  headers.set("x-trace-id", traceId);
+  headers.set("Cache-Control", "no-store, must-revalidate");
+  return Response.json(
+    {
+      ok: false,
+      error: { code: args.code, message: args.message, details: args.details ?? null },
+      traceId,
+    },
+    { status: args.status, headers },
+  );
 }
 
 function extFromMime(mime: string): "png" | "jpg" | "webp" {
@@ -47,20 +63,12 @@ function extFromMime(mime: string): "png" | "jpg" | "webp" {
   }
 }
 
-function makeTraceId(): string {
-  // keep simple + stable; jsonOk/jsonError already attach traceId, but for binary responses we set header manually
-  return crypto.randomUUID();
-}
-
 function etagFrom(sizeBytes: number, mtimeMs: number): string {
-  // Weak ETag is enough for private admin assets
   return `W/"${sizeBytes}-${Math.floor(mtimeMs)}"`;
 }
 
 export async function GET(req: Request): Promise<Response> {
   const traceId = makeTraceId();
-  const { requireTenantContext, jsonError } = getFns();
-
   const ctx = requireTenantContext(req);
 
   const tenant = await prisma.tenant.findUnique({
@@ -68,22 +76,14 @@ export async function GET(req: Request): Promise<Response> {
     select: { logoKey: true, logoMime: true },
   });
 
-  if (!tenant || !tenant.logoKey || !tenant.logoMime) {
-    return jsonError(req, {
-      status: 404,
-      code: "NOT_FOUND",
-      message: "Logo not found.",
-    });
+  if (!tenant?.logoKey || !tenant.logoMime) {
+    return jsonError({ status: 404, code: "NOT_FOUND", message: "Logo not found." });
   }
 
   const absPath = getAbsolutePath({ rootDirName: BRANDING_ROOT_DIR, relativeKey: tenant.logoKey });
   const exists = await fileExists(absPath);
   if (!exists) {
-    return jsonError(req, {
-      status: 404,
-      code: "NOT_FOUND",
-      message: "Logo not found.",
-    });
+    return jsonError({ status: 404, code: "NOT_FOUND", message: "Logo not found." });
   }
 
   const st = await statFile(absPath);
@@ -115,23 +115,22 @@ export async function GET(req: Request): Promise<Response> {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  const { requireTenantContext, jsonOk, jsonError } = getFns();
   const ctx = requireTenantContext(req);
 
   const form = await req.formData();
   const file = form.get("file");
 
   if (!(file instanceof File)) {
-    return jsonError(req, {
+    return jsonError({
       status: 400,
       code: "INVALID_BODY",
       message: 'Missing "file" in multipart/form-data.',
     });
   }
 
-  const mime = file.type;
-  if (!ALLOWED_MIMES.has(mime as (typeof ALLOWED_MIMES extends Set<infer T> ? T : never))) {
-    return jsonError(req, {
+  const mime = file.type || "";
+  if (!ALLOWED_MIMES.has(mime)) {
+    return jsonError({
       status: 400,
       code: "INVALID_FILE_TYPE",
       message: "Unsupported file type. Allowed: PNG, JPG, WebP.",
@@ -140,7 +139,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   if (file.size > MAX_LOGO_BYTES) {
-    return jsonError(req, {
+    return jsonError({
       status: 413,
       code: "BODY_TOO_LARGE",
       message: `File too large. Max ${MAX_LOGO_BYTES} bytes.`,
@@ -148,18 +147,16 @@ export async function POST(req: Request): Promise<Response> {
     });
   }
 
-  const ext = extFromMime(mime);
-  const key = `tenants/${ctx.tenantId}/branding/logo-${crypto.randomUUID()}.${ext}`;
-
-  // Read bytes (no image transformation!)
-  const ab = await file.arrayBuffer();
-  const bytes = new Uint8Array(ab);
-
-  // Fetch old key (for best-effort cleanup)
   const current = await prisma.tenant.findUnique({
     where: { id: ctx.tenantId },
     select: { logoKey: true },
   });
+
+  const ext = extFromMime(mime);
+  const key = `tenants/${ctx.tenantId}/branding/logo-${crypto.randomUUID()}.${ext}`;
+
+  // NO image transformation!
+  const bytes = new Uint8Array(await file.arrayBuffer());
 
   const stored = await putBinaryFile({
     rootDirName: BRANDING_ROOT_DIR,
@@ -187,7 +184,7 @@ export async function POST(req: Request): Promise<Response> {
     await deleteFileIfExists({ rootDirName: BRANDING_ROOT_DIR, relativeKey: current.logoKey });
   }
 
-  return jsonOk(req, {
+  return jsonOk({
     branding: {
       hasLogo: true,
       logoMime: mime,
@@ -198,7 +195,6 @@ export async function POST(req: Request): Promise<Response> {
 }
 
 export async function DELETE(req: Request): Promise<Response> {
-  const { requireTenantContext, jsonOk } = getFns();
   const ctx = requireTenantContext(req);
 
   const tenant = await prisma.tenant.findUnique({
@@ -226,10 +222,7 @@ export async function DELETE(req: Request): Promise<Response> {
     select: { id: true },
   });
 
-  return jsonOk(req, {
-    branding: {
-      hasLogo: false,
-      logoUpdatedAt: updatedAt.toISOString(),
-    },
+  return jsonOk({
+    branding: { hasLogo: false, logoUpdatedAt: updatedAt.toISOString() },
   });
 }
