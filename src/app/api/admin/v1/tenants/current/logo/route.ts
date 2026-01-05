@@ -8,7 +8,6 @@ import {
   statFile,
   streamFileWeb,
 } from "@/lib/storage";
-import { requireTenantContext } from "@/lib/tenantContext";
 
 export const runtime = "nodejs";
 
@@ -50,6 +49,40 @@ function jsonError(args: JsonErrorArgs): Response {
   );
 }
 
+async function resolveTenantId(req: Request): Promise<string> {
+  const tenantId = req.headers.get("x-tenant-id")?.trim() || "";
+  const tenantSlug = req.headers.get("x-tenant-slug")?.trim() || "";
+
+  if (!tenantId && !tenantSlug) {
+    return Promise.reject(
+      jsonError({
+        status: 401,
+        code: "TENANT_REQUIRED",
+        message: "Tenant context required (x-tenant-id or x-tenant-slug).",
+      }),
+    );
+  }
+
+  // Prefer explicit tenant-id if present
+  if (tenantId) {
+    const t = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
+    if (!t) {
+      return Promise.reject(jsonError({ status: 404, code: "NOT_FOUND", message: "Tenant not found." }));
+    }
+    return t.id;
+  }
+
+  // tenantSlug provided: try slug first
+  const bySlug = await prisma.tenant.findUnique({ where: { slug: tenantSlug }, select: { id: true } });
+  if (bySlug) return bySlug.id;
+
+  // Fallback: some admin flows may pass tenantId inside x-tenant-slug (e.g. "tenant_demo")
+  const byId = await prisma.tenant.findUnique({ where: { id: tenantSlug }, select: { id: true } });
+  if (byId) return byId.id;
+
+  return Promise.reject(jsonError({ status: 404, code: "NOT_FOUND", message: "Tenant not found." }));
+}
+
 function extFromMime(mime: string): "png" | "jpg" | "webp" {
   switch (mime) {
     case "image/png":
@@ -68,11 +101,18 @@ function etagFrom(sizeBytes: number, mtimeMs: number): string {
 }
 
 export async function GET(req: Request): Promise<Response> {
+  let tenantId: string;
+  try {
+    tenantId = await resolveTenantId(req);
+  } catch (e) {
+    if (e instanceof Response) return e;
+    return jsonError({ status: 500, code: "INTERNAL", message: "Internal error." });
+  }
+
   const traceId = makeTraceId();
-  const ctx = requireTenantContext(req);
 
   const tenant = await prisma.tenant.findUnique({
-    where: { id: ctx.tenantId },
+    where: { id: tenantId },
     select: { logoKey: true, logoMime: true },
   });
 
@@ -115,7 +155,13 @@ export async function GET(req: Request): Promise<Response> {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  const ctx = requireTenantContext(req);
+  let tenantId: string;
+  try {
+    tenantId = await resolveTenantId(req);
+  } catch (e) {
+    if (e instanceof Response) return e;
+    return jsonError({ status: 500, code: "INTERNAL", message: "Internal error." });
+  }
 
   const form = await req.formData();
   const file = form.get("file");
@@ -148,12 +194,12 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const current = await prisma.tenant.findUnique({
-    where: { id: ctx.tenantId },
+    where: { id: tenantId },
     select: { logoKey: true },
   });
 
   const ext = extFromMime(mime);
-  const key = `tenants/${ctx.tenantId}/branding/logo-${crypto.randomUUID()}.${ext}`;
+  const key = `tenants/${tenantId}/branding/logo-${crypto.randomUUID()}.${ext}`;
 
   // NO image transformation!
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -167,7 +213,7 @@ export async function POST(req: Request): Promise<Response> {
   const updatedAt = new Date();
 
   await prisma.tenant.update({
-    where: { id: ctx.tenantId },
+    where: { id: tenantId },
     data: {
       logoKey: key,
       logoMime: mime,
@@ -195,10 +241,16 @@ export async function POST(req: Request): Promise<Response> {
 }
 
 export async function DELETE(req: Request): Promise<Response> {
-  const ctx = requireTenantContext(req);
+  let tenantId: string;
+  try {
+    tenantId = await resolveTenantId(req);
+  } catch (e) {
+    if (e instanceof Response) return e;
+    return jsonError({ status: 500, code: "INTERNAL", message: "Internal error." });
+  }
 
   const tenant = await prisma.tenant.findUnique({
-    where: { id: ctx.tenantId },
+    where: { id: tenantId },
     select: { logoKey: true },
   });
 
@@ -209,7 +261,7 @@ export async function DELETE(req: Request): Promise<Response> {
   const updatedAt = new Date();
 
   await prisma.tenant.update({
-    where: { id: ctx.tenantId },
+    where: { id: tenantId },
     data: {
       logoKey: null,
       logoMime: null,
