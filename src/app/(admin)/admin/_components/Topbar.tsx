@@ -23,6 +23,17 @@ export default function Topbar({
     setHydrated(true);
   }, []);
 
+  // Publish tenantSlug into DOM so client components (img/fetch) can attach x-tenant-slug.
+  React.useEffect(() => {
+    if (!hydrated) return;
+    const slug = typeof tenantSlug === "string" ? tenantSlug.trim() : "";
+    if (slug) {
+      document.documentElement.dataset.lrTenantSlug = slug;
+    } else {
+      delete document.documentElement.dataset.lrTenantSlug;
+    }
+  }, [hydrated, tenantSlug]);
+
   // IMPORTANT:
   // Show tenant pill only after hydration to avoid SSR/CSR mismatch
   const showTenant =
@@ -48,7 +59,7 @@ export default function Topbar({
         ) : null}
 
         <div className={styles.logoSlot}>
-          <TenantLogo variant="topbar" />
+          <TenantLogo variant="topbar" tenantSlug={tenantSlug ?? null} />
         </div>
 
         {title ? <div className={styles.title}>{title}</div> : null}
