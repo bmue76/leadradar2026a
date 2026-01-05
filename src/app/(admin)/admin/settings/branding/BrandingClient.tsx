@@ -9,11 +9,6 @@ const LS_KEY = "lr_branding_logo_version_v1";
 const MAX_BYTES = 2 * 1024 * 1024;
 const ALLOWED = new Set(["image/png", "image/jpeg", "image/webp"]);
 
-function getTenantSlug(): string | null {
-  const slug = (document.documentElement.dataset.lrTenantSlug ?? "").trim();
-  return slug || null;
-}
-
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   const kb = n / 1024;
@@ -22,10 +17,59 @@ function fmtBytes(n: number): string {
   return `${mb.toFixed(1)} MB`;
 }
 
+function extractTenantFromCurrent(json: any): { id: string | null; slug: string | null } {
+  const tenant = json?.data?.tenant ?? json?.tenant ?? null;
+  const id = (tenant?.id ?? json?.data?.id ?? json?.id ?? null) as string | null;
+  const slug = (tenant?.slug ?? json?.data?.slug ?? json?.slug ?? null) as string | null;
+
+  return {
+    id: typeof id === "string" && id.trim() ? id.trim() : null,
+    slug: typeof slug === "string" && slug.trim() ? slug.trim() : null,
+  };
+}
+
 export function BrandingClient() {
   const inputRef = React.useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState<string | null>(null);
+  const [tenantId, setTenantId] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    let alive = true;
+
+    const run = async () => {
+      try {
+        const res = await fetch("/api/admin/v1/tenants/current", { method: "GET", cache: "no-store" });
+        if (!alive) return;
+
+        if (!res.ok) {
+          setMsg("Tenant-Kontext fehlt (tenants/current nicht verfügbar).");
+          return;
+        }
+
+        const json = await res.json();
+        const t = extractTenantFromCurrent(json);
+
+        if (!alive) return;
+
+        if (!t.id) {
+          setMsg("Tenant-Kontext fehlt (keine tenantId).");
+          return;
+        }
+
+        setTenantId(t.id);
+        if (t.slug) document.documentElement.dataset.lrTenantSlug = t.slug;
+      } catch {
+        if (!alive) return;
+        setMsg("Tenant-Kontext fehlt (Netzwerk/Server).");
+      }
+    };
+
+    run();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const notifyLogoChanged = (logoUpdatedAtIso: string) => {
     window.localStorage.setItem(LS_KEY, logoUpdatedAtIso);
@@ -51,9 +95,8 @@ export function BrandingClient() {
       return;
     }
 
-    const tenantSlug = getTenantSlug();
-    if (!tenantSlug) {
-      setMsg("Tenant-Kontext fehlt (Topbar nicht geladen). Bitte Seite neu laden.");
+    if (!tenantId) {
+      setMsg("Tenant-Kontext fehlt (tenantId nicht geladen). Bitte Seite neu laden.");
       return;
     }
 
@@ -66,7 +109,7 @@ export function BrandingClient() {
 
       const res = await fetch("/api/admin/v1/tenants/current/logo", {
         method: "POST",
-        headers: { "x-tenant-slug": tenantSlug },
+        headers: { "x-tenant-id": tenantId },
         body: fd,
       });
 
@@ -93,9 +136,8 @@ export function BrandingClient() {
   };
 
   const onRemove = async () => {
-    const tenantSlug = getTenantSlug();
-    if (!tenantSlug) {
-      setMsg("Tenant-Kontext fehlt (Topbar nicht geladen). Bitte Seite neu laden.");
+    if (!tenantId) {
+      setMsg("Tenant-Kontext fehlt (tenantId nicht geladen). Bitte Seite neu laden.");
       return;
     }
 
@@ -104,7 +146,7 @@ export function BrandingClient() {
     try {
       const res = await fetch("/api/admin/v1/tenants/current/logo", {
         method: "DELETE",
-        headers: { "x-tenant-slug": tenantSlug },
+        headers: { "x-tenant-id": tenantId },
       });
 
       const json = (await res.json()) as
