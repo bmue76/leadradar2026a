@@ -9,6 +9,18 @@ export type StoragePutTextOptions = {
   content: string;
 };
 
+export type StoragePutBinaryOptions = {
+  rootDirName: string; // e.g. ".tmp_branding"
+  relativeKey: string; // e.g. "tenants/<tenantId>/branding/logo-<uuid>.png"
+  data: Uint8Array; // Buffer is fine too (subclass of Uint8Array)
+};
+
+export type StoragePutFromPathOptions = {
+  rootDirName: string;
+  relativeKey: string;
+  sourceAbsPath: string; // absolute path to local file (dev seed assets etc.)
+};
+
 export type StorageGetPathOptions = {
   rootDirName: string;
   relativeKey: string;
@@ -54,6 +66,42 @@ export async function putTextFile(opts: StoragePutTextOptions): Promise<void> {
   const abs = getAbsolutePath({ rootDirName: opts.rootDirName, relativeKey: opts.relativeKey });
   await fsp.mkdir(path.dirname(abs), { recursive: true });
   await fsp.writeFile(abs, opts.content, "utf8");
+}
+
+export async function putBinaryFile(
+  opts: StoragePutBinaryOptions,
+): Promise<{ absPath: string; sizeBytes: number; mtimeMs: number }> {
+  assertSafeRelativeKey(opts.relativeKey);
+  const abs = getAbsolutePath({ rootDirName: opts.rootDirName, relativeKey: opts.relativeKey });
+  await fsp.mkdir(path.dirname(abs), { recursive: true });
+  await fsp.writeFile(abs, Buffer.from(opts.data));
+  const st = await statFile(abs);
+  return { absPath: abs, sizeBytes: st.sizeBytes, mtimeMs: st.mtimeMs };
+}
+
+export async function putFileFromLocalPath(
+  opts: StoragePutFromPathOptions,
+): Promise<{ absPath: string; sizeBytes: number; mtimeMs: number }> {
+  assertSafeRelativeKey(opts.relativeKey);
+  if (!path.isAbsolute(opts.sourceAbsPath)) {
+    throw new Error("sourceAbsPath must be absolute.");
+  }
+  const abs = getAbsolutePath({ rootDirName: opts.rootDirName, relativeKey: opts.relativeKey });
+  await fsp.mkdir(path.dirname(abs), { recursive: true });
+  await fsp.copyFile(opts.sourceAbsPath, abs);
+  const st = await statFile(abs);
+  return { absPath: abs, sizeBytes: st.sizeBytes, mtimeMs: st.mtimeMs };
+}
+
+export async function deleteFileIfExists(opts: StorageGetPathOptions): Promise<void> {
+  const abs = getAbsolutePath(opts);
+  try {
+    await fsp.unlink(abs);
+  } catch (e) {
+    // Ignore ENOENT (missing). Re-throw anything else.
+    const anyErr = e as { code?: string };
+    if (anyErr?.code !== "ENOENT") throw e;
+  }
 }
 
 export async function fileExists(absPath: string): Promise<boolean> {

@@ -58,6 +58,16 @@ model Tenant {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Branding (Tenant Logo) — TP 2.0
+  // IMPORTANT: do not transform/optimize logo; scaling happens only in UI (max-height, width auto, object-fit contain).
+  logoKey          String?
+  logoMime         String?
+  logoSizeBytes    Int?
+  logoOriginalName String?
+  logoUpdatedAt    DateTime?
+  logoWidth        Int?
+  logoHeight       Int?
+
   // Relations
   users           User[]
   forms           Form[]
