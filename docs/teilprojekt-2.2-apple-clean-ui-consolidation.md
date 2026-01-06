@@ -1,7 +1,7 @@
 # Schlussrapport — Teilprojekt 2.2: Apple-clean Konsolidierung (Tables, Actions, Empty States, Microcopy)
 
 Datum: 2026-01-06  
-Status: IN ARBEIT (Code geliefert, Proof/Commits folgen nach Merge)  
+Status: IN ARBEIT (bis Quality Gates + Push)  
 
 ## Ziel
 
@@ -15,8 +15,9 @@ Status: IN ARBEIT (Code geliefert, Proof/Commits folgen nach Merge)
 
 - Admin Tokens zentral: `tokens.css`
 - Design System light: `_ui/{Table,Button,Chip,EmptyState}`
-- AdminShell CSS auf Apple-clean umgestellt (weiß, ruhig, keine Card-Frames als Default)
+- AdminShell: Apple-clean Basis (weiß, ruhig, keine Card-Frames als Default)
 - Screens refactored: Forms/Leads/Exports
+- Typecheck-Fix: `TableHeadCell` erlaubt leere Header-Zelle für Actions-Spalte (children optional)
 
 ## Dateien/Änderungen
 
@@ -34,9 +35,7 @@ Geändert:
 - `src/app/(admin)/admin/forms/FormsListClient.tsx`
 - `src/app/(admin)/admin/leads/LeadsTable.tsx`
 - `src/app/(admin)/admin/exports/ExportsClient.tsx`
-
-Offen (für Abschluss):
-- `docs/LeadRadar2026A/04_ADMIN_UI.md` verlinken/ergänzen (benötigt aktuellen File-Content, um Fullfile sauber zu liefern)
+- `docs/LeadRadar2026A/04_ADMIN_UI.md` (Design System light + Screen Notes)
 
 ## Akzeptanzkriterien – Check
 
@@ -46,7 +45,7 @@ Offen (für Abschluss):
 - [ ] Empty States konsistent (Icon + Satz + 1 CTA)
 - [ ] Errors: traceId sichtbar + Retry
 - [ ] Keine Card-Schatten / kein Admin-Grau
-- [ ] typecheck/lint/build grün
+- [ ] npm run typecheck / lint / build grün
 - [ ] Docs + Schlussrapport committed
 - [ ] git status clean, push erfolgt
 
@@ -63,3 +62,4 @@ npm run dev
 # /admin/forms   -> table hover/actions, empty state, create CTA ok
 # /admin/leads   -> row hover/actions, open ok, status chip ruhig
 # /admin/exports -> status chips ruhig, download hover-only, empty state ok
+
