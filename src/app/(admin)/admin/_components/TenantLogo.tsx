@@ -6,7 +6,7 @@ import styles from "./TenantLogo.module.css";
 type Props = {
   variant: "topbar" | "settings";
   className?: string;
-  tenantSlug?: string | null; // can be slug OR id in dev/admin
+  tenantSlug?: string | null; // slug OR id (dev)
 };
 
 const LS_KEY = "lr_branding_logo_version_v1";
@@ -27,9 +27,7 @@ export function TenantLogo({ variant, className, tenantSlug }: Props) {
   const [version, setVersion] = React.useState<string>("");
   const [tenantRef, setTenantRef] = React.useState<string | null>(null);
   const [blobUrl, setBlobUrl] = React.useState<string | null>(null);
-  const [hasLogo, setHasLogo] = React.useState<boolean>(false);
 
-  // keep tenantRef in sync with DOM + prop
   React.useEffect(() => {
     const update = () => setTenantRef(readTenantRef(tenantSlug));
     update();
@@ -43,7 +41,6 @@ export function TenantLogo({ variant, className, tenantSlug }: Props) {
     return () => obs.disconnect();
   }, [tenantSlug]);
 
-  // Listen for branding version updates
   React.useEffect(() => {
     const init = () => setVersion(window.localStorage.getItem(LS_KEY) ?? "");
     init();
@@ -61,7 +58,6 @@ export function TenantLogo({ variant, className, tenantSlug }: Props) {
     };
   }, []);
 
-  // Fetch logo ONLY when tenantRef exists; ALWAYS with header
   React.useEffect(() => {
     let alive = true;
 
@@ -74,7 +70,6 @@ export function TenantLogo({ variant, className, tenantSlug }: Props) {
         cleanup();
         if (!alive) return;
         setBlobUrl(null);
-        setHasLogo(false);
         return;
       }
 
@@ -94,14 +89,12 @@ export function TenantLogo({ variant, className, tenantSlug }: Props) {
         if (res.status === 404) {
           cleanup();
           setBlobUrl(null);
-          setHasLogo(false);
           return;
         }
 
         if (!res.ok) {
           cleanup();
           setBlobUrl(null);
-          setHasLogo(false);
           return;
         }
 
@@ -111,12 +104,10 @@ export function TenantLogo({ variant, className, tenantSlug }: Props) {
         cleanup();
         const nextUrl = URL.createObjectURL(blob);
         setBlobUrl(nextUrl);
-        setHasLogo(true);
       } catch {
         if (!alive) return;
         cleanup();
         setBlobUrl(null);
-        setHasLogo(false);
       }
     };
 
@@ -129,28 +120,23 @@ export function TenantLogo({ variant, className, tenantSlug }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenantRef, version]);
 
-  const maxH = variant === "topbar" ? 28 : 64;
-  const frameH = variant === "topbar" ? 28 : 72;
-  const frameW = variant === "topbar" ? 88 : 220;
+  if (variant === "topbar") {
+    return (
+      <div className={[styles.topbarWrap, className ?? ""].join(" ")} aria-label="Tenant logo">
+        {blobUrl ? (
+          <img className={styles.topbarImg} src={blobUrl} alt="Logo" />
+        ) : (
+          <span className={styles.topbarPlaceholder}>Logo</span>
+        )}
+      </div>
+    );
+  }
 
+  // settings variant (with frame/placeholder)
   return (
-    <div
-      className={[
-        styles.frame,
-        variant === "topbar" ? styles.topbar : styles.settings,
-        className ?? "",
-      ].join(" ")}
-      style={{ height: frameH, width: frameW }}
-      aria-label="Tenant logo"
-      title={tenantRef ? `TenantRef: ${tenantRef}` : "TenantRef: —"}
-    >
+    <div className={[styles.frame, className ?? ""].join(" ")} aria-label="Tenant logo">
       {blobUrl ? (
-        <img
-          className={styles.img}
-          src={blobUrl}
-          alt="Logo"
-          style={{ maxHeight: maxH, width: "auto", objectFit: "contain" }}
-        />
+        <img className={styles.img} src={blobUrl} alt="Logo" />
       ) : (
         <span className={styles.placeholder}>Logo</span>
       )}

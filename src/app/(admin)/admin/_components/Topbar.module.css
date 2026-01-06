@@ -9,54 +9,7 @@
 .left{
   display:flex;
   align-items:center;
-  gap:12px;
   min-width:0;
-}
-
-.menuButton{
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  width:36px;
-  height:36px;
-  border-radius:10px;
-  border:1px solid rgba(0,0,0,0.06);
-  background:transparent;
-  cursor:pointer;
-}
-
-.menuButton:hover{
-  background:rgba(0,0,0,0.03);
-}
-
-.menuButton:active{
-  background:rgba(0,0,0,0.05);
-}
-
-.menuButton:focus-visible{
-  outline:2px solid rgba(0,0,0,0.18);
-  outline-offset:2px;
-}
-
-.menuIcon{
-  display:flex;
-  flex-direction:column;
-  gap:4px;
-}
-
-.menuIcon span{
-  display:block;
-  width:16px;
-  height:2px;
-  background:rgba(0,0,0,0.55);
-  border-radius:999px;
-}
-
-.logoSlot{
-  display:flex;
-  align-items:center;
-  /* kleine Distanz, damit es nicht zu "gequetscht" wirkt */
-  margin-left:2px;
 }
 
 .title{
@@ -67,26 +20,20 @@
   white-space:nowrap;
   overflow:hidden;
   text-overflow:ellipsis;
-  max-width:48vw;
+  max-width:70vw;
 }
 
 .right{
   display:flex;
   align-items:center;
+  justify-content:flex-end;
   gap:10px;
-}
-
-.tenantPill{
-  font-size:12px;
-  padding:6px 10px;
-  border-radius:999px;
-  background:rgba(0,0,0,0.04);
-  color:rgba(0,0,0,0.75);
-  border:1px solid rgba(0,0,0,0.06);
+  min-width:0;
 }
 
 .slot{
   display:flex;
   align-items:center;
-  gap:8px;
+  justify-content:flex-end;
+  gap:10px;
 }

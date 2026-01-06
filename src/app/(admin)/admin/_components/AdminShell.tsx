@@ -5,6 +5,8 @@ import Image from "next/image";
 import styles from "./AdminShell.module.css";
 import SidebarNav from "./SidebarNav";
 import Topbar from "./Topbar";
+import { TenantLogo } from "./TenantLogo";
+import SidebarLogout from "./SidebarLogout";
 import {
   TENANT_SLUG_STORAGE_KEY,
   getDefaultTenantSlug,
@@ -29,35 +31,38 @@ function subscribeTenantSlug(onStoreChange: () => void): () => void {
   };
 }
 
-export default function AdminShell({ children }: { children: React.ReactNode }) {
-  const [sidebarOpen, setSidebarOpen] = React.useState(false);
+function displayNameFromTenantRef(ref: string): string {
+  const r = ref.trim().toLowerCase();
+  if (r === "atlex") return "Atlex GmbH";
+  if (r === "demo" || r === "tenant_demo") return "Demo AG";
+  return ref;
+}
 
+export default function AdminShell({ children }: { children: React.ReactNode }) {
   const tenantSlug = React.useSyncExternalStore(
     subscribeTenantSlug,
     () => getTenantSlugClient() || getDefaultTenantSlug(), // ✅ hydration-safe
     () => getDefaultTenantSlug()
   );
 
-  // Publish tenantRef into DOM immediately (BrandingClient + TenantLogo read it).
+  const tenantHeaderRef = (tenantSlug ?? "").trim();
+
+  // Publish tenant header ref into DOM (BrandingClient + TenantLogo read it).
   React.useEffect(() => {
-    const ref = (tenantSlug ?? "").trim();
-    if (ref) {
-      document.documentElement.dataset.lrTenantSlug = ref;
+    if (tenantHeaderRef) {
+      document.documentElement.dataset.lrTenantSlug = tenantHeaderRef;
     } else {
       delete document.documentElement.dataset.lrTenantSlug;
     }
-  }, [tenantSlug]);
+  }, [tenantHeaderRef]);
 
-  const title = "LEADRADAR Admin";
+  const tenantName = tenantHeaderRef ? displayNameFromTenantRef(tenantHeaderRef) : "Tenant";
+  const title = `${tenantName} - Admin`;
 
   return (
     <div className={styles.root}>
-      {sidebarOpen ? (
-        <div className={styles.scrim} onClick={() => setSidebarOpen(false)} aria-hidden="true" />
-      ) : null}
-
       <div className={styles.shell}>
-        <aside className={[styles.sidebar, sidebarOpen ? styles.sidebarOpen : ""].join(" ")}>
+        <aside className={[styles.sidebar, styles.sidebarOpen].join(" ")}>
           <div className={styles.sidebarHeader}>
             <div className={styles.brandRow}>
               <div className={styles.logo} aria-hidden="true">
@@ -72,17 +77,16 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
           </div>
 
           <div className={styles.sidebarContent}>
-            <SidebarNav onNavigate={() => setSidebarOpen(false)} />
+            <SidebarNav onNavigate={() => {}} />
+            <SidebarLogout />
           </div>
         </aside>
 
         <main className={styles.main}>
           <div className={styles.topbar}>
             <Topbar
-              key={tenantSlug || "tenant"}
               title={title}
-              tenantSlug={tenantSlug}
-              onToggleSidebar={() => setSidebarOpen((v) => !v)}
+              rightSlot={<TenantLogo variant="topbar" />}
             />
           </div>
 
