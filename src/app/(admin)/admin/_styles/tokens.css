@@ -1,0 +1,40 @@
+:root {
+  /* Colors */
+  --lr-bg: #ffffff;
+  --lr-bg-subtle: #fafafa;
+  --lr-hover: rgba(0, 0, 0, 0.035);
+
+  --lr-text: rgba(0, 0, 0, 0.92);
+  --lr-text-secondary: rgba(0, 0, 0, 0.72);
+  --lr-text-muted: rgba(0, 0, 0, 0.56);
+
+  --lr-border-subtle: rgba(0, 0, 0, 0.08);
+
+  /* LeadRadar accent (Primary CTA only) */
+  --lr-accent: #e11d2e;
+  --lr-focus: rgba(225, 29, 46, 0.22);
+
+  /* Spacing */
+  --lr-space-xs: 8px;
+  --lr-space-s: 16px;
+  --lr-space-m: 24px;
+  --lr-space-l: 40px;
+  --lr-space-xl: 64px;
+
+  /* Typography */
+  --lr-text-xxl: 28px;
+  --lr-text-lg: 18px;
+  --lr-text-md: 14px;
+  --lr-text-sm: 12px;
+
+  --lr-weight-semibold: 600;
+  --lr-weight-medium: 500;
+  --lr-weight-regular: 400;
+
+  --lr-line-md: 1.45;
+  --lr-line-sm: 1.35;
+
+  /* Radius */
+  --lr-radius-sm: 8px;
+  --lr-radius-pill: 999px;
+}

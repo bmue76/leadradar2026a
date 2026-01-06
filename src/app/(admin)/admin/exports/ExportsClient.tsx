@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiErr, ApiOk, ExportJob, ExportJobStatus, FormListItem } from "./exports.types";
 import { formatDateTime, statusLabel } from "./exports.types";
 import { ExportCreateModal, type ExportCreateValues } from "./ExportCreateModal";
+import { Button } from "../_ui/Button";
+import { Chip } from "../_ui/Chip";
+import { EmptyState } from "../_ui/EmptyState";
+import { Table, TableBody, TableCell, TableHead, TableHeadCell, TableHeadRow, TableRow } from "../_ui/Table";
 
 type UiError = { message: string; traceId?: string; code?: string };
 
@@ -15,7 +19,10 @@ async function apiJson<T>(
     signal?: AbortSignal;
   } = {}
 ): Promise<{ data: T; traceId: string }> {
-  const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json" };
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    accept: "application/json",
+  };
 
   const res = await fetch(url, {
     method: opts.method ?? "GET",
@@ -71,44 +78,54 @@ async function apiDownloadCsv(url: string): Promise<{ blob: Blob; filename: stri
   return { blob, filename };
 }
 
-function StatusBadge({ status }: { status: ExportJobStatus }) {
-  const cls =
-    status === "DONE"
-      ? "bg-emerald-100 text-emerald-800"
-      : status === "FAILED"
-        ? "bg-rose-100 text-rose-800"
-        : status === "RUNNING"
-          ? "bg-amber-100 text-amber-800"
-          : "bg-neutral-100 text-neutral-700";
-
+function IconArrowDown() {
   return (
-    <span className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${cls}`}>
-      {statusLabel(status)}
-    </span>
+    <svg viewBox="0 0 24 24" width="44" height="44" fill="none" aria-hidden="true">
+      <path
+        d="M12 3.5v10.8m0 0 3.6-3.6M12 14.3 8.4 10.7M5.5 19.5h13"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
-function ErrorBanner({ err, onDismiss }: { err: UiError; onDismiss: () => void }) {
+function statusTone(status: ExportJobStatus): "neutral" | "subtle" | "muted" {
+  if (status === "FAILED") return "muted";
+  return "subtle";
+}
+
+function Notice(props: { err: UiError; onRetry: () => void; onDismiss: () => void }) {
+  const { err, onRetry, onDismiss } = props;
+
   return (
-    <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
-      <div className="flex items-start justify-between gap-3">
+    <div
+      role="alert"
+      style={{
+        border: "1px solid var(--lr-border-subtle)",
+        borderRadius: 12,
+        padding: "var(--lr-space-s)",
+        background: "transparent",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
         <div>
-          <div className="text-sm font-semibold text-rose-900">
-            {err.code ? `${err.code}: ` : ""}
-            {err.message}
+          <div style={{ fontWeight: 600, color: "var(--lr-text)" }}>
+            {err.code ? `${err.code}: ` : ""}{err.message}
           </div>
           {err.traceId ? (
-            <div className="mt-1 text-xs text-rose-800">
-              traceId: <span className="font-mono">{err.traceId}</span>
+            <div className="lr-meta" style={{ marginTop: 6 }}>
+              Trace: <span className="lr-mono">{err.traceId}</span>
             </div>
           ) : null}
         </div>
-        <button
-          className="rounded-xl px-3 py-2 text-sm bg-white hover:bg-neutral-50 border border-rose-200"
-          onClick={onDismiss}
-        >
-          Dismiss
-        </button>
+
+        <div style={{ display: "inline-flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <Button variant="ghost" onClick={onDismiss}>Dismiss</Button>
+          <Button variant="secondary" onClick={onRetry}>Retry</Button>
+        </div>
       </div>
     </div>
   );
@@ -189,115 +206,117 @@ export default function ExportsClient() {
   const jobRows = useMemo(() => jobs, [jobs]);
 
   return (
-    <div className="p-6 max-w-6xl">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold">Exports</h1>
-          <p className="text-sm text-neutral-500 mt-1">
-            CSV exports (jobs) with polling + download. Phase 1 uses dev storage stub{" "}
-            <span className="font-mono">.tmp_exports/</span>.
-          </p>
-        </div>
+    <div className="lr-page" style={{ maxWidth: 1100 }}>
+      <div className="lr-pageHeader">
+        <div className="lr-toolbar">
+          <div>
+            <h1 className="lr-h1">Exports</h1>
+            <p className="lr-muted">Create CSV exports and download the file.</p>
+          </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            className="rounded-xl px-4 py-2 text-sm bg-neutral-100 hover:bg-neutral-200"
-            onClick={() => void loadAll()}
-            disabled={loading}
-          >
-            Refresh
-          </button>
-          <button
-            className="rounded-xl px-4 py-2 text-sm bg-black text-white hover:bg-black/90 disabled:bg-black/40"
-            onClick={() => setModalOpen(true)}
-            disabled={loading}
-          >
-            Create CSV Export
-          </button>
+          <div className="lr-toolbarRight">
+            <Button variant="ghost" onClick={() => void loadAll()} disabled={loading}>
+              Refresh
+            </Button>
+            <Button variant="primary" onClick={() => setModalOpen(true)} disabled={loading}>
+              Create export
+            </Button>
+          </div>
         </div>
+        <div className="lr-divider" />
       </div>
 
       {err ? (
-        <div className="mt-4">
-          <ErrorBanner err={err} onDismiss={() => setErr(null)} />
-        </div>
+        <Notice err={err} onRetry={() => void loadAll()} onDismiss={() => setErr(null)} />
       ) : null}
 
-      <div className="mt-6 rounded-2xl border border-neutral-200 bg-white overflow-hidden">
-        <div className="px-4 py-3 border-b border-neutral-200 flex items-center justify-between">
-          <div className="text-sm font-semibold">Jobs</div>
-          <div className="text-xs text-neutral-500">{loading ? "Loading..." : `${jobRows.length} job(s)`}</div>
-        </div>
+      {loading ? (
+        <div className="lr-muted">Loading…</div>
+      ) : jobRows.length === 0 ? (
+        <EmptyState
+          icon={<IconArrowDown />}
+          title="No exports yet."
+          hint="Create an export to get started."
+          cta={
+            <Button variant="primary" onClick={() => setModalOpen(true)}>
+              Create export
+            </Button>
+          }
+        />
+      ) : (
+        <Table ariaLabel="Export jobs">
+          <TableHead>
+            <TableHeadRow>
+              <TableHeadCell>Job</TableHeadCell>
+              <TableHeadCell>Status</TableHeadCell>
+              <TableHeadCell>Queued</TableHeadCell>
+              <TableHeadCell>Finished</TableHeadCell>
+              <TableHeadCell align="right"></TableHeadCell>
+            </TableHeadRow>
+          </TableHead>
 
-        {loading ? (
-          <div className="p-6 text-sm text-neutral-500">Loading exports…</div>
-        ) : jobRows.length === 0 ? (
-          <div className="p-6 text-sm text-neutral-500">No exports yet. Create one to get started.</div>
-        ) : (
-          <div className="w-full overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-neutral-50">
-                <tr className="text-left">
-                  <th className="px-4 py-3 font-medium">Job</th>
-                  <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium">Queued</th>
-                  <th className="px-4 py-3 font-medium">Finished</th>
-                  <th className="px-4 py-3 font-medium text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {jobRows.map((j) => (
-                  <tr key={j.id} className="border-t border-neutral-100">
-                    <td className="px-4 py-3">
-                      <div className="font-mono text-xs">{j.id}</div>
-                      <div className="text-xs text-neutral-500 mt-1">type: {j.type}</div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={j.status as ExportJobStatus} />
-                    </td>
-                    <td className="px-4 py-3">{formatDateTime(j.queuedAt)}</td>
-                    <td className="px-4 py-3">{formatDateTime(j.finishedAt)}</td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="inline-flex items-center gap-2">
-                        <button
-                          className="rounded-xl px-3 py-2 text-sm bg-neutral-100 hover:bg-neutral-200"
-                          onClick={() => startPolling(j.id)}
-                          disabled={j.status === "DONE" || j.status === "FAILED"}
-                          title="Poll status now"
-                        >
-                          Poll
-                        </button>
-                        <button
-                          className="rounded-xl px-3 py-2 text-sm bg-black text-white hover:bg-black/90 disabled:bg-black/40"
-                          disabled={j.status !== "DONE"}
-                          onClick={async () => {
-                            setErr(null);
-                            try {
-                              const { blob, filename } = await apiDownloadCsv(`/api/admin/v1/exports/${j.id}/download`);
-                              const url = window.URL.createObjectURL(blob);
-                              const a = document.createElement("a");
-                              a.href = url;
-                              a.download = filename;
-                              document.body.appendChild(a);
-                              a.click();
-                              a.remove();
-                              window.URL.revokeObjectURL(url);
-                            } catch (e) {
-                              setErr(e as UiError);
-                            }
-                          }}
-                        >
-                          Download
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+          <TableBody>
+            {jobRows.map((j) => (
+              <TableRow
+                key={j.id}
+                actions={
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => startPolling(j.id)}
+                      disabled={j.status === "DONE" || j.status === "FAILED"}
+                      title="Poll status now"
+                    >
+                      Poll
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={j.status !== "DONE"}
+                      onClick={async () => {
+                        setErr(null);
+                        try {
+                          const { blob, filename } = await apiDownloadCsv(`/api/admin/v1/exports/${j.id}/download`);
+                          const url = window.URL.createObjectURL(blob);
+                          const a = document.createElement("a");
+                          a.href = url;
+                          a.download = filename;
+                          document.body.appendChild(a);
+                          a.click();
+                          a.remove();
+                          window.URL.revokeObjectURL(url);
+                        } catch (e) {
+                          setErr(e as UiError);
+                        }
+                      }}
+                    >
+                      Download
+                    </Button>
+                  </>
+                }
+              >
+                <TableCell>
+                  <div className="lr-mono" style={{ fontSize: "12px" }}>{j.id}</div>
+                  <div className="lr-meta" style={{ marginTop: 6 }}>type: {j.type}</div>
+                </TableCell>
+
+                <TableCell>
+                  <Chip tone={statusTone(j.status as ExportJobStatus)}>{statusLabel(j.status as ExportJobStatus)}</Chip>
+                </TableCell>
+
+                <TableCell>
+                  <span className="lr-secondaryText">{formatDateTime(j.queuedAt)}</span>
+                </TableCell>
+
+                <TableCell>
+                  <span className="lr-secondaryText">{formatDateTime(j.finishedAt)}</span>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
 
       {modalOpen ? (
         <ExportCreateModal

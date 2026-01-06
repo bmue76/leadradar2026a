@@ -1,0 +1,29 @@
+.chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--lr-radius-pill);
+  padding: 4px 10px;
+
+  font-size: var(--lr-text-sm);
+  line-height: 1;
+  font-weight: var(--lr-weight-medium);
+
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  background: rgba(0, 0, 0, 0.02);
+  color: var(--lr-text-secondary);
+}
+
+.neutral {
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--lr-text-secondary);
+}
+
+.subtle {
+  background: rgba(0, 0, 0, 0.02);
+  color: var(--lr-text-secondary);
+}
+
+.muted {
+  background: rgba(0, 0, 0, 0.02);
+  color: var(--lr-text-muted);
+}
