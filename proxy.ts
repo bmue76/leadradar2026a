@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { NextRequest, NextResponse } from "next/server";
 
 function getTraceId(req: NextRequest): string {
@@ -5,10 +6,9 @@ function getTraceId(req: NextRequest): string {
 }
 
 function base64UrlDecode(input: string): string {
-  const pad = "=".repeat((4 - (input.length % 4)) % 4);
-  const b64 = (input + pad).replace(/-/g, "+").replace(/_/g, "/");
-  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
+  const b64 = input.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+  return Buffer.from(b64 + pad, "base64").toString("utf8");
 }
 
 type SessionLike = {
@@ -51,8 +51,7 @@ function readSessionFromCookie(req: NextRequest): SessionLike | null {
     const uid = toCleanString(obj.uid ?? obj.sub ?? obj.userId);
     const tid = toCleanString(obj.tid ?? obj.tenantId);
 
-    // Hard rule: we require BOTH userId and tenantId for admin area.
-    // If tid is missing/null, treat as unauthenticated for admin scope to avoid poisoning headers.
+    // Hard rule: Admin braucht beides.
     if (!uid || !tid) return null;
 
     const exp = typeof obj.exp === "number" ? obj.exp : undefined;
@@ -63,7 +62,7 @@ function readSessionFromCookie(req: NextRequest): SessionLike | null {
   }
 }
 
-export function proxy(req: NextRequest) {
+export default function proxy(req: NextRequest) {
   const traceId = getTraceId(req);
   const url = req.nextUrl;
 

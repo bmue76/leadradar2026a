@@ -45,7 +45,8 @@ out/
 # Logs
 *.log
 
-# Dev-only local storage (branding/uploads/exports)
+# LeadRadar dev storage
 .tmp_branding/
 .tmp_exports/
+
 

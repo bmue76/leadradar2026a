@@ -10,29 +10,14 @@ type TenantCurrent = {
   name: string;
 };
 
+type TenantCurrentResponse = {
+  tenant: TenantCurrent;
+};
+
 type State =
   | { kind: "loading" }
   | { kind: "error"; message: string; traceId?: string }
   | { kind: "ok"; tenant: TenantCurrent; traceId?: string };
-
-function pickErrMessage(res: unknown): string {
-  if (!res || typeof res !== "object") return "Tenant konnte nicht geladen werden.";
-
-  // adminFetchJson AdminApiResult<T>: { ok:false, message }
-  if ("message" in res && typeof (res as any).message === "string") return (res as any).message;
-
-  // Standard API shape: { ok:false, error:{ message } }
-  const err = (res as any).error;
-  if (err && typeof err === "object" && typeof err.message === "string") return err.message;
-
-  return "Tenant konnte nicht geladen werden.";
-}
-
-function pickTraceId(res: unknown): string | undefined {
-  if (!res || typeof res !== "object") return undefined;
-  const t = (res as any).traceId;
-  return typeof t === "string" ? t : undefined;
-}
 
 export default function TenantBadge({
   tenantSlug,
@@ -53,30 +38,25 @@ export default function TenantBadge({
   const load = React.useCallback(async () => {
     setState({ kind: "loading" });
 
-    const slug = (tenantSlug ?? "").trim();
-
-    const res = await adminFetchJson<{ tenant: TenantCurrent }>(
-      "/api/admin/v1/tenants/current",
-      {
-        method: "GET",
-        ...(slug ? { tenantSlug: slug } : {}),
-      }
-    );
+    const res = await adminFetchJson<TenantCurrentResponse>("/api/admin/v1/tenants/current", {
+      method: "GET",
+      tenantSlug,
+    });
 
     if (!res.ok) {
       setState({
         kind: "error",
-        message: pickErrMessage(res),
-        traceId: pickTraceId(res),
+        message: res.message || "Tenant konnte nicht geladen werden.",
+        traceId: res.traceId,
       });
       return;
     }
 
     const tenant = res.data?.tenant;
-    if (!tenant || !tenant.id || !tenant.slug) {
+    if (!tenant) {
       setState({
         kind: "error",
-        message: "Ungültige Antwort vom Server (tenant missing).",
+        message: "Tenant konnte nicht geladen werden (fehlende Daten).",
         traceId: res.traceId,
       });
       return;
