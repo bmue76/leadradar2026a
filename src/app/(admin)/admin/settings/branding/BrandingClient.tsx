@@ -45,16 +45,26 @@ export default function BrandingClient() {
 
   const refreshLogo = React.useCallback(async () => {
     try {
-      const head = await fetch("/api/admin/v1/tenants/current/logo?v=0", {
-        method: "HEAD",
+      // IMPORTANT:
+      // - Do NOT use HEAD (causes auth turbulence via proxy/middleware in some flows).
+      // - Use GET and only inspect status.
+      const res = await fetch("/api/admin/v1/tenants/current/logo?v=0", {
+        method: "GET",
+        credentials: "same-origin",
         cache: "no-store",
       });
 
-      if (head.ok) {
-        setLogoUrl(`/api/admin/v1/tenants/current/logo?v=${encodeURIComponent(new Date().toISOString())}`);
-      } else {
+      if (res.status === 404) {
         setLogoUrl(null);
+        return;
       }
+
+      if (res.ok) {
+        setLogoUrl(`/api/admin/v1/tenants/current/logo?v=${encodeURIComponent(new Date().toISOString())}`);
+        return;
+      }
+
+      setLogoUrl(null);
     } catch {
       setLogoUrl(null);
     }
@@ -94,6 +104,7 @@ export default function BrandingClient() {
     const res = await fetch("/api/admin/v1/tenants/current/logo", {
       method: "POST",
       body: fd,
+      credentials: "same-origin",
     });
 
     const payload = await safeReadJson(res);
@@ -120,6 +131,7 @@ export default function BrandingClient() {
 
     const res = await fetch("/api/admin/v1/tenants/current/logo", {
       method: "DELETE",
+      credentials: "same-origin",
     });
 
     if (!res.ok) {
