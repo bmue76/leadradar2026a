@@ -36,6 +36,10 @@ export function sanitizeTenantSlug(input: string): string {
   return input.trim().toLowerCase();
 }
 
+/**
+ * DEV ONLY: Returns the stored tenant slug override.
+ * Note: This does NOT get applied by default anymore (session is source of truth).
+ */
 export function getTenantSlugClient(): string {
   if (typeof window === "undefined") return getDefaultTenantSlug();
   try {
@@ -51,7 +55,8 @@ export function setTenantSlugClient(slug: string) {
   if (typeof window === "undefined") return;
   try {
     const s = sanitizeTenantSlug(slug);
-    window.localStorage.setItem(TENANT_SLUG_STORAGE_KEY, s);
+    if (!s) window.localStorage.removeItem(TENANT_SLUG_STORAGE_KEY);
+    else window.localStorage.setItem(TENANT_SLUG_STORAGE_KEY, s);
   } catch {
     // ignore
   }
@@ -99,28 +104,36 @@ async function safeParseJson(text: string): Promise<unknown | undefined> {
   }
 }
 
+function shouldApplyDevTenantOverride(): boolean {
+  // Explicit opt-in only. Never in production.
+  if (process.env.NODE_ENV === "production") return false;
+
+  // Option A: env toggle
+  const env = getEnv("NEXT_PUBLIC_ALLOW_TENANT_OVERRIDE");
+  if (env !== "1" && env.toLowerCase() !== "true") return false;
+
+  // Option B: must actually have a stored slug
+  const slug = getTenantSlugClient();
+  return Boolean(slug && slug.trim());
+}
+
 export async function adminFetchJson<T>(
   path: string,
   init?: RequestInit & { tenantSlug?: string }
 ): Promise<AdminApiResult<T>> {
-  const tenantSlug = (init?.tenantSlug ? sanitizeTenantSlug(init.tenantSlug) : getTenantSlugClient()).trim();
-
-  if (!tenantSlug) {
-    return {
-      ok: false,
-      code: "TENANT_REQUIRED",
-      message: "Tenant slug fehlt. Setze oben rechts (DEV) einen Tenant slug oder NEXT_PUBLIC_DEFAULT_TENANT_SLUG.",
-    };
-  }
-
   const headers = new Headers(init?.headers || {});
   headers.set("accept", "application/json");
-  headers.set("x-tenant-slug", tenantSlug);
 
-  // Optional Dev-Header (nur lokal sinnvoll, falls Backend das erwartet)
-  if (process.env.NODE_ENV !== "production") {
-    const devUserId = getDevUserIdClient();
-    if (devUserId) headers.set("x-user-id", devUserId);
+  // Tenant headers:
+  // - Default: NONE (session/auth is the source of truth)
+  // - Explicit override via init.tenantSlug
+  // - Optional DEV override (explicitly enabled)
+  const explicitTenantSlug = init?.tenantSlug ? sanitizeTenantSlug(init.tenantSlug).trim() : "";
+  if (explicitTenantSlug) {
+    headers.set("x-tenant-slug", explicitTenantSlug);
+  } else if (shouldApplyDevTenantOverride()) {
+    const devSlug = getTenantSlugClient().trim();
+    if (devSlug) headers.set("x-tenant-slug", devSlug);
   }
 
   let res: Response;

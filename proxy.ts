@@ -22,26 +22,37 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function toCleanString(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = String(v).trim();
+  if (!s) return "";
+  if (s.toLowerCase() === "null") return "";
+  return s;
+}
+
 function readSessionFromCookie(req: NextRequest): SessionLike | null {
-  // WICHTIG: Cookie-Name muss zu deinem Login passen (src/lib/auth.ts).
-  const AUTH_COOKIE_NAME = "lr_session"; // <--- ggf. anpassen!
+  // Cookie-Name muss zum Login passen (src/lib/auth.ts).
+  const AUTH_COOKIE_NAME = "lr_session";
 
   const raw = req.cookies.get(AUTH_COOKIE_NAME)?.value;
   if (!raw) return null;
 
-  // Erwartetes Format: "<base64url(json)>.<sig>" ODER nur "<base64url(json)>"
+  // Erwartetes Format: "<base64url(json)>.<sig>"
   const payloadPart = raw.split(".")[0];
   if (!payloadPart) return null;
 
   try {
     const json = base64UrlDecode(payloadPart);
-
     const parsed: unknown = JSON.parse(json);
     const obj = asRecord(parsed);
     if (!obj) return null;
 
-    const uid = String(obj.uid ?? obj.sub ?? obj.userId ?? "");
-    const tid = String(obj.tid ?? obj.tenantId ?? "");
+    // auth.ts payload uses { sub, tid, role, iat, exp }
+    const uid = toCleanString(obj.uid ?? obj.sub ?? obj.userId);
+    const tid = toCleanString(obj.tid ?? obj.tenantId);
+
+    // Hard rule: we require BOTH userId and tenantId for admin area.
+    // If tid is missing/null, treat as unauthenticated for admin scope to avoid poisoning headers.
     if (!uid || !tid) return null;
 
     const exp = typeof obj.exp === "number" ? obj.exp : undefined;
