@@ -6,7 +6,7 @@ import styles from "./TenantLogo.module.css";
 type Props = {
   variant: "topbar" | "settings";
   className?: string;
-  tenantSlug?: string | null; // slug OR id (dev)
+  tenantSlug?: string | null;
 };
 
 const LS_KEY = "lr_branding_logo_version_v1";
@@ -77,9 +77,11 @@ export function TenantLogo({ variant, className, tenantSlug }: Props) {
       const url = `/api/admin/v1/tenants/current/logo?v=${vParam}`;
 
       try {
+        // IMPORTANT:
+        // - Do NOT send x-tenant-slug by default.
+        // - Session/cookie is the source of truth for /current/* endpoints.
         const res = await fetch(url, {
           method: "GET",
-          headers: { "x-tenant-slug": tenantRef },
           credentials: "same-origin",
           cache: "no-store",
         });
@@ -132,7 +134,6 @@ export function TenantLogo({ variant, className, tenantSlug }: Props) {
     );
   }
 
-  // settings variant (with frame/placeholder)
   return (
     <div className={[styles.frame, className ?? ""].join(" ")} aria-label="Tenant logo">
       {blobUrl ? (
