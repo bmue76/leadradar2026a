@@ -6,7 +6,6 @@ export default function Page() {
     <AuthShell
       title="Registrierung"
       subtitle="Erstelle deinen Mandanten (Tenant) und bestätige danach deine E-Mail."
-      footer={<a href="/auth/login">Zurück zum Login</a>}
     >
       <RegisterForm />
     </AuthShell>

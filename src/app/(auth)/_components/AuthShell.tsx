@@ -1,41 +1,31 @@
-"use client";
-
 import * as React from "react";
-import Image from "next/image";
+import BrandHeader from "./BrandHeader";
 import styles from "./AuthShell.module.css";
 
-type AuthShellProps = {
-  eyebrow?: string;
+type Props = {
   title: string;
   subtitle?: string;
-  children: React.ReactNode;
   footer?: React.ReactNode;
+  children: React.ReactNode;
 };
 
-export default function AuthShell({ eyebrow, title, subtitle, children, footer }: AuthShellProps) {
+export default function AuthShell({ title, subtitle, footer, children }: Props) {
   return (
-    <div className={styles.page}>
-      <div className={styles.wrap}>
-        <div className={styles.brand}>
-          <div className={styles.logo} aria-hidden="true">
-            <Image src="/brand/leadradar-icon.png" alt="" width={34} height={34} priority />
-          </div>
-          <div className={styles.brandText}>
-            <div className={styles.brandName}>LEADRADAR</div>
-            <div className={styles.brandSub}>Admin Console</div>
-          </div>
+    <main className={styles.page}>
+      <div className={styles.container}>
+        <div className={styles.header}>
+          <BrandHeader />
         </div>
 
-        <div className={styles.header}>
-          {eyebrow ? <div className={styles.eyebrow}>{eyebrow}</div> : null}
-          <h1 className={styles.title}>{title}</h1>
-          {subtitle ? <p className={styles.subtitle}>{subtitle}</p> : null}
+        <div className={styles.headline}>
+          <h1 className={styles.h1}>{title}</h1>
+          {subtitle ? <p className={styles.sub}>{subtitle}</p> : null}
         </div>
 
         <div className={styles.body}>{children}</div>
 
         {footer ? <div className={styles.footer}>{footer}</div> : null}
       </div>
-    </div>
+    </main>
   );
 }

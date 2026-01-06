@@ -6,7 +6,7 @@ export default function Page() {
     <AuthShell
       title="Passwort vergessen"
       subtitle="Du erhältst einen Link zum Zurücksetzen (in DEV wird er in der Konsole geloggt)."
-      footer={<a href="/auth/login">Zurück zum Login</a>}
+      footer={<a href="/login">Zurück zum Login</a>}
     >
       <ForgotPasswordForm />
     </AuthShell>

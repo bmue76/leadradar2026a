@@ -1,3 +1,4 @@
+import AuthShell from "../_components/AuthShell";
 import LoginClient from "./LoginClient";
 
 type SearchParams = Record<string, string | string[] | undefined>;
@@ -21,5 +22,12 @@ export default async function LoginPage({
   const verified: VerifiedFlag =
     verifiedRaw === "0" || verifiedRaw === "1" ? verifiedRaw : null;
 
-  return <LoginClient next={next} verified={verified} />;
+  return (
+    <AuthShell
+      title="Anmelden"
+      subtitle="Melde dich an, um die Admin Console zu öffnen."
+    >
+      <LoginClient next={next} verified={verified} />
+    </AuthShell>
+  );
 }
