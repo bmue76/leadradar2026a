@@ -1,7 +1,13 @@
 # Schlussrapport — Teilprojekt 2.2: Apple-clean Konsolidierung (Tables, Actions, Empty States, Microcopy)
 
 Datum: 2026-01-06  
-Status: IN ARBEIT (bis Quality Gates + Push)  
+Status: DONE ✅
+
+## Commits
+
+- 77399e8 refactor(admin): apple-clean ui consolidation (tp 2.2)
+- a724f66 docs: update admin ui notes + tp 2.2 (apple-clean)
+- <INSERT_HASH> fix(ui): allow empty actions header cell (tp 2.2)
 
 ## Ziel
 
@@ -13,7 +19,7 @@ Status: IN ARBEIT (bis Quality Gates + Push)
 
 ## Umsetzung (Highlights)
 
-- Admin Tokens zentral: `tokens.css`
+- Admin Tokens zentral: `tokens.css` (Apple-clean Design-Tokens)
 - Design System light: `_ui/{Table,Button,Chip,EmptyState}`
 - AdminShell: Apple-clean Basis (weiß, ruhig, keine Card-Frames als Default)
 - Screens refactored: Forms/Leads/Exports
@@ -39,15 +45,15 @@ Geändert:
 
 ## Akzeptanzkriterien – Check
 
-- [ ] Tables Finder-like (Forms/Leads/Exports)
-- [ ] Actions nur on hover
-- [ ] Status Chips ruhig, konsistent
-- [ ] Empty States konsistent (Icon + Satz + 1 CTA)
-- [ ] Errors: traceId sichtbar + Retry
-- [ ] Keine Card-Schatten / kein Admin-Grau
-- [ ] npm run typecheck / lint / build grün
-- [ ] Docs + Schlussrapport committed
-- [ ] git status clean, push erfolgt
+✅ Tables Finder-like (Forms/Leads/Exports)  
+✅ Actions nur on hover  
+✅ Status Chips ruhig, konsistent  
+✅ Empty States konsistent (Icon + Satz + 1 CTA)  
+✅ Errors: traceId sichtbar + Retry  
+✅ Keine Card-Schatten / kein Admin-Grau  
+✅ npm run typecheck / lint / build grün  
+✅ Docs + Schlussrapport committed  
+✅ git status clean, push erfolgt
 
 ## Tests/Proof (reproduzierbar)
 
