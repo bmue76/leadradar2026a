@@ -48,6 +48,19 @@ enum ExportJobType {
 }
 
 //
+// TP 2.5 — Mobile Device Auth
+//
+enum MobileApiKeyStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum MobileDeviceStatus {
+  ACTIVE
+  DISABLED
+}
+
+//
 // Core base models
 //
 model Tenant {
@@ -69,12 +82,17 @@ model Tenant {
   logoHeight       Int?
 
   // Relations
-  users           User[]
-  forms           Form[]
-  formFields      FormField[]
-  leads           Lead[]
-  leadAttachments LeadAttachment[]
-  exportJobs      ExportJob[]
+  users            User[]
+  forms            Form[]
+  formFields       FormField[]
+  leads            Lead[]
+  leadAttachments  LeadAttachment[]
+  exportJobs       ExportJob[]
+
+  // TP 2.5 — Mobile Device Auth
+  mobileApiKeys    MobileApiKey[]
+  mobileDevices    MobileDevice[]
+  mobileAssignments MobileDeviceForm[]
 
   @@index([country])
 }
@@ -103,6 +121,9 @@ model User {
   passwordResetTokens     PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
 
+  // TP 2.5 — MobileApiKey (optional audit)
+  createdMobileApiKeys MobileApiKey[]
+
   @@index([tenantId])
   @@index([emailVerifiedAt])
 }
@@ -123,6 +144,9 @@ model Form {
   tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   fields FormField[]
   leads  Lead[]
+
+  // TP 2.5 — Assignments (Device ↔ Form)
+  deviceAssignments MobileDeviceForm[]
 
   @@index([tenantId, status])
 }
@@ -215,6 +239,69 @@ model ExportJob {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, status, updatedAt])
+}
+
+//
+// TP 2.5 — Mobile Device Auth (ApiKey + Device + Assignment)
+//
+model MobileApiKey {
+  id        String           @id @default(cuid())
+  tenantId  String
+  name      String
+  prefix    String
+  keyHash   String
+  status    MobileApiKeyStatus @default(ACTIVE)
+
+  createdAt  DateTime  @default(now())
+  revokedAt  DateTime?
+  lastUsedAt DateTime?
+
+  createdByUserId String?
+  createdByUser   User?   @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // 1:1 binding (enforced by MobileDevice.apiKeyId unique)
+  device MobileDevice? @relation("MobileApiKeyToDevice")
+
+  @@index([tenantId, status, createdAt])
+  @@index([prefix, status])
+}
+
+model MobileDevice {
+  id       String            @id @default(cuid())
+  tenantId String
+  name     String
+
+  apiKeyId String @unique
+  apiKey   MobileApiKey @relation("MobileApiKeyToDevice", fields: [apiKeyId], references: [id], onDelete: Restrict)
+
+  status     MobileDeviceStatus @default(ACTIVE)
+  lastSeenAt DateTime?
+  createdAt  DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  assignments MobileDeviceForm[]
+
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, apiKeyId])
+}
+
+model MobileDeviceForm {
+  tenantId String
+  deviceId String
+  formId   String
+
+  assignedAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  device MobileDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  form   Form @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, deviceId, formId])
+  @@index([tenantId, deviceId])
+  @@index([tenantId, formId])
 }
 
 //

@@ -1,26 +1,35 @@
-import { NextRequest } from "next/server";
 import { jsonError, jsonOk } from "@/lib/api";
 import { isHttpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
-import { requireTenantContext } from "@/lib/tenantContext";
+import { requireMobileAuth } from "@/lib/mobileAuth";
+import { enforceRateLimit } from "@/lib/rateLimit";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-
-export async function GET(req: NextRequest) {
+export async function GET(req: Request) {
   try {
-    const { tenantId } = await requireTenantContext(req);
+    const auth = await requireMobileAuth(req);
 
-    const forms = await prisma.form.findMany({
-      where: { tenantId, status: "ACTIVE" },
-      select: { id: true, name: true, description: true, status: true },
-      orderBy: { updatedAt: "desc" },
+    enforceRateLimit(`mobile:${auth.apiKeyId}`, { limit: 60, windowMs: 60_000 });
+
+    const assignments = await prisma.mobileDeviceForm.findMany({
+      where: {
+        tenantId: auth.tenantId,
+        deviceId: auth.deviceId,
+        form: { status: "ACTIVE" },
+      },
+      select: {
+        form: {
+          select: { id: true, name: true, description: true, status: true },
+        },
+      },
+      orderBy: { form: { createdAt: "desc" } },
+      take: 200,
     });
 
-    return jsonOk(req, { forms });
+    const forms = assignments.map((a) => a.form);
+
+    return jsonOk(req, forms);
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
-    console.error("[mobile.v1.forms] GET unexpected error", e);
-    return jsonError(req, 500, "INTERNAL_ERROR", "Unexpected error.");
+    return jsonError(req, 500, "INTERNAL", "Unexpected error.");
   }
 }

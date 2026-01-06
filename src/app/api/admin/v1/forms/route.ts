@@ -73,7 +73,7 @@ export async function GET(req: Request) {
       },
     });
 
-    const forms = rows.map((r) => ({
+    const items = rows.map((r) => ({
       id: r.id,
       name: r.name,
       description: r.description,
@@ -83,7 +83,10 @@ export async function GET(req: Request) {
       fieldsCount: r._count.fields,
     }));
 
-    return jsonOk(req, { forms });
+    // Backward compatible:
+    // - forms: historical contract used by existing admin screens
+    // - items: array alias for new generic clients
+    return jsonOk(req, { forms: items, items });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     const conflict = mapPrismaUniqueConflict(e);

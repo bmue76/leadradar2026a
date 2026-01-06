@@ -1,71 +1,80 @@
-import { Prisma } from "@prisma/client";
-import { NextRequest } from "next/server";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { jsonError, jsonOk } from "@/lib/api";
 import { isHttpError, validateBody } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
-import { requireTenantContext } from "@/lib/tenantContext";
+import { requireMobileAuth } from "@/lib/mobileAuth";
+import { enforceRateLimit } from "@/lib/rateLimit";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-
-const Primitive = z.union([z.string(), z.number(), z.boolean(), z.null()]);
-const PrimitiveOrArray = z.union([Primitive, z.array(Primitive)]);
-
-const PostLeadBodySchema = z.object({
+const BodySchema = z.object({
   formId: z.string().min(1),
-  clientLeadId: z.string().min(1).max(128),
-  capturedAt: z.string().datetime(),
-  values: z.record(z.string(), PrimitiveOrArray),
+  clientLeadId: z.string().min(1).max(200),
+  capturedAt: z.string().min(1),
+  values: z.record(z.string(), z.unknown()),
   meta: z.record(z.string(), z.unknown()).optional(),
 });
 
-function isUniqueViolation(e: unknown): boolean {
-  return e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002";
-}
-
-export async function POST(req: NextRequest) {
+export async function POST(req: Request) {
   try {
-    const { tenantId } = await requireTenantContext(req);
-    const body = await validateBody(req, PostLeadBodySchema, 256 * 1024);
+    const auth = await requireMobileAuth(req);
 
-    // leak-safe: form must exist for tenant and must be ACTIVE
-    const form = await prisma.form.findFirst({
-      where: { id: body.formId, tenantId, status: "ACTIVE" },
+    enforceRateLimit(`mobile:${auth.apiKeyId}`, { limit: 60, windowMs: 60_000 });
+
+    const body = await validateBody(req, BodySchema, 1024 * 1024); // 1MB
+    const capturedAt = new Date(body.capturedAt);
+    if (Number.isNaN(capturedAt.getTime())) {
+      return jsonError(req, 400, "INVALID_BODY", "Invalid request body.", {
+        capturedAt: ["Invalid ISO datetime."],
+      });
+    }
+
+    // leak-safe: require assignment (and ACTIVE form) for lead capture
+    const assignment = await prisma.mobileDeviceForm.findFirst({
+      where: {
+        tenantId: auth.tenantId,
+        deviceId: auth.deviceId,
+        formId: body.formId,
+        form: { status: "ACTIVE" },
+      },
+      select: { formId: true },
+    });
+    if (!assignment) {
+      return jsonError(req, 404, "NOT_FOUND", "Not found.");
+    }
+
+    // Idempotency: (tenantId, clientLeadId)
+    const existing = await prisma.lead.findFirst({
+      where: { tenantId: auth.tenantId, clientLeadId: body.clientLeadId },
       select: { id: true },
     });
-    if (!form) return jsonError(req, 404, "NOT_FOUND", "Not found.");
 
-    const capturedAt = new Date(body.capturedAt);
-
-    try {
-      const created = await prisma.lead.create({
-        data: {
-          tenantId,
-          formId: body.formId,
-          clientLeadId: body.clientLeadId,
-          capturedAt,
-          values: body.values as Prisma.InputJsonValue,
-          meta: (body.meta ?? undefined) as Prisma.InputJsonValue | undefined,
-        },
-        select: { id: true },
-      });
-
-      return jsonOk(req, { leadId: created.id, deduped: false });
-    } catch (e) {
-      if (!isUniqueViolation(e)) throw e;
-
-      const existing = await prisma.lead.findFirst({
-        where: { tenantId, clientLeadId: body.clientLeadId },
-        select: { id: true },
-      });
-      if (!existing) return jsonError(req, 409, "KEY_CONFLICT", "Duplicate clientLeadId.");
-
+    if (existing) {
       return jsonOk(req, { leadId: existing.id, deduped: true });
     }
+
+    const valuesJson = body.values as unknown as Prisma.InputJsonValue;
+    const metaJson = ({
+      ...(body.meta ?? {}),
+      source: "mobile",
+      mobileDeviceId: auth.deviceId,
+      mobileApiKeyPrefix: auth.apiKeyPrefix,
+    } as unknown) as Prisma.InputJsonValue;
+
+    const lead = await prisma.lead.create({
+      data: {
+        tenantId: auth.tenantId,
+        formId: body.formId,
+        clientLeadId: body.clientLeadId,
+        capturedAt,
+        values: valuesJson,
+        meta: metaJson,
+      },
+      select: { id: true },
+    });
+
+    return jsonOk(req, { leadId: lead.id, deduped: false });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
-    console.error("[mobile.v1.leads] POST unexpected error", e);
-    return jsonError(req, 500, "INTERNAL_ERROR", "Unexpected error.");
+    return jsonError(req, 500, "INTERNAL", "Unexpected error.");
   }
 }
