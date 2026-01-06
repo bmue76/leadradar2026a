@@ -40,7 +40,7 @@ export default function TenantBadge({
     });
 
     if (!res.ok) {
-      setState({ kind: "error", message: res.message, traceId: res.traceId });
+      setState({ kind: "error", message: res.error.message, traceId: res.traceId });
       return;
     }
 

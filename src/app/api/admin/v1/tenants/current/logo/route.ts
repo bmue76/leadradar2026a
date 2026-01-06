@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { jsonError, jsonOk, getTraceId } from "@/lib/api";
