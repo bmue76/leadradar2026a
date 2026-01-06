@@ -14,7 +14,7 @@
 .header{
   display:flex;
   justify-content:center;
-  margin-bottom:18px;
+  margin-bottom:28px; /* mehr Luft zum Titel */
 }
 
 .headline{

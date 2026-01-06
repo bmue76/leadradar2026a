@@ -39,24 +39,34 @@ function displayNameFromTenantRef(ref: string): string {
 }
 
 export default function AdminShell({ children }: { children: React.ReactNode }) {
+  const [hydrated, setHydrated] = React.useState(false);
+
+  React.useEffect(() => {
+    setHydrated(true);
+  }, []);
+
   const tenantSlug = React.useSyncExternalStore(
     subscribeTenantSlug,
-    () => getTenantSlugClient() || getDefaultTenantSlug(), // ✅ hydration-safe
-    () => getDefaultTenantSlug()
+    () => getTenantSlugClient() || getDefaultTenantSlug(), // client snapshot
+    () => getDefaultTenantSlug() // server snapshot
   );
 
   const tenantHeaderRef = (tenantSlug ?? "").trim();
 
   // Publish tenant header ref into DOM (BrandingClient + TenantLogo read it).
+  // Only after hydration, so initial SSR markup stays stable.
   React.useEffect(() => {
+    if (!hydrated) return;
+
     if (tenantHeaderRef) {
       document.documentElement.dataset.lrTenantSlug = tenantHeaderRef;
     } else {
       delete document.documentElement.dataset.lrTenantSlug;
     }
-  }, [tenantHeaderRef]);
+  }, [hydrated, tenantHeaderRef]);
 
-  const tenantName = tenantHeaderRef ? displayNameFromTenantRef(tenantHeaderRef) : "Tenant";
+  // Avoid hydration mismatch: title is neutral until hydrated.
+  const tenantName = hydrated && tenantHeaderRef ? displayNameFromTenantRef(tenantHeaderRef) : "Tenant";
   const title = `${tenantName} - Admin`;
 
   return (
@@ -86,7 +96,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
           <div className={styles.topbar}>
             <Topbar
               title={title}
-              rightSlot={<TenantLogo variant="topbar" />}
+              rightSlot={hydrated ? <TenantLogo variant="topbar" /> : null}
             />
           </div>
 
