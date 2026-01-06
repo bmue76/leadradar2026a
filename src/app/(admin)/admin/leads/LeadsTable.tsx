@@ -25,16 +25,16 @@ export default function LeadsTable(props: {
   } = props;
 
   return (
-    <div className="rounded-xl border bg-white">
+    <div className="rounded-2xl border border-black/10 bg-white overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[820px] border-separate border-spacing-0">
-          <thead>
-            <tr className="text-left text-xs uppercase tracking-wide text-black/50">
-              <th className="sticky top-0 z-10 border-b bg-white px-4 py-3">Captured</th>
-              <th className="sticky top-0 z-10 border-b bg-white px-4 py-3">Form</th>
-              <th className="sticky top-0 z-10 border-b bg-white px-4 py-3">Preview</th>
-              <th className="sticky top-0 z-10 border-b bg-white px-4 py-3">Status</th>
-              <th className="sticky top-0 z-10 border-b bg-white px-4 py-3 text-right">Open</th>
+        <table className="w-full min-w-[820px] text-sm">
+          <thead className="text-left text-xs text-black/45">
+            <tr>
+              <th className="px-4 py-2 font-medium">Captured</th>
+              <th className="px-4 py-2 font-medium">Form</th>
+              <th className="px-4 py-2 font-medium">Preview</th>
+              <th className="px-4 py-2 font-medium">Status</th>
+              <th className="px-4 py-2 font-medium text-right"> </th>
             </tr>
           </thead>
 
@@ -46,32 +46,29 @@ export default function LeadsTable(props: {
               return (
                 <tr
                   key={row.id}
-                  className="group cursor-pointer border-b last:border-b-0 hover:bg-black/[0.03]"
+                  className="group cursor-pointer hover:bg-black/[0.02]"
                   onClick={() => onOpen(row.id)}
                   role="button"
                   tabIndex={0}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") onOpen(row.id);
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onOpen(row.id);
+                    }
                   }}
                 >
-                  <td className="border-b px-4 py-3 text-sm text-black/80">
-                    {formatCapturedAt(row.capturedAt)}
+                  <td className="px-4 py-3 text-black/80">{formatCapturedAt(row.capturedAt)}</td>
+
+                  <td className="px-4 py-3">
+                    <div className="max-w-[260px] truncate font-medium text-black/85">{formName}</div>
+                    <div className="mt-0.5 text-xs text-black/45">{row.formId}</div>
                   </td>
 
-                  <td className="border-b px-4 py-3 text-sm">
-                    <div className="max-w-[260px] truncate font-medium text-black/85">
-                      {formName}
-                    </div>
-                    <div className="mt-0.5 text-xs text-black/50">
-                      {row.formId}
-                    </div>
-                  </td>
-
-                  <td className="border-b px-4 py-3 text-sm text-black/70">
+                  <td className="px-4 py-3 text-black/70">
                     <div className="max-w-[420px] truncate">{preview}</div>
                   </td>
 
-                  <td className="border-b px-4 py-3 text-sm">
+                  <td className="px-4 py-3">
                     {row.isDeleted ? (
                       <span className="inline-flex items-center rounded-full border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-800">
                         Deleted
@@ -83,10 +80,10 @@ export default function LeadsTable(props: {
                     )}
                   </td>
 
-                  <td className="border-b px-4 py-3 text-right">
+                  <td className="px-4 py-3 text-right">
                     <button
                       type="button"
-                      className="rounded-md border px-3 py-1.5 text-sm hover:bg-black/5"
+                      className="rounded-xl border border-black/10 bg-white px-3 py-2 text-xs font-medium hover:bg-black/[0.02] focus:outline-none focus:ring-2 focus:ring-black/10 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                       onClick={(e) => {
                         e.stopPropagation();
                         onOpen(row.id);
@@ -102,14 +99,12 @@ export default function LeadsTable(props: {
         </table>
       </div>
 
-      <div className="flex items-center justify-between gap-3 border-t px-4 py-3">
-        <div className="text-sm text-black/60">
-          {hasMore ? "More leads available." : "End of list."}
-        </div>
+      <div className="flex items-center justify-between gap-3 px-4 py-3">
+        <div className="text-sm text-black/55">{hasMore ? "More leads available." : "End of list."}</div>
 
         <button
           type="button"
-          className="rounded-md border px-4 py-2 text-sm font-medium hover:bg-black/5 disabled:opacity-50"
+          className="rounded-xl border border-black/10 bg-white px-4 py-2 text-sm font-medium hover:bg-black/[0.02] focus:outline-none focus:ring-2 focus:ring-black/10 disabled:opacity-50"
           onClick={onLoadMore}
           disabled={!hasMore || loadingMore}
         >

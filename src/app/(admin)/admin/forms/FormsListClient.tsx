@@ -24,6 +24,32 @@ function buildQuery(q: string, status: StatusFilter): string {
   return s ? `?${s}` : "";
 }
 
+function EmptyIcon() {
+  return (
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M8 7.5h8M8 11h8M8 14.5h5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        opacity="0.65"
+      />
+      <path
+        d="M7.5 3.5h7.2l2.8 2.8V19a1.5 1.5 0 0 1-1.5 1.5h-8.5A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        opacity="0.55"
+      />
+      <path
+        d="M14.7 3.6V6a1 1 0 0 0 1 1h2.4"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        opacity="0.55"
+      />
+    </svg>
+  );
+}
+
 export function FormsListClient() {
   const router = useRouter();
 
@@ -82,17 +108,17 @@ export function FormsListClient() {
   }, [qDebounced, status]);
 
   React.useEffect(() => {
-    fetchForms();
+    void fetchForms();
   }, [fetchForms]);
 
   const retry = React.useCallback(() => {
-    fetchForms();
+    void fetchForms();
   }, [fetchForms]);
 
   const onCreated = React.useCallback(() => {
     setFlash("Form created.");
     void fetchForms();
-    window.setTimeout(() => setFlash(null), 2500);
+    window.setTimeout(() => setFlash(null), 2200);
   }, [fetchForms]);
 
   const clearFilters = React.useCallback(() => {
@@ -111,7 +137,7 @@ export function FormsListClient() {
   return (
     <div className="space-y-3">
       {/* Toolbar */}
-      <div className="flex flex-col gap-2 rounded-xl border border-zinc-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-2 rounded-2xl border border-black/10 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-center">
           <div className="flex-1">
             <label htmlFor="forms-search" className="sr-only">
@@ -122,7 +148,7 @@ export function FormsListClient() {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search forms…"
-              className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400"
+              className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-black/10"
             />
           </div>
 
@@ -134,7 +160,7 @@ export function FormsListClient() {
               id="forms-status"
               value={status}
               onChange={(e) => setStatus(e.target.value as StatusFilter)}
-              className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-zinc-400"
+              className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-black/10"
             >
               <option value="ALL">All statuses</option>
               <option value="DRAFT">Draft</option>
@@ -147,7 +173,7 @@ export function FormsListClient() {
             <button
               type="button"
               onClick={clearFilters}
-              className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 shadow-sm hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-zinc-400"
+              className="rounded-xl border border-black/10 bg-white px-3 py-2 text-sm font-medium text-zinc-800 hover:bg-black/[0.02] focus:outline-none focus:ring-2 focus:ring-black/10"
             >
               Clear
             </button>
@@ -162,7 +188,7 @@ export function FormsListClient() {
           <button
             type="button"
             onClick={() => setCreateOpen(true)}
-            className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-400"
+            className="rounded-xl bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-black/10"
           >
             Create form
           </button>
@@ -170,29 +196,31 @@ export function FormsListClient() {
       </div>
 
       {flash ? (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900">
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900">
           {flash}
         </div>
       ) : null}
 
       {/* States */}
       {loading ? (
-        <div className="rounded-xl border border-zinc-200 bg-white">
-          <div className="border-b border-zinc-200 px-4 py-3 text-sm font-medium text-zinc-900">Forms</div>
-          <div className="divide-y divide-zinc-100">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="flex items-center justify-between px-4 py-3">
-                <div className="space-y-2">
-                  <div className="h-4 w-56 rounded bg-zinc-100" />
-                  <div className="h-3 w-72 rounded bg-zinc-100" />
+        <div className="rounded-2xl border border-black/10 bg-white">
+          <div className="px-4 py-3 text-sm font-medium text-zinc-900">Forms</div>
+          <div className="px-4 pb-3">
+            <div className="space-y-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="flex items-center justify-between py-2">
+                  <div className="space-y-2">
+                    <div className="h-4 w-56 rounded bg-zinc-100" />
+                    <div className="h-3 w-72 rounded bg-zinc-100" />
+                  </div>
+                  <div className="h-8 w-20 rounded bg-zinc-100" />
                 </div>
-                <div className="h-8 w-20 rounded bg-zinc-100" />
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </div>
       ) : errorMsg ? (
-        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4">
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
           <div className="text-sm font-semibold text-rose-900">Couldn’t load forms</div>
           <div className="mt-1 text-sm text-rose-800">{errorMsg}</div>
           {errorTraceId ? (
@@ -204,60 +232,64 @@ export function FormsListClient() {
             <button
               type="button"
               onClick={retry}
-              className="rounded-md border border-rose-200 bg-white px-3 py-2 text-sm font-medium text-rose-900 shadow-sm hover:bg-rose-50 focus:outline-none focus:ring-2 focus:ring-rose-200"
+              className="rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm font-medium text-rose-900 hover:bg-rose-50 focus:outline-none focus:ring-2 focus:ring-rose-200"
             >
               Retry
             </button>
           </div>
         </div>
       ) : items.length === 0 ? (
-        <div className="rounded-xl border border-zinc-200 bg-white p-6 text-center">
-          <div className="text-base font-semibold text-zinc-900">No forms yet</div>
-          <p className="mt-1 text-sm text-zinc-600">
-            Create your first form to start capturing leads on your next event.
-          </p>
-          <div className="mt-4 flex justify-center">
-            <button
-              type="button"
-              onClick={() => setCreateOpen(true)}
-              className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-400"
-            >
-              Create your first form
-            </button>
+        <div className="rounded-2xl border border-black/10 bg-white p-6">
+          <div className="mx-auto flex max-w-md flex-col items-center text-center gap-2">
+            <div className="text-zinc-500">
+              <EmptyIcon />
+            </div>
+            <div className="text-base font-semibold text-zinc-900">No forms</div>
+            <p className="text-sm text-zinc-600">Create a form to start collecting leads.</p>
+            <div className="mt-2 flex justify-center">
+              <button
+                type="button"
+                onClick={() => setCreateOpen(true)}
+                className="rounded-xl bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-black/10"
+              >
+                Create form
+              </button>
+            </div>
           </div>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white">
-          <div className="border-b border-zinc-200 px-4 py-3 text-sm font-medium text-zinc-900">Forms</div>
+        <div className="overflow-hidden rounded-2xl border border-black/10 bg-white">
+          <div className="px-4 py-3 text-sm font-medium text-zinc-900">Forms</div>
 
           <div className="overflow-x-auto">
             <table className="min-w-full text-left text-sm">
-              <thead className="bg-zinc-50 text-xs text-zinc-600">
+              <thead className="text-xs text-zinc-500">
                 <tr>
-                  <th className="px-4 py-3 font-medium">Name</th>
-                  <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium">Updated</th>
-                  <th className="px-4 py-3 font-medium text-right">Actions</th>
+                  <th className="px-4 py-2 font-medium">Name</th>
+                  <th className="px-4 py-2 font-medium">Status</th>
+                  <th className="px-4 py-2 font-medium">Updated</th>
+                  <th className="px-4 py-2 font-medium text-right"> </th>
                 </tr>
               </thead>
 
-              <tbody className="divide-y divide-zinc-100">
+              <tbody>
                 {items.map((f) => (
                   <tr
                     key={f.id}
-                    className="cursor-pointer hover:bg-zinc-50"
+                    className="group cursor-pointer hover:bg-black/[0.02]"
                     onClick={() => openRow(f.id)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") openRow(f.id);
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openRow(f.id);
+                      }
                     }}
                     tabIndex={0}
                   >
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 align-top">
                       <div className="font-medium text-zinc-900">{f.name}</div>
                       {f.description ? (
-                        <div className="mt-0.5 line-clamp-1 text-xs text-zinc-600">
-                          {f.description}
-                        </div>
+                        <div className="mt-0.5 line-clamp-1 text-xs text-zinc-600">{f.description}</div>
                       ) : (
                         <div className="mt-0.5 text-xs text-zinc-400">No description</div>
                       )}
@@ -266,7 +298,7 @@ export function FormsListClient() {
                       ) : null}
                     </td>
 
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 align-top">
                       <span
                         className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium ${badgeClass(
                           f.status
@@ -276,15 +308,16 @@ export function FormsListClient() {
                       </span>
                     </td>
 
-                    <td className="px-4 py-3 text-xs text-zinc-600">
+                    <td className="px-4 py-3 align-top text-xs text-zinc-600">
                       {formatUpdatedAt(f.updatedAt)}
                     </td>
 
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-4 py-3 align-top text-right">
                       <Link
                         href={`/admin/forms/${f.id}`}
                         onClick={(e) => e.stopPropagation()}
-                        className="inline-flex rounded-md border border-zinc-300 bg-white px-3 py-2 text-xs font-medium text-zinc-800 shadow-sm hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-zinc-400"
+                        className="inline-flex rounded-xl border border-black/10 bg-white px-3 py-2 text-xs font-medium text-zinc-800 hover:bg-black/[0.02] focus:outline-none focus:ring-2 focus:ring-black/10 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                        aria-label="Open form"
                       >
                         Open
                       </Link>

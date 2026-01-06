@@ -77,9 +77,6 @@ export function TenantLogo({ variant, className, tenantSlug }: Props) {
       const url = `/api/admin/v1/tenants/current/logo?v=${vParam}`;
 
       try {
-        // IMPORTANT:
-        // - Do NOT send x-tenant-slug by default.
-        // - Session/cookie is the source of truth for /current/* endpoints.
         const res = await fetch(url, {
           method: "GET",
           credentials: "same-origin",
@@ -113,7 +110,7 @@ export function TenantLogo({ variant, className, tenantSlug }: Props) {
       }
     };
 
-    run();
+    void run();
 
     return () => {
       alive = false;
@@ -126,7 +123,8 @@ export function TenantLogo({ variant, className, tenantSlug }: Props) {
     return (
       <div className={[styles.topbarWrap, className ?? ""].join(" ")} aria-label="Tenant logo">
         {blobUrl ? (
-          <img className={styles.topbarImg} src={blobUrl} alt="Logo" />
+          // eslint-disable-next-line @next/next/no-img-element
+          <img className={styles.topbarImg} src={blobUrl} alt="Logo" style={{ maxHeight: 32, width: "auto" }} />
         ) : (
           <span className={styles.topbarPlaceholder}>Logo</span>
         )}
@@ -137,7 +135,8 @@ export function TenantLogo({ variant, className, tenantSlug }: Props) {
   return (
     <div className={[styles.frame, className ?? ""].join(" ")} aria-label="Tenant logo">
       {blobUrl ? (
-        <img className={styles.img} src={blobUrl} alt="Logo" />
+        // eslint-disable-next-line @next/next/no-img-element
+        <img className={styles.img} src={blobUrl} alt="Logo" style={{ maxHeight: 44, width: "auto", objectFit: "contain" }} />
       ) : (
         <span className={styles.placeholder}>Logo</span>
       )}

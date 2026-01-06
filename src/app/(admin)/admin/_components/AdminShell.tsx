@@ -27,15 +27,11 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
     setHydrated(true);
   }, []);
 
-  // Session-first tenant resolution: this is the source of truth for Admin UI.
   React.useEffect(() => {
     let alive = true;
 
     const run = async () => {
-      const res = await adminFetchJson<CurrentTenantDto>("/api/admin/v1/tenants/current", {
-        method: "GET",
-      });
-
+      const res = await adminFetchJson<CurrentTenantDto>("/api/admin/v1/tenants/current", { method: "GET" });
       if (!alive) return;
 
       if (res.ok) {
@@ -43,31 +39,24 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
         return;
       }
 
-      // If this fails, we keep tenant null and show neutral UI.
-      // The proxy should already redirect unauthenticated users before this.
       setTenant(null);
     };
 
-    run();
+    void run();
 
     return () => {
       alive = false;
     };
   }, []);
 
-  // Publish tenant ref into DOM (TenantLogo may also read it).
   React.useEffect(() => {
     if (!hydrated) return;
 
     const slug = (tenant?.slug ?? "").trim();
-    if (slug) {
-      document.documentElement.dataset.lrTenantSlug = slug;
-    } else {
-      delete document.documentElement.dataset.lrTenantSlug;
-    }
+    if (slug) document.documentElement.dataset.lrTenantSlug = slug;
+    else delete document.documentElement.dataset.lrTenantSlug;
   }, [hydrated, tenant?.slug]);
 
-  // Avoid hydration mismatch: title is neutral until hydrated.
   const tenantName = hydrated ? (tenant?.name ?? "Tenant") : "Tenant";
   const title = `${tenantName} - Admin`;
 
@@ -98,7 +87,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
           <div className={styles.topbar}>
             <Topbar
               title={title}
-              rightSlot={hydrated ? <TenantLogo variant="topbar" tenantSlug={tenant?.slug ?? null} /> : null}
+              leftSlot={hydrated ? <TenantLogo variant="topbar" tenantSlug={tenant?.slug ?? null} /> : null}
             />
           </div>
 

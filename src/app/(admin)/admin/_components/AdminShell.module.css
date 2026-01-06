@@ -1,9 +1,9 @@
 .root {
-  --bg: #f7f8fb;
+  --bg: #fbfbfd;
   --panel: #ffffff;
   --text: #0f172a;
-  --muted: #64748b;
-  --border: #e2e8f0;
+  --muted: rgba(15, 23, 42, 0.55);
+  --border: rgba(15, 23, 42, 0.10);
   --brand: #2563eb;
   --brandSoft: rgba(37, 99, 235, 0.12);
 
@@ -96,7 +96,7 @@
 }
 
 .navItem:hover {
-  background: rgba(15, 23, 42, 0.04);
+  background: rgba(15, 23, 42, 0.035);
 }
 
 .navItemActive {
@@ -126,56 +126,12 @@
 }
 
 .topbar {
-  height: 56px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
-  background: rgba(247, 248, 251, 0.72);
-  backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
   z-index: 10;
-}
-
-.topbarLeft {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.hamburger {
-  border: 1px solid var(--border);
-  background: var(--panel);
-  border-radius: 10px;
-  width: 38px;
-  height: 38px;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-
-.hamburger:focus-visible {
-  outline: 3px solid rgba(37, 99, 235, 0.22);
-  outline-offset: 2px;
-}
-
-.topbarTitle {
-  font-weight: 700;
-  font-size: 14px;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.topbarRight {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  background: rgba(251, 251, 253, 0.82);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
 }
 
 .content {
@@ -344,10 +300,6 @@
 }
 
 @media (max-width: 900px) {
-  .hamburger {
-    display: inline-flex;
-  }
-
   .sidebar {
     position: fixed;
     left: 0;
