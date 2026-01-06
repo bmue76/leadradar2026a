@@ -1,5 +1,8 @@
-import * as crypto from "node:crypto";
+import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { jsonError, jsonOk, getTraceId } from "@/lib/api";
+import { isHttpError } from "@/lib/http";
+import { requireTenantContext } from "@/lib/tenantContext";
 import {
   deleteFileIfExists,
   fileExists,
@@ -13,84 +16,25 @@ export const runtime = "nodejs";
 
 const BRANDING_ROOT_DIR = ".tmp_branding";
 const MAX_LOGO_BYTES = 2 * 1024 * 1024; // 2 MB
-const ALLOWED_MIMES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const ALLOWED_MIMES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+  "image/svg+xml",
+]);
 
-type JsonErrorArgs = {
-  status: number;
-  code: string;
-  message: string;
-  details?: unknown;
-};
-
-function makeTraceId(): string {
-  return crypto.randomUUID();
-}
-
-function jsonOk(data: unknown, init?: ResponseInit): Response {
-  const traceId = makeTraceId();
-  const headers = new Headers(init?.headers);
-  headers.set("x-trace-id", traceId);
-  headers.set("Cache-Control", "no-store, must-revalidate");
-  return Response.json({ ok: true, data, traceId }, { ...init, headers });
-}
-
-function jsonError(args: JsonErrorArgs): Response {
-  const traceId = makeTraceId();
-  const headers = new Headers();
-  headers.set("x-trace-id", traceId);
-  headers.set("Cache-Control", "no-store, must-revalidate");
-  return Response.json(
-    {
-      ok: false,
-      error: { code: args.code, message: args.message, details: args.details ?? null },
-      traceId,
-    },
-    { status: args.status, headers },
-  );
-}
-
-async function resolveTenantId(req: Request): Promise<string> {
-  const tenantId = req.headers.get("x-tenant-id")?.trim() || "";
-  const tenantSlug = req.headers.get("x-tenant-slug")?.trim() || "";
-
-  if (!tenantId && !tenantSlug) {
-    return Promise.reject(
-      jsonError({
-        status: 401,
-        code: "TENANT_REQUIRED",
-        message: "Tenant context required (x-tenant-id or x-tenant-slug).",
-      }),
-    );
-  }
-
-  // Prefer explicit tenant-id if present
-  if (tenantId) {
-    const t = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
-    if (!t) {
-      return Promise.reject(jsonError({ status: 404, code: "NOT_FOUND", message: "Tenant not found." }));
-    }
-    return t.id;
-  }
-
-  // tenantSlug provided: try slug first
-  const bySlug = await prisma.tenant.findUnique({ where: { slug: tenantSlug }, select: { id: true } });
-  if (bySlug) return bySlug.id;
-
-  // Fallback: some admin flows may pass tenantId inside x-tenant-slug (e.g. "tenant_demo")
-  const byId = await prisma.tenant.findUnique({ where: { id: tenantSlug }, select: { id: true } });
-  if (byId) return byId.id;
-
-  return Promise.reject(jsonError({ status: 404, code: "NOT_FOUND", message: "Tenant not found." }));
-}
-
-function extFromMime(mime: string): "png" | "jpg" | "webp" {
+function extFromMime(mime: string): "png" | "jpg" | "webp" | "svg" {
   switch (mime) {
     case "image/png":
       return "png";
     case "image/jpeg":
+    case "image/jpg":
       return "jpg";
     case "image/webp":
       return "webp";
+    case "image/svg+xml":
+      return "svg";
     default:
       return "png";
   }
@@ -101,180 +45,169 @@ function etagFrom(sizeBytes: number, mtimeMs: number): string {
 }
 
 export async function GET(req: Request): Promise<Response> {
-  let tenantId: string;
+  const traceId = getTraceId(req);
+
   try {
-    tenantId = await resolveTenantId(req);
-  } catch (e) {
-    if (e instanceof Response) return e;
-    return jsonError({ status: 500, code: "INTERNAL", message: "Internal error." });
-  }
+    const { tenantId } = await requireTenantContext(req);
 
-  const traceId = makeTraceId();
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { logoKey: true, logoMime: true },
+    });
 
-  const tenant = await prisma.tenant.findUnique({
-    where: { id: tenantId },
-    select: { logoKey: true, logoMime: true },
-  });
+    if (!tenant?.logoKey || !tenant.logoMime) {
+      return jsonError(req, 404, "NOT_FOUND", "Not found.");
+    }
 
-  if (!tenant?.logoKey || !tenant.logoMime) {
-    return jsonError({ status: 404, code: "NOT_FOUND", message: "Logo not found." });
-  }
+    const absPath = getAbsolutePath({ rootDirName: BRANDING_ROOT_DIR, relativeKey: tenant.logoKey });
+    const exists = await fileExists(absPath);
+    if (!exists) {
+      return jsonError(req, 404, "NOT_FOUND", "Not found.");
+    }
 
-  const absPath = getAbsolutePath({ rootDirName: BRANDING_ROOT_DIR, relativeKey: tenant.logoKey });
-  const exists = await fileExists(absPath);
-  if (!exists) {
-    return jsonError({ status: 404, code: "NOT_FOUND", message: "Logo not found." });
-  }
+    const st = await statFile(absPath);
+    const etag = etagFrom(st.sizeBytes, st.mtimeMs);
 
-  const st = await statFile(absPath);
-  const etag = etagFrom(st.sizeBytes, st.mtimeMs);
+    const ifNoneMatch = req.headers.get("if-none-match");
+    if (ifNoneMatch && ifNoneMatch === etag) {
+      return new Response(null, {
+        status: 304,
+        headers: {
+          "x-trace-id": traceId,
+          ETag: etag,
+          "Cache-Control": "private, max-age=3600",
+        },
+      });
+    }
 
-  const ifNoneMatch = req.headers.get("if-none-match");
-  if (ifNoneMatch && ifNoneMatch === etag) {
-    return new Response(null, {
-      status: 304,
+    const body = streamFileWeb(absPath);
+
+    return new Response(body, {
+      status: 200,
       headers: {
         "x-trace-id": traceId,
-        ETag: etag,
+        "Content-Type": tenant.logoMime,
         "Cache-Control": "private, max-age=3600",
+        ETag: etag,
       },
     });
+  } catch (e) {
+    if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
+    return jsonError(req, 500, "INTERNAL", "Internal error.");
   }
-
-  const body = streamFileWeb(absPath);
-
-  return new Response(body, {
-    status: 200,
-    headers: {
-      "x-trace-id": traceId,
-      "Content-Type": tenant.logoMime,
-      "Cache-Control": "private, max-age=3600",
-      ETag: etag,
-    },
-  });
 }
 
+const UploadGuard = z.object({
+  // placeholder schema: multipart validation happens via runtime checks below
+});
+
 export async function POST(req: Request): Promise<Response> {
-  let tenantId: string;
   try {
-    tenantId = await resolveTenantId(req);
+    await UploadGuard.parseAsync({});
+
+    const { tenantId } = await requireTenantContext(req);
+
+    const form = await req.formData();
+    const file = form.get("file");
+
+    if (!(file instanceof File)) {
+      return jsonError(req, 400, "INVALID_BODY", 'Missing "file" in multipart/form-data.');
+    }
+
+    const mime = (file.type || "").trim();
+    if (!ALLOWED_MIMES.has(mime)) {
+      return jsonError(req, 400, "INVALID_FILE_TYPE", "Unsupported file type. Allowed: PNG, JPG, WebP, SVG.", { mime });
+    }
+
+    if (file.size > MAX_LOGO_BYTES) {
+      return jsonError(req, 413, "BODY_TOO_LARGE", `File too large. Max ${MAX_LOGO_BYTES} bytes.`, { size: file.size });
+    }
+
+    const current = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { logoKey: true },
+    });
+
+    const ext = extFromMime(mime);
+    const key = `tenants/${tenantId}/branding/logo-${crypto.randomUUID()}.${ext}`;
+
+    // NO image transformation!
+    const bytes = new Uint8Array(await file.arrayBuffer());
+
+    const stored = await putBinaryFile({
+      rootDirName: BRANDING_ROOT_DIR,
+      relativeKey: key,
+      data: bytes,
+    });
+
+    const updatedAt = new Date();
+
+    await prisma.tenant.update({
+      where: { id: tenantId },
+      data: {
+        logoKey: key,
+        logoMime: mime === "image/jpg" ? "image/jpeg" : mime,
+        logoSizeBytes: stored.sizeBytes,
+        logoOriginalName: file.name || null,
+        logoUpdatedAt: updatedAt,
+        logoWidth: null,
+        logoHeight: null,
+      },
+      select: { id: true },
+    });
+
+    if (current?.logoKey && current.logoKey !== key) {
+      await deleteFileIfExists({ rootDirName: BRANDING_ROOT_DIR, relativeKey: current.logoKey });
+    }
+
+    return jsonOk(req, {
+      branding: {
+        hasLogo: true,
+        logoMime: mime,
+        logoSizeBytes: stored.sizeBytes,
+        logoUpdatedAt: updatedAt.toISOString(),
+      },
+    });
   } catch (e) {
-    if (e instanceof Response) return e;
-    return jsonError({ status: 500, code: "INTERNAL", message: "Internal error." });
+    if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
+    return jsonError(req, 500, "INTERNAL", "Unexpected error.");
   }
-
-  const form = await req.formData();
-  const file = form.get("file");
-
-  if (!(file instanceof File)) {
-    return jsonError({
-      status: 400,
-      code: "INVALID_BODY",
-      message: 'Missing "file" in multipart/form-data.',
-    });
-  }
-
-  const mime = file.type || "";
-  if (!ALLOWED_MIMES.has(mime)) {
-    return jsonError({
-      status: 400,
-      code: "INVALID_FILE_TYPE",
-      message: "Unsupported file type. Allowed: PNG, JPG, WebP.",
-      details: { mime },
-    });
-  }
-
-  if (file.size > MAX_LOGO_BYTES) {
-    return jsonError({
-      status: 413,
-      code: "BODY_TOO_LARGE",
-      message: `File too large. Max ${MAX_LOGO_BYTES} bytes.`,
-      details: { size: file.size },
-    });
-  }
-
-  const current = await prisma.tenant.findUnique({
-    where: { id: tenantId },
-    select: { logoKey: true },
-  });
-
-  const ext = extFromMime(mime);
-  const key = `tenants/${tenantId}/branding/logo-${crypto.randomUUID()}.${ext}`;
-
-  // NO image transformation!
-  const bytes = new Uint8Array(await file.arrayBuffer());
-
-  const stored = await putBinaryFile({
-    rootDirName: BRANDING_ROOT_DIR,
-    relativeKey: key,
-    data: bytes,
-  });
-
-  const updatedAt = new Date();
-
-  await prisma.tenant.update({
-    where: { id: tenantId },
-    data: {
-      logoKey: key,
-      logoMime: mime,
-      logoSizeBytes: stored.sizeBytes,
-      logoOriginalName: file.name || null,
-      logoUpdatedAt: updatedAt,
-      logoWidth: null,
-      logoHeight: null,
-    },
-    select: { id: true },
-  });
-
-  if (current?.logoKey && current.logoKey !== key) {
-    await deleteFileIfExists({ rootDirName: BRANDING_ROOT_DIR, relativeKey: current.logoKey });
-  }
-
-  return jsonOk({
-    branding: {
-      hasLogo: true,
-      logoMime: mime,
-      logoSizeBytes: stored.sizeBytes,
-      logoUpdatedAt: updatedAt.toISOString(),
-    },
-  });
 }
 
 export async function DELETE(req: Request): Promise<Response> {
-  let tenantId: string;
   try {
-    tenantId = await resolveTenantId(req);
+    const { tenantId } = await requireTenantContext(req);
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { logoKey: true },
+    });
+
+    if (tenant?.logoKey) {
+      await deleteFileIfExists({ rootDirName: BRANDING_ROOT_DIR, relativeKey: tenant.logoKey });
+    }
+
+    const updatedAt = new Date();
+
+    await prisma.tenant.update({
+      where: { id: tenantId },
+      data: {
+        logoKey: null,
+        logoMime: null,
+        logoSizeBytes: null,
+        logoOriginalName: null,
+        logoUpdatedAt: updatedAt,
+        logoWidth: null,
+        logoHeight: null,
+      },
+      select: { id: true },
+    });
+
+    return jsonOk(req, {
+      branding: { hasLogo: false, logoUpdatedAt: updatedAt.toISOString() },
+    });
   } catch (e) {
-    if (e instanceof Response) return e;
-    return jsonError({ status: 500, code: "INTERNAL", message: "Internal error." });
+    if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
+    return jsonError(req, 500, "INTERNAL", "Unexpected error.");
   }
-
-  const tenant = await prisma.tenant.findUnique({
-    where: { id: tenantId },
-    select: { logoKey: true },
-  });
-
-  if (tenant?.logoKey) {
-    await deleteFileIfExists({ rootDirName: BRANDING_ROOT_DIR, relativeKey: tenant.logoKey });
-  }
-
-  const updatedAt = new Date();
-
-  await prisma.tenant.update({
-    where: { id: tenantId },
-    data: {
-      logoKey: null,
-      logoMime: null,
-      logoSizeBytes: null,
-      logoOriginalName: null,
-      logoUpdatedAt: updatedAt,
-      logoWidth: null,
-      logoHeight: null,
-    },
-    select: { id: true },
-  });
-
-  return jsonOk({
-    branding: { hasLogo: false, logoUpdatedAt: updatedAt.toISOString() },
-  });
 }

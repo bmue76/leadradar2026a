@@ -1,106 +1,81 @@
 import { httpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
-import { getCurrentUserFromRequest } from "@/lib/auth";
+import { requireAdminAuth } from "@/lib/auth";
 
 export type TenantContext = {
   tenantId: string;
   tenantSlug: string;
 };
 
-function cleanHeader(v: string | null): string | null {
+function readHeader(req: Request, name: string): string {
+  return (req.headers.get(name) ?? "").trim();
+}
+
+async function resolveTenantIdFromSlugOrId(input: string): Promise<string | null> {
+  const v = input.trim();
   if (!v) return null;
-  const s = v.trim();
-  if (!s) return null;
-  if (s.toLowerCase() === "null") return null;
-  return s;
-}
 
-function readTenantIdHeader(req: Request): string | null {
-  return cleanHeader(req.headers.get("x-tenant-id"));
-}
+  // Try slug
+  const bySlug = await prisma.tenant.findUnique({
+    where: { slug: v },
+    select: { id: true },
+  });
+  if (bySlug) return bySlug.id;
 
-function readTenantSlugHeader(req: Request): string | null {
-  return cleanHeader(req.headers.get("x-tenant-slug"));
-}
+  // Fallback: some dev flows might pass an id in x-tenant-slug
+  const byId = await prisma.tenant.findUnique({
+    where: { id: v },
+    select: { id: true },
+  });
+  if (byId) return byId.id;
 
-async function readSessionTenantId(req: Request): Promise<string | null> {
-  // Only attempt session fallback if a cookie is present
-  const cookie = req.headers.get("cookie");
-  if (!cookie || !cookie.trim()) return null;
-
-  const current = await getCurrentUserFromRequest(req);
-  const tid = current?.user?.tenantId ?? null;
-  return typeof tid === "string" && tid.trim() ? tid : null;
+  return null;
 }
 
 /**
  * Admin tenant context resolver (MVP, hardened).
  *
- * Priority:
- * 1) x-tenant-id (strongest signal)
- * 2) x-tenant-slug
- * 3) Session user tenantId (cookie-backed)
+ * Source of truth:
+ * - Session tenantId from requireAdminAuth(req)
  *
- * Leak-safe:
- * - unknown tenant => 404 NOT_FOUND
- * - mismatch between header and session => 404 NOT_FOUND (no details)
- * - mismatch between x-tenant-id and x-tenant-slug => 404 NOT_FOUND (no details)
+ * Optional header claims:
+ * - x-tenant-id (strongest claim)
+ * - x-tenant-slug (resolved to tenantId)
+ *
+ * Leak-safe mismatch handling:
+ * - If header claim exists but does not match session tenantId => 404 NOT_FOUND (no details)
+ * - If header claim exists but cannot be resolved => 404 NOT_FOUND
  */
 export async function requireTenantContext(req: Request): Promise<TenantContext> {
-  const headerTenantId = readTenantIdHeader(req);
-  const headerTenantSlug = readTenantSlugHeader(req);
+  const auth = await requireAdminAuth(req);
+  const sessionTenantId = auth.tenantId;
 
-  // Session fallback is only relevant if a cookie exists
-  const sessionTenantId = await readSessionTenantId(req);
+  const headerTenantId = readHeader(req, "x-tenant-id");
+  const headerTenantSlug = readHeader(req, "x-tenant-slug");
 
-  let tenantById: { id: string; slug: string } | null = null;
-  let tenantBySlug: { id: string; slug: string } | null = null;
+  let claimTenantId: string | null = null;
 
   if (headerTenantId) {
-    tenantById = await prisma.tenant.findUnique({
-      where: { id: headerTenantId },
-      select: { id: true, slug: true },
-    });
-    if (!tenantById) throw httpError(404, "NOT_FOUND", "Not found.");
-  }
-
-  if (headerTenantSlug) {
-    tenantBySlug = await prisma.tenant.findUnique({
-      where: { slug: headerTenantSlug },
-      select: { id: true, slug: true },
-    });
-    if (!tenantBySlug) throw httpError(404, "NOT_FOUND", "Not found.");
-  }
-
-  // If both headers are present, they must resolve to the same tenant.
-  if (tenantById && tenantBySlug && tenantById.id !== tenantBySlug.id) {
-    throw httpError(404, "NOT_FOUND", "Not found.");
-  }
-
-  // Determine effective tenant
-  let effective: { id: string; slug: string } | null = null;
-  if (tenantById) effective = tenantById;
-  else if (tenantBySlug) effective = tenantBySlug;
-
-  // If no headers provided, fall back to session tenantId.
-  if (!effective) {
-    if (!sessionTenantId) {
-      throw httpError(401, "TENANT_REQUIRED", "Tenant context required.");
+    claimTenantId = headerTenantId;
+  } else if (headerTenantSlug) {
+    claimTenantId = await resolveTenantIdFromSlugOrId(headerTenantSlug);
+    if (!claimTenantId) {
+      // header claim provided but unknown => leak-safe 404
+      throw httpError(404, "NOT_FOUND", "Not found.");
     }
-
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: sessionTenantId },
-      select: { id: true, slug: true },
-    });
-
-    if (!tenant) throw httpError(404, "NOT_FOUND", "Not found.");
-    effective = tenant;
   }
 
-  // Leak-safe mismatch: if session exists and differs from effective => 404
-  if (sessionTenantId && effective.id !== sessionTenantId) {
+  if (claimTenantId && claimTenantId !== sessionTenantId) {
+    // leak-safe mismatch => 404
     throw httpError(404, "NOT_FOUND", "Not found.");
   }
 
-  return { tenantId: effective.id, tenantSlug: effective.slug };
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: sessionTenantId },
+    select: { id: true, slug: true },
+  });
+
+  if (!tenant) throw httpError(404, "NOT_FOUND", "Not found.");
+
+  return { tenantId: tenant.id, tenantSlug: tenant.slug };
 }

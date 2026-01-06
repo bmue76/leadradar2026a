@@ -146,6 +146,19 @@ export async function getCurrentUserFromRequest(req: Request) {
   return { user, tenant: user.tenant };
 }
 
+function normalizeRole(role: unknown): string {
+  return String(role ?? "")
+    .trim()
+    .toUpperCase()
+    .replaceAll("-", "_");
+}
+
+/**
+ * Admin Auth Guard (MVP)
+ * - requires valid session cookie
+ * - requires tenantId on user
+ * - role allowlist (MVP owner/admin)
+ */
 export async function requireAdminAuth(req: Request) {
   const current = await getCurrentUserFromRequest(req);
   if (!current) throw httpError(401, "UNAUTHORIZED", "Nicht eingeloggt.");
@@ -153,8 +166,17 @@ export async function requireAdminAuth(req: Request) {
   const { user } = current;
   if (!user.tenantId) throw httpError(403, "FORBIDDEN", "Kein Tenant zugeordnet.");
 
-  const role = String(user.role ?? "").toUpperCase();
-  if (!(role === "OWNER" || role === "ADMIN")) {
+  const role = normalizeRole(user.role);
+
+  // MVP: tolerate common owner/admin role names (seed + future naming)
+  const allowed = new Set([
+    "OWNER",
+    "ADMIN",
+    "TENANT_OWNER",
+    "TENANT_ADMIN",
+  ]);
+
+  if (!allowed.has(role)) {
     throw httpError(403, "FORBIDDEN", "Keine Berechtigung.");
   }
 

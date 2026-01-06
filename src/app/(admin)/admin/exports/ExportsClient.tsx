@@ -4,9 +4,72 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiErr, ApiOk, ExportJob, ExportJobStatus, FormListItem } from "./exports.types";
 import { formatDateTime, statusLabel } from "./exports.types";
 import { ExportCreateModal, type ExportCreateValues } from "./ExportCreateModal";
-import { adminFetchJson } from "../_lib/adminFetch";
 
 type UiError = { message: string; traceId?: string; code?: string };
+
+async function apiJson<T>(
+  url: string,
+  opts: {
+    method?: string;
+    body?: unknown;
+    signal?: AbortSignal;
+  } = {}
+): Promise<{ data: T; traceId: string }> {
+  const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json" };
+
+  const res = await fetch(url, {
+    method: opts.method ?? "GET",
+    headers,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+    signal: opts.signal,
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+
+  const traceId = res.headers.get("x-trace-id") || "";
+
+  let json: ApiOk<T> | ApiErr | null = null;
+  try {
+    json = (await res.json()) as ApiOk<T> | ApiErr;
+  } catch {
+    // ignore
+  }
+
+  if (!res.ok || !json || (json as ApiErr).ok === false) {
+    const err = json as ApiErr | null;
+    throw {
+      message: err?.error?.message || `Request failed (${res.status})`,
+      traceId: err?.traceId || traceId || undefined,
+      code: err?.error?.code,
+    } satisfies UiError;
+  }
+
+  return { data: (json as ApiOk<T>).data, traceId: (json as ApiOk<T>).traceId };
+}
+
+async function apiDownloadCsv(url: string): Promise<{ blob: Blob; filename: string }> {
+  const res = await fetch(url, { credentials: "same-origin", cache: "no-store" });
+  const contentDisposition = res.headers.get("content-disposition") || "";
+  const filenameMatch = /filename="([^"]+)"/.exec(contentDisposition);
+  const filename = filenameMatch?.[1] || "leadradar-export.csv";
+
+  if (!res.ok) {
+    let errJson: ApiErr | null = null;
+    try {
+      errJson = (await res.json()) as ApiErr;
+    } catch {
+      // ignore
+    }
+    throw {
+      message: errJson?.error?.message || `Download failed (${res.status})`,
+      traceId: errJson?.traceId || res.headers.get("x-trace-id") || undefined,
+      code: errJson?.error?.code,
+    } satisfies UiError;
+  }
+
+  const blob = await res.blob();
+  return { blob, filename };
+}
 
 function StatusBadge({ status }: { status: ExportJobStatus }) {
   const cls =
@@ -51,28 +114,6 @@ function ErrorBanner({ err, onDismiss }: { err: UiError; onDismiss: () => void }
   );
 }
 
-async function safeParseErr(res: Response): Promise<UiError | null> {
-  const traceId = res.headers.get("x-trace-id") || undefined;
-
-  try {
-    const json = (await res.json()) as ApiOk<unknown> | ApiErr;
-    if ((json as ApiErr)?.ok === false) {
-      return {
-        message: (json as ApiErr).error?.message || `Request failed (${res.status})`,
-        traceId: (json as ApiErr).traceId || traceId,
-        code: (json as ApiErr).error?.code,
-      };
-    }
-  } catch {
-    // ignore
-  }
-
-  return {
-    message: `Request failed (${res.status})`,
-    traceId,
-  };
-}
-
 export default function ExportsClient() {
   const [forms, setForms] = useState<FormListItem[]>([]);
   const [jobs, setJobs] = useState<ExportJob[]>([]);
@@ -90,14 +131,11 @@ export default function ExportsClient() {
 
     try {
       const [formsRes, jobsRes] = await Promise.all([
-        adminFetchJson<{ items: FormListItem[] }>("/api/admin/v1/forms?limit=200", { method: "GET" }),
-        adminFetchJson<{ items: ExportJob[] }>("/api/admin/v1/exports?type=CSV&limit=50", { method: "GET" }),
+        apiJson<{ forms: FormListItem[] }>("/api/admin/v1/forms"),
+        apiJson<{ items: ExportJob[] }>("/api/admin/v1/exports?type=CSV&limit=50"),
       ]);
 
-      if (!formsRes.ok) throw { message: formsRes.message, traceId: formsRes.traceId, code: formsRes.code } satisfies UiError;
-      if (!jobsRes.ok) throw { message: jobsRes.message, traceId: jobsRes.traceId, code: jobsRes.code } satisfies UiError;
-
-      setForms(formsRes.data.items || []);
+      setForms(formsRes.data.forms || []);
       setJobs(jobsRes.data.items || []);
     } catch (e) {
       setErr(e as UiError);
@@ -115,9 +153,7 @@ export default function ExportsClient() {
       if (!id) return;
 
       try {
-        const res = await adminFetchJson<{ job: ExportJob }>(`/api/admin/v1/exports/${id}`, { method: "GET" });
-        if (!res.ok) throw { message: res.message, traceId: res.traceId, code: res.code } satisfies UiError;
-
+        const res = await apiJson<{ job: ExportJob }>(`/api/admin/v1/exports/${id}`);
         const job = res.data.job;
 
         setJobs((prev) => {
@@ -153,76 +189,68 @@ export default function ExportsClient() {
   const jobRows = useMemo(() => jobs, [jobs]);
 
   return (
-    <div className="space-y-4">
+    <div className="p-6 max-w-6xl">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-zinc-900">Exports</h1>
-          <p className="text-sm text-zinc-600 mt-1">CSV exports with polling + download.</p>
+          <h1 className="text-xl font-semibold">Exports</h1>
+          <p className="text-sm text-neutral-500 mt-1">
+            CSV exports (jobs) with polling + download. Phase 1 uses dev storage stub{" "}
+            <span className="font-mono">.tmp_exports/</span>.
+          </p>
         </div>
 
         <div className="flex items-center gap-2">
           <button
-            className="rounded-xl px-4 py-2 text-sm border border-black/10 bg-white hover:bg-black/[0.02] focus:outline-none focus:ring-2 focus:ring-black/10"
+            className="rounded-xl px-4 py-2 text-sm bg-neutral-100 hover:bg-neutral-200"
             onClick={() => void loadAll()}
             disabled={loading}
           >
             Refresh
           </button>
           <button
-            className="rounded-xl px-4 py-2 text-sm bg-zinc-900 text-white hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-black/10 disabled:bg-black/40"
+            className="rounded-xl px-4 py-2 text-sm bg-black text-white hover:bg-black/90 disabled:bg-black/40"
             onClick={() => setModalOpen(true)}
             disabled={loading}
           >
-            Create CSV export
+            Create CSV Export
           </button>
         </div>
       </div>
 
       {err ? (
-        <div>
+        <div className="mt-4">
           <ErrorBanner err={err} onDismiss={() => setErr(null)} />
         </div>
       ) : null}
 
-      <div className="rounded-2xl border border-black/10 bg-white overflow-hidden">
-        <div className="px-4 py-3 flex items-center justify-between">
-          <div className="text-sm font-semibold text-zinc-900">Jobs</div>
-          <div className="text-xs text-zinc-500">{loading ? "Loading…" : `${jobRows.length} job(s)`}</div>
+      <div className="mt-6 rounded-2xl border border-neutral-200 bg-white overflow-hidden">
+        <div className="px-4 py-3 border-b border-neutral-200 flex items-center justify-between">
+          <div className="text-sm font-semibold">Jobs</div>
+          <div className="text-xs text-neutral-500">{loading ? "Loading..." : `${jobRows.length} job(s)`}</div>
         </div>
 
         {loading ? (
-          <div className="px-4 pb-4 text-sm text-zinc-500">Loading exports…</div>
+          <div className="p-6 text-sm text-neutral-500">Loading exports…</div>
         ) : jobRows.length === 0 ? (
-          <div className="px-6 py-8 text-center">
-            <div className="text-sm font-semibold text-zinc-900">No exports</div>
-            <div className="mt-1 text-sm text-zinc-600">Create an export to download leads as CSV.</div>
-            <div className="mt-3">
-              <button
-                className="rounded-xl px-4 py-2 text-sm bg-zinc-900 text-white hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-black/10"
-                onClick={() => setModalOpen(true)}
-              >
-                Create CSV export
-              </button>
-            </div>
-          </div>
+          <div className="p-6 text-sm text-neutral-500">No exports yet. Create one to get started.</div>
         ) : (
           <div className="w-full overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead className="text-left text-xs text-black/45">
-                <tr>
-                  <th className="px-4 py-2 font-medium">Job</th>
-                  <th className="px-4 py-2 font-medium">Status</th>
-                  <th className="px-4 py-2 font-medium">Queued</th>
-                  <th className="px-4 py-2 font-medium">Finished</th>
-                  <th className="px-4 py-2 font-medium text-right"> </th>
+              <thead className="bg-neutral-50">
+                <tr className="text-left">
+                  <th className="px-4 py-3 font-medium">Job</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Queued</th>
+                  <th className="px-4 py-3 font-medium">Finished</th>
+                  <th className="px-4 py-3 font-medium text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {jobRows.map((j) => (
-                  <tr key={j.id} className="group hover:bg-black/[0.02]">
+                  <tr key={j.id} className="border-t border-neutral-100">
                     <td className="px-4 py-3">
-                      <div className="font-mono text-xs text-zinc-800">{j.id}</div>
-                      <div className="text-xs text-zinc-500 mt-1">type: {j.type}</div>
+                      <div className="font-mono text-xs">{j.id}</div>
+                      <div className="text-xs text-neutral-500 mt-1">type: {j.type}</div>
                     </td>
                     <td className="px-4 py-3">
                       <StatusBadge status={j.status as ExportJobStatus} />
@@ -230,38 +258,22 @@ export default function ExportsClient() {
                     <td className="px-4 py-3">{formatDateTime(j.queuedAt)}</td>
                     <td className="px-4 py-3">{formatDateTime(j.finishedAt)}</td>
                     <td className="px-4 py-3 text-right">
-                      <div className="inline-flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                      <div className="inline-flex items-center gap-2">
                         <button
-                          className="rounded-xl px-3 py-2 text-xs border border-black/10 bg-white hover:bg-black/[0.02] focus:outline-none focus:ring-2 focus:ring-black/10"
+                          className="rounded-xl px-3 py-2 text-sm bg-neutral-100 hover:bg-neutral-200"
                           onClick={() => startPolling(j.id)}
                           disabled={j.status === "DONE" || j.status === "FAILED"}
                           title="Poll status now"
                         >
                           Poll
                         </button>
-
                         <button
-                          className="rounded-xl px-3 py-2 text-xs bg-zinc-900 text-white hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-black/10 disabled:opacity-40"
+                          className="rounded-xl px-3 py-2 text-sm bg-black text-white hover:bg-black/90 disabled:bg-black/40"
                           disabled={j.status !== "DONE"}
                           onClick={async () => {
                             setErr(null);
                             try {
-                              const res = await fetch(`/api/admin/v1/exports/${j.id}/download`, {
-                                method: "GET",
-                                credentials: "same-origin",
-                                cache: "no-store",
-                              });
-
-                              if (!res.ok) {
-                                const e = await safeParseErr(res);
-                                throw e ?? ({ message: `Download failed (${res.status})` } satisfies UiError);
-                              }
-
-                              const contentDisposition = res.headers.get("content-disposition") || "";
-                              const filenameMatch = /filename="([^"]+)"/.exec(contentDisposition);
-                              const filename = filenameMatch?.[1] || "leadradar-export.csv";
-
-                              const blob = await res.blob();
+                              const { blob, filename } = await apiDownloadCsv(`/api/admin/v1/exports/${j.id}/download`);
                               const url = window.URL.createObjectURL(blob);
                               const a = document.createElement("a");
                               a.href = url;
@@ -297,21 +309,17 @@ export default function ExportsClient() {
           onSubmit={async (values: ExportCreateValues) => {
             setBusyCreate(true);
             setErr(null);
-
             try {
-              const res = await adminFetchJson<{ job: ExportJob }>("/api/admin/v1/exports/csv", {
+              const res = await apiJson<{ job: ExportJob }>("/api/admin/v1/exports/csv", {
                 method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({
+                body: {
                   formId: values.formId,
                   includeDeleted: values.includeDeleted,
                   from: values.from,
                   to: values.to,
                   limit: 10000,
-                }),
+                },
               });
-
-              if (!res.ok) throw { message: res.message, traceId: res.traceId, code: res.code } satisfies UiError;
 
               setModalOpen(false);
 

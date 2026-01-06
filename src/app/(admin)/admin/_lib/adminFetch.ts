@@ -19,79 +19,18 @@ export type ApiErrShape = {
   traceId: string;
 };
 
-export type AdminApiResult<T> =
-  | { ok: true; data: T; traceId: string; status: number }
-  | { ok: false; code: string; message: string; traceId?: string; status?: number };
-
-function getEnv(name: string): string {
-  const v = process.env[name];
-  return (v ?? "").trim();
-}
-
-export function getDefaultTenantSlug(): string {
-  return getEnv("NEXT_PUBLIC_DEFAULT_TENANT_SLUG");
-}
-
-export function sanitizeTenantSlug(input: string): string {
+function sanitizeTenantSlug(input: string): string {
   return input.trim().toLowerCase();
 }
 
-/**
- * DEV ONLY: Returns the stored tenant slug override.
- * Note: This does NOT get applied by default anymore (session is source of truth).
- */
-export function getTenantSlugClient(): string {
-  if (typeof window === "undefined") return getDefaultTenantSlug();
-  try {
-    const stored = window.localStorage.getItem(TENANT_SLUG_STORAGE_KEY);
-    if (stored && stored.trim()) return sanitizeTenantSlug(stored);
-  } catch {
-    // ignore
-  }
-  return getDefaultTenantSlug();
-}
-
-export function setTenantSlugClient(slug: string) {
-  if (typeof window === "undefined") return;
-  try {
-    const s = sanitizeTenantSlug(slug);
-    if (!s) window.localStorage.removeItem(TENANT_SLUG_STORAGE_KEY);
-    else window.localStorage.setItem(TENANT_SLUG_STORAGE_KEY, s);
-  } catch {
-    // ignore
-  }
-}
-
-export function getDevUserIdClient(): string {
-  if (typeof window === "undefined") return getEnv("NEXT_PUBLIC_DEV_USER_ID");
-  try {
-    const stored = window.localStorage.getItem(DEV_USER_ID_STORAGE_KEY);
-    if (stored && stored.trim()) return stored.trim();
-  } catch {
-    // ignore
-  }
-  return getEnv("NEXT_PUBLIC_DEV_USER_ID");
-}
-
-export function setDevUserIdClient(userId: string) {
-  if (typeof window === "undefined") return;
-  try {
-    const v = userId.trim();
-    if (!v) window.localStorage.removeItem(DEV_USER_ID_STORAGE_KEY);
-    else window.localStorage.setItem(DEV_USER_ID_STORAGE_KEY, v);
-  } catch {
-    // ignore
-  }
-}
-
-function pickTraceId(res: Response, parsed: unknown): string | undefined {
-  const h = res.headers.get("x-trace-id") || undefined;
-  if (h) return h;
+function pickTraceId(res: Response, parsed: unknown): string {
+  const h = res.headers.get("x-trace-id");
+  if (h && h.trim()) return h.trim();
   if (parsed && typeof parsed === "object" && parsed !== null && "traceId" in parsed) {
     const t = (parsed as { traceId?: unknown }).traceId;
-    return typeof t === "string" ? t : undefined;
+    if (typeof t === "string" && t.trim()) return t.trim();
   }
-  return undefined;
+  return "";
 }
 
 async function safeParseJson(text: string): Promise<unknown | undefined> {
@@ -104,36 +43,28 @@ async function safeParseJson(text: string): Promise<unknown | undefined> {
   }
 }
 
-function shouldApplyDevTenantOverride(): boolean {
-  // Explicit opt-in only. Never in production.
-  if (process.env.NODE_ENV === "production") return false;
-
-  // Option A: env toggle
-  const env = getEnv("NEXT_PUBLIC_ALLOW_TENANT_OVERRIDE");
-  if (env !== "1" && env.toLowerCase() !== "true") return false;
-
-  // Option B: must actually have a stored slug
-  const slug = getTenantSlugClient();
-  return Boolean(slug && slug.trim());
-}
-
+/**
+ * Admin fetch helper (hardened).
+ *
+ * Default behaviour:
+ * - NO tenant header required (session is source of truth)
+ *
+ * Optional DEV override:
+ * - pass init.tenantSlug explicitly to send x-tenant-slug
+ *
+ * Response:
+ * - always returns { ok:true,data,traceId } or { ok:false,error:{code,message,details?},traceId }
+ */
 export async function adminFetchJson<T>(
   path: string,
   init?: RequestInit & { tenantSlug?: string }
-): Promise<AdminApiResult<T>> {
+): Promise<ApiOkShape<T> | ApiErrShape> {
   const headers = new Headers(init?.headers || {});
   headers.set("accept", "application/json");
 
-  // Tenant headers:
-  // - Default: NONE (session/auth is the source of truth)
-  // - Explicit override via init.tenantSlug
-  // - Optional DEV override (explicitly enabled)
-  const explicitTenantSlug = init?.tenantSlug ? sanitizeTenantSlug(init.tenantSlug).trim() : "";
+  const explicitTenantSlug = typeof init?.tenantSlug === "string" ? sanitizeTenantSlug(init.tenantSlug) : "";
   if (explicitTenantSlug) {
     headers.set("x-tenant-slug", explicitTenantSlug);
-  } else if (shouldApplyDevTenantOverride()) {
-    const devSlug = getTenantSlugClient().trim();
-    if (devSlug) headers.set("x-tenant-slug", devSlug);
   }
 
   let res: Response;
@@ -142,12 +73,13 @@ export async function adminFetchJson<T>(
       ...init,
       headers,
       cache: "no-store",
+      credentials: "same-origin",
     });
   } catch {
     return {
       ok: false,
-      code: "NETWORK_ERROR",
-      message: "Netzwerkfehler. Läuft der Server (npm run dev)?",
+      error: { code: "NETWORK_ERROR", message: "Netzwerkfehler. Läuft der Server (npm run dev)?" },
+      traceId: "",
     };
   }
 
@@ -155,43 +87,41 @@ export async function adminFetchJson<T>(
   const parsed = await safeParseJson(text);
   const traceId = pickTraceId(res, parsed);
 
-  // Preferred: Standard API response shape
+  // Standard API response shape
   if (parsed && typeof parsed === "object" && parsed !== null && "ok" in parsed) {
     const okVal = (parsed as { ok?: unknown }).ok;
     if (okVal === true) {
       const data = (parsed as ApiOkShape<T>).data;
       const t = (parsed as ApiOkShape<T>).traceId;
-      return { ok: true, data, traceId: t || traceId || "", status: res.status };
+      return { ok: true, data, traceId: (t && t.trim()) ? t : traceId };
     }
     if (okVal === false) {
       const err = (parsed as ApiErrShape).error;
       const t = (parsed as ApiErrShape).traceId;
       return {
         ok: false,
-        code: err?.code ?? "API_ERROR",
-        message: err?.message ?? "Request failed.",
-        traceId: t || traceId,
-        status: res.status,
+        error: {
+          code: err?.code ?? "API_ERROR",
+          message: err?.message ?? "Request failed.",
+          details: err?.details,
+        },
+        traceId: (t && t.trim()) ? t : traceId,
       };
     }
   }
 
-  // Fallback (non-standard response)
+  // Non-standard response fallback
   if (!res.ok) {
     return {
       ok: false,
-      code: "HTTP_ERROR",
-      message: `Request failed (${res.status}).`,
+      error: { code: "HTTP_ERROR", message: `Request failed (${res.status}).` },
       traceId,
-      status: res.status,
     };
   }
 
   return {
     ok: false,
-    code: "BAD_RESPONSE",
-    message: "Antwort war nicht im erwarteten JSON-Format (ok:true/false).",
+    error: { code: "BAD_RESPONSE", message: "Antwort war nicht im erwarteten JSON-Format (ok:true/false)." },
     traceId,
-    status: res.status,
   };
 }

@@ -45,26 +45,17 @@ export default function BrandingClient() {
 
   const refreshLogo = React.useCallback(async () => {
     try {
-      // IMPORTANT:
-      // - Do NOT use HEAD (causes auth turbulence via proxy/middleware in some flows).
-      // - Use GET and only inspect status.
-      const res = await fetch("/api/admin/v1/tenants/current/logo?v=0", {
-        method: "GET",
-        credentials: "same-origin",
+      const head = await fetch("/api/admin/v1/tenants/current/logo?v=0", {
+        method: "HEAD",
         cache: "no-store",
+        credentials: "same-origin",
       });
 
-      if (res.status === 404) {
-        setLogoUrl(null);
-        return;
-      }
-
-      if (res.ok) {
+      if (head.ok) {
         setLogoUrl(`/api/admin/v1/tenants/current/logo?v=${encodeURIComponent(new Date().toISOString())}`);
-        return;
+      } else {
+        setLogoUrl(null);
       }
-
-      setLogoUrl(null);
     } catch {
       setLogoUrl(null);
     }
