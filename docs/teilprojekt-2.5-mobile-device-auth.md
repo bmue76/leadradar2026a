@@ -2,7 +2,7 @@
 
 Datum: 2026-01-06  
 Status: DONE ✅  
-Commit(s): TBD
+Commit(s): 6ed6056, 89108fd
 
 ## Ziel
 
@@ -23,7 +23,7 @@ Mobile API v1 produktionsnah absichern:
 - Assignments tenant-scoped via composite key (tenantId, deviceId, formId)
 
 ### Mobile API v1 (protected)
-- Alle /api/mobile/v1/* Endpoints require `x-api-key`
+- Alle /api/mobile/v1/* Endpoints require `x-api-key` (inkl. /health)
 - GET /forms liefert nur assigned + ACTIVE
 - GET /forms/:id und POST /leads prüfen assignment leak-safe (404)
 - Rate limit best-effort in-memory (60 req/min pro ApiKey) → 429 RATE_LIMITED
@@ -39,6 +39,7 @@ Mobile API v1 produktionsnah absichern:
 ## Dateien/Änderungen
 
 - prisma/schema.prisma
+- prisma/migrations/*_mobile_device_auth/
 - prisma/seed.ts
 - .env.example
 - src/lib/mobileAuth.ts
@@ -51,6 +52,7 @@ Mobile API v1 produktionsnah absichern:
 - src/app/api/admin/v1/mobile/keys/[id]/revoke/route.ts
 - src/app/api/admin/v1/mobile/devices/route.ts
 - src/app/api/admin/v1/mobile/devices/[id]/forms/route.ts
+- src/app/api/admin/v1/forms/route.ts
 - src/app/(admin)/admin/settings/devices/page.tsx
 - src/app/(admin)/admin/settings/devices/DevicesClient.tsx
 - docs/teilprojekt-2.5-mobile-device-auth.md
@@ -72,6 +74,10 @@ Quality Gates:
 - npm run lint (warnings ok)
 - npm run build (grün)
 
+Seed (DEV, local only):
+- `MOBILE_API_KEY_SECRET` in `.env.local` gesetzt
+- `npx prisma db seed` erzeugt demo + atlex ApiKey und loggt `x-api-key: <TOKEN>` einmalig in der Konsole
+
 curl:
 - missing key => 401
 - valid key => 200 forms (assigned only)
@@ -79,6 +85,7 @@ curl:
 - lead submit => 200 + leadId
 - idempotent => deduped:true
 - rate limit => 429 (best-effort loop)
+- health endpoint protected => 401 ohne key / 200 mit key
 
 ## Offene Punkte/Risiken
 
@@ -89,4 +96,4 @@ P1:
 
 - docs/LeadRadar2026A/03_API.md ergänzen (Mobile Auth + Admin Endpoints)
 - docs/LeadRadar2026A/04_RUNBOOK.md ergänzen (MOBILE_API_KEY_SECRET + Rotation/Limitations)
-- Commit(s) finalisieren + Hash im Rapport eintragen
+- Optional: docs/LeadRadar2026A/05_RELEASE_TESTS.md Smoke Cases für Mobile Auth/Rate limit
