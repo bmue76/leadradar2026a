@@ -44,3 +44,8 @@ out/
 
 # Logs
 *.log
+
+# Dev-only local storage (branding/uploads/exports)
+.tmp_branding/
+.tmp_exports/
+

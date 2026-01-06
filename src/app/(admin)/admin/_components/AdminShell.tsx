@@ -87,7 +87,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
           <div className={styles.topbar}>
             <Topbar
               title={title}
-              leftSlot={hydrated ? <TenantLogo variant="topbar" tenantSlug={tenant?.slug ?? null} /> : null}
+              rightSlot={hydrated ? <TenantLogo variant="topbar" tenantSlug={tenant?.slug ?? null} /> : null}
             />
           </div>
 

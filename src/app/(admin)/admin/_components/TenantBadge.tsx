@@ -15,6 +15,25 @@ type State =
   | { kind: "error"; message: string; traceId?: string }
   | { kind: "ok"; tenant: TenantCurrent; traceId?: string };
 
+function pickErrMessage(res: unknown): string {
+  if (!res || typeof res !== "object") return "Tenant konnte nicht geladen werden.";
+
+  // adminFetchJson AdminApiResult<T>: { ok:false, message }
+  if ("message" in res && typeof (res as any).message === "string") return (res as any).message;
+
+  // Standard API shape: { ok:false, error:{ message } }
+  const err = (res as any).error;
+  if (err && typeof err === "object" && typeof err.message === "string") return err.message;
+
+  return "Tenant konnte nicht geladen werden.";
+}
+
+function pickTraceId(res: unknown): string | undefined {
+  if (!res || typeof res !== "object") return undefined;
+  const t = (res as any).traceId;
+  return typeof t === "string" ? t : undefined;
+}
+
 export default function TenantBadge({
   tenantSlug,
   refreshToken,
@@ -28,23 +47,42 @@ export default function TenantBadge({
     state.kind === "ok"
       ? `${state.tenant.name} (${state.tenant.slug})`
       : state.kind === "loading"
-      ? "Loading tenant…"
-      : "Tenant error";
+        ? "Loading tenant…"
+        : "Tenant error";
 
   const load = React.useCallback(async () => {
     setState({ kind: "loading" });
 
-    const res = await adminFetchJson<TenantCurrent>("/api/admin/v1/tenants/current", {
-      method: "GET",
-      tenantSlug,
-    });
+    const slug = (tenantSlug ?? "").trim();
+
+    const res = await adminFetchJson<{ tenant: TenantCurrent }>(
+      "/api/admin/v1/tenants/current",
+      {
+        method: "GET",
+        ...(slug ? { tenantSlug: slug } : {}),
+      }
+    );
 
     if (!res.ok) {
-      setState({ kind: "error", message: res.error.message, traceId: res.traceId });
+      setState({
+        kind: "error",
+        message: pickErrMessage(res),
+        traceId: pickTraceId(res),
+      });
       return;
     }
 
-    setState({ kind: "ok", tenant: res.data, traceId: res.traceId });
+    const tenant = res.data?.tenant;
+    if (!tenant || !tenant.id || !tenant.slug) {
+      setState({
+        kind: "error",
+        message: "Ungültige Antwort vom Server (tenant missing).",
+        traceId: res.traceId,
+      });
+      return;
+    }
+
+    setState({ kind: "ok", tenant, traceId: res.traceId });
   }, [tenantSlug]);
 
   React.useEffect(() => {
