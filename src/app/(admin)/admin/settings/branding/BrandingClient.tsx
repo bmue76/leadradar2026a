@@ -1,206 +1,198 @@
 "use client";
 
 import * as React from "react";
-import { TenantLogo } from "../../_components/TenantLogo";
-import styles from "./branding.module.css";
 
-const LS_KEY = "lr_branding_logo_version_v1";
+type UiState =
+  | { kind: "idle"; message?: string }
+  | { kind: "loading"; message?: string }
+  | { kind: "success"; message: string }
+  | { kind: "error"; message: string };
 
-const MAX_BYTES = 2 * 1024 * 1024;
-const ALLOWED = new Set(["image/png", "image/jpeg", "image/webp"]);
+const MAX_BYTES = 2 * 1024 * 1024; // 2 MB
+const ALLOWED_MIMES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/svg+xml",
+]);
 
-function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const kb = n / 1024;
-  if (kb < 1024) return `${kb.toFixed(0)} KB`;
-  const mb = kb / 1024;
-  return `${mb.toFixed(1)} MB`;
+function humanBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "-";
+  const units = ["B", "KB", "MB", "GB"];
+  let v = bytes;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-function readTenantRef(): string | null {
-  const v = (document.documentElement.dataset.lrTenantSlug ?? "").trim();
-  return v || null;
-}
-
-async function safeJson(res: Response): Promise<any | null> {
-  const ct = (res.headers.get("content-type") ?? "").toLowerCase();
-  if (!ct.includes("application/json")) return null;
+async function safeReadJson(res: Response): Promise<unknown> {
+  const ct = res.headers.get("content-type") || "";
+  if (!ct.includes("application/json")) return undefined;
   try {
     return await res.json();
   } catch {
-    return null;
+    return undefined;
   }
 }
 
-export function BrandingClient() {
-  const inputRef = React.useRef<HTMLInputElement | null>(null);
-  const [busy, setBusy] = React.useState(false);
-  const [msg, setMsg] = React.useState<string | null>(null);
-  const [tenantRef, setTenantRef] = React.useState<string | null>(null);
+export default function BrandingClient() {
+  const [state, setState] = React.useState<UiState>({ kind: "idle" });
+  const [logoUrl, setLogoUrl] = React.useState<string | null>(null);
+  const fileRef = React.useRef<HTMLInputElement | null>(null);
 
-  React.useEffect(() => {
-    const update = () => setTenantRef(readTenantRef());
-    update();
+  const refreshLogo = React.useCallback(async () => {
+    try {
+      const head = await fetch("/api/admin/v1/tenants/current/logo?v=0", {
+        method: "HEAD",
+        cache: "no-store",
+      });
 
-    const obs = new MutationObserver(update);
-    obs.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["data-lr-tenant-slug"],
-    });
-
-    return () => obs.disconnect();
+      if (head.ok) {
+        setLogoUrl(`/api/admin/v1/tenants/current/logo?v=${encodeURIComponent(new Date().toISOString())}`);
+      } else {
+        setLogoUrl(null);
+      }
+    } catch {
+      setLogoUrl(null);
+    }
   }, []);
 
-  const notifyLogoChanged = (logoUpdatedAtIso: string) => {
-    window.localStorage.setItem(LS_KEY, logoUpdatedAtIso);
-    window.dispatchEvent(new Event("lr:branding"));
-  };
+  React.useEffect(() => {
+    void refreshLogo();
+  }, [refreshLogo]);
 
-  const onPick = () => {
-    setMsg(null);
-    inputRef.current?.click();
-  };
-
-  const onFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    e.target.value = "";
     if (!file) return;
 
-    if (!ALLOWED.has(file.type)) {
-      setMsg("Ungültiger Dateityp. Erlaubt: PNG, JPG, WebP.");
+    if (!ALLOWED_MIMES.has(file.type)) {
+      setState({
+        kind: "error",
+        message: "Ungültiger Dateityp. Erlaubt: PNG, JPG, SVG.",
+      });
+      if (fileRef.current) fileRef.current.value = "";
       return;
     }
+
     if (file.size > MAX_BYTES) {
-      setMsg(`Datei zu gross (${fmtBytes(file.size)}). Maximal ${fmtBytes(MAX_BYTES)}.`);
-      return;
-    }
-
-    const ref = readTenantRef();
-    if (!ref) {
-      setMsg("TenantRef fehlt (data-lr-tenant-slug). Bitte Seite neu laden.");
-      return;
-    }
-
-    setBusy(true);
-    setMsg(null);
-
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-
-      const res = await fetch("/api/admin/v1/tenants/current/logo", {
-        method: "POST",
-        headers: { "x-tenant-slug": ref },
-        body: fd,
-        credentials: "same-origin",
+      setState({
+        kind: "error",
+        message: `Datei zu gross. Maximal ${humanBytes(MAX_BYTES)}.`,
       });
-
-      const j = await safeJson(res);
-
-      if (!res.ok) {
-        const m = j?.error?.message ?? `Upload fehlgeschlagen (HTTP ${res.status}).`;
-        setMsg(`${m} (tenantRef: ${ref})`);
-        return;
-      }
-
-      const updatedAt = j?.data?.branding?.logoUpdatedAt ?? new Date().toISOString();
-      notifyLogoChanged(updatedAt);
-      setMsg("Logo hochgeladen.");
-    } catch {
-      setMsg("Upload fehlgeschlagen (Netzwerk/Server).");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onRemove = async () => {
-    const ref = readTenantRef();
-    if (!ref) {
-      setMsg("TenantRef fehlt (data-lr-tenant-slug). Bitte Seite neu laden.");
+      if (fileRef.current) fileRef.current.value = "";
       return;
     }
 
-    setBusy(true);
-    setMsg(null);
+    setState({ kind: "loading", message: "Upload läuft…" });
 
-    try {
-      const res = await fetch("/api/admin/v1/tenants/current/logo", {
-        method: "DELETE",
-        headers: { "x-tenant-slug": ref },
-        credentials: "same-origin",
+    const fd = new FormData();
+    fd.append("file", file);
+
+    const res = await fetch("/api/admin/v1/tenants/current/logo", {
+      method: "POST",
+      body: fd,
+    });
+
+    const payload = await safeReadJson(res);
+
+    if (!res.ok) {
+      setState({
+        kind: "error",
+        message:
+          typeof payload === "object" && payload !== null
+            ? "Upload fehlgeschlagen."
+            : "Upload fehlgeschlagen.",
       });
-
-      const j = await safeJson(res);
-
-      if (!res.ok) {
-        const m = j?.error?.message ?? `Entfernen fehlgeschlagen (HTTP ${res.status}).`;
-        setMsg(`${m} (tenantRef: ${ref})`);
-        return;
-      }
-
-      const updatedAt = j?.data?.branding?.logoUpdatedAt ?? new Date().toISOString();
-      notifyLogoChanged(updatedAt);
-      setMsg("Logo entfernt.");
-    } catch {
-      setMsg("Entfernen fehlgeschlagen (Netzwerk/Server).");
-    } finally {
-      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+      return;
     }
-  };
+
+    setState({ kind: "success", message: "Logo gespeichert." });
+    if (fileRef.current) fileRef.current.value = "";
+    await refreshLogo();
+  }
+
+  async function onRemove() {
+    setState({ kind: "loading", message: "Logo wird entfernt…" });
+
+    const res = await fetch("/api/admin/v1/tenants/current/logo", {
+      method: "DELETE",
+    });
+
+    if (!res.ok) {
+      setState({ kind: "error", message: "Entfernen fehlgeschlagen." });
+      return;
+    }
+
+    setState({ kind: "success", message: "Logo entfernt." });
+    await refreshLogo();
+  }
 
   return (
-    <div className={styles.wrap}>
-      <div className={styles.header}>
-        <h1 className={styles.h1}>Branding</h1>
-        <p className={styles.p}>
-          Das Logo wird <strong>nicht</strong> verändert. Keine Optimierung, kein Cropping,
-          kein Stretching — nur Anzeige mit <code>max-height</code>, <code>width:auto</code>,
-          <code>object-fit:contain</code>.
-        </p>
-        <p className={styles.pTiny}>
-          TenantRef: <code>{tenantRef ?? "—"}</code>
-        </p>
-      </div>
+    <div className="lr-panel">
+      <h2 className="lr-h2">Tenant Logo</h2>
+      <p className="lr-muted">
+        Erlaubt: PNG/JPG/SVG, max. {humanBytes(MAX_BYTES)}. Rendering ohne Cropping/Stretching
+        (contain).
+      </p>
 
-      <div className={styles.row}>
-        <div className={styles.preview}>
-          <div className={styles.label}>Vorschau</div>
-          <TenantLogo variant="settings" />
-          <div className={styles.hint}>
-            Erlaubt: PNG/JPG/WebP · Max {fmtBytes(MAX_BYTES)}
-          </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 16, marginTop: 14 }}>
+        <div
+          style={{
+            width: 220,
+            height: 64,
+            borderRadius: 12,
+            border: "1px solid rgba(0,0,0,0.08)",
+            background: "rgba(0,0,0,0.02)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            overflow: "hidden",
+          }}
+        >
+          {logoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={logoUrl}
+              alt="Tenant Logo"
+              style={{ maxHeight: 44, width: "auto", objectFit: "contain" }}
+            />
+          ) : (
+            <span className="lr-muted">Kein Logo</span>
+          )}
         </div>
 
-        <div className={styles.actions}>
-          <div className={styles.label}>Aktionen</div>
-
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <input
-            ref={inputRef}
+            ref={fileRef}
             type="file"
-            accept="image/png,image/jpeg,image/webp"
-            className={styles.file}
-            onChange={onFileChange}
+            accept=".png,.jpg,.jpeg,.svg,image/png,image/jpeg,image/svg+xml"
+            onChange={onUpload}
           />
 
-          <button
-            type="button"
-            className={styles.btnPrimary}
-            onClick={onPick}
-            disabled={busy}
-          >
-            Logo hochladen
-          </button>
+          <div className="lr-actions" style={{ gap: 10 }}>
+            <button
+              className="lr-btn"
+              type="button"
+              onClick={onRemove}
+              disabled={!logoUrl || state.kind === "loading"}
+            >
+              Entfernen
+            </button>
+          </div>
 
-          <button
-            type="button"
-            className={styles.btnGhost}
-            onClick={onRemove}
-            disabled={busy}
-          >
-            Entfernen
-          </button>
-
-          {msg ? <div className={styles.msg}>{msg}</div> : null}
+          {state.kind === "loading" ? (
+            <div className="lr-muted">{state.message || "Bitte warten…"}</div>
+          ) : null}
+          {state.kind === "success" ? (
+            <div style={{ color: "rgba(0,0,0,0.75)" }}>{state.message}</div>
+          ) : null}
+          {state.kind === "error" ? (
+            <div style={{ color: "rgba(180,0,0,0.85)" }}>{state.message}</div>
+          ) : null}
         </div>
       </div>
     </div>

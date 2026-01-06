@@ -1,4 +1,4 @@
-import { BrandingClient } from "./BrandingClient";
+import BrandingClient from "./BrandingClient";
 
 export default function BrandingPage() {
   return <BrandingClient />;
