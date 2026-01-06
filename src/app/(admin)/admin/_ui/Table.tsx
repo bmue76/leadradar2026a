@@ -39,9 +39,9 @@ export function TableHeadRow(props: { children: React.ReactNode }) {
   return <tr className={styles.theadRow}>{props.children}</tr>;
 }
 
-export function TableHeadCell(props: { align?: "left" | "right"; children: React.ReactNode }) {
+export function TableHeadCell(props: { align?: "left" | "right"; children?: React.ReactNode }) {
   const { align = "left", children } = props;
-  return <th className={cx(align === "right" && styles.alignRight)}>{children}</th>;
+  return <th className={cx(align === "right" && styles.alignRight)}>{children ?? null}</th>;
 }
 
 export function TableBody(props: { children: React.ReactNode }) {
