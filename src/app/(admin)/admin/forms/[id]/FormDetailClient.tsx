@@ -32,7 +32,6 @@ function isRecord(v: unknown): v is UnknownRecord {
 }
 
 function getErrMessage(res: unknown): { message: string; code?: string; traceId?: string } {
-  // Expected: { ok:false, error:{code,message}, traceId }
   if (isRecord(res)) {
     const traceId = typeof res.traceId === "string" ? res.traceId : undefined;
 
@@ -42,7 +41,6 @@ function getErrMessage(res: unknown): { message: string; code?: string; traceId?
       return { message: msg, code, traceId };
     }
 
-    // fallback: maybe error nested differently
     const msg2 =
       typeof res.message === "string"
         ? res.message
@@ -152,8 +150,6 @@ export default function FormDetailClient({ formId }: { formId: string }) {
 
   useEffect(() => {
     mountedRef.current = true;
-
-    // Avoid react-hooks/set-state-in-effect lint by scheduling the fetch.
     const t = window.setTimeout(() => {
       void fetchForm();
     }, 0);
@@ -416,20 +412,29 @@ export default function FormDetailClient({ formId }: { formId: string }) {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
-                <div className="text-sm text-gray-500">Status</div>
-                <select
-                  value={headerStatus}
-                  onChange={(e) => void setStatus(e.target.value as FormStatus)}
-                  disabled={statusBusy}
-                  className="rounded-lg border bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 disabled:opacity-50"
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  href={`/admin/forms/${form.id}/builder`}
+                  className="rounded-lg bg-black px-4 py-2 text-sm text-white hover:bg-black/90"
                 >
-                  {statuses.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
+                  Open builder
+                </Link>
+
+                <div className="flex items-center gap-2">
+                  <div className="text-sm text-gray-500">Status</div>
+                  <select
+                    value={headerStatus}
+                    onChange={(e) => void setStatus(e.target.value as FormStatus)}
+                    disabled={statusBusy}
+                    className="rounded-lg border bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 disabled:opacity-50"
+                  >
+                    {statuses.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
             </div>
 
@@ -460,8 +465,8 @@ export default function FormDetailClient({ formId }: { formId: string }) {
                     onClick={() => void saveOrder()}
                     disabled={orderBusy}
                     className={clsx(
-                      "rounded-lg px-4 py-2 text-sm text-white",
-                      orderBusy ? "bg-black/60" : "bg-black hover:bg-black/90"
+                      "rounded-lg border px-4 py-2 text-sm",
+                      orderBusy ? "bg-gray-50 text-gray-500" : "hover:bg-gray-50"
                     )}
                   >
                     {orderBusy ? "Saving…" : "Save order"}
@@ -490,7 +495,7 @@ export default function FormDetailClient({ formId }: { formId: string }) {
                   <button
                     type="button"
                     onClick={openCreateField}
-                    className="mt-4 rounded-lg bg-black px-4 py-2 text-sm text-white hover:bg-black/90"
+                    className="mt-4 rounded-lg border px-4 py-2 text-sm hover:bg-gray-50"
                   >
                     Add field
                   </button>

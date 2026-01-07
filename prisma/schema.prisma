@@ -28,6 +28,7 @@ enum FieldType {
   MULTI_SELECT
   EMAIL
   PHONE
+  CHECKBOX
 }
 
 enum AttachmentType {
