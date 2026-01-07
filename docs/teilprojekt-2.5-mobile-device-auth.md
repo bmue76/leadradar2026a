@@ -1,8 +1,14 @@
-# Schlussrapport — Teilprojekt 2.5: Mobile Device Auth (ApiKey) + Rate Limit + Form Assignment
+# Teilprojekt 2.5 — Mobile Device Auth (ApiKey) + Rate Limit + Form Assignment
 
-Datum: 2026-01-06  
 Status: DONE ✅  
-Commit(s): 6ed6056, 89108fd
+Datum: 2026-01-06  
+Commit(s):
+- 6ed6056
+- 89108fd
+- 7bac55d
+- 565a198
+
+---
 
 ## Ziel
 
@@ -11,89 +17,106 @@ Mobile API v1 produktionsnah absichern:
 - Device Auth via ApiKey (`x-api-key`)
 - Form Assignment pro Device (nur assigned ACTIVE forms)
 - Rate Limiting (best-effort, Phase 1)
-- Admin Management (Keys/Devices/Assignments) minimal
+- Admin Management (Keys/Devices/Assignments) minimal und tenant-scoped
+
+---
 
 ## Umsetzung (Highlights)
 
-### DB (Prisma)
-- Neue Models: MobileApiKey, MobileDevice, MobileDeviceForm
-- ApiKey Speicherung: nur Hash (HMAC-SHA256) + prefix (indexiert)
-- Konstante Vergleiche (timing-safe) im Auth
-- Device ↔ ApiKey 1:1 (unique apiKeyId)
-- Assignments tenant-scoped via composite key (tenantId, deviceId, formId)
+### DB / Prisma
+- Neue Modelle: `MobileApiKey`, `MobileDevice`, `MobileDeviceForm`
+- Indizes/Constraints für Tenant-Scoping + Assignments
+- ApiKey Speicherung: **nur HMAC-SHA256 Hash + prefix**
+- Klartext-Key: **nur einmalig** bei Create/Seed (DEV)
 
-### Mobile API v1 (protected)
-- Alle /api/mobile/v1/* Endpoints require `x-api-key` (inkl. /health)
-- GET /forms liefert nur assigned + ACTIVE
-- GET /forms/:id und POST /leads prüfen assignment leak-safe (404)
-- Rate limit best-effort in-memory (60 req/min pro ApiKey) → 429 RATE_LIMITED
+### Mobile API v1
+- Alle Endpoints unter `/api/mobile/v1/*` geschützt (ApiKey Required)
+- Assignment Enforcement:
+  - Forms List/Detail nur für zugewiesene Forms
+  - Lead Create nur wenn Form assigned
+  - Leak-safe: unassigned/fremde IDs → 404 `NOT_FOUND`
+- Rate Limit: **60 req/min** best-effort pro ApiKey → 429 `RATE_LIMITED`
+- Health Endpoint nachgezogen und geschützt
 
-### Admin API (tenant-scoped)
-- Keys: create (cleartext once), list, revoke
-- Devices: create, list inkl. assigned forms
-- Assignments replace via PUT devices/:id/forms
+### Admin API + UI
+- Minimaler Admin-Flow:
+  - Keys erstellen + revoke
+  - Device anlegen
+  - Form Assignments via Replace-Strategy
+- Tenant-scoped, leak-safe wie im Backend-Standard
 
-### Admin UI (minimal)
-- /admin/settings/devices: Keys + Devices + Assignment UI
+### Docs
+- `03_API.md` und `04_RUNBOOK.md` auf TP-2.5-Stand aktualisiert
+- Env/Rotation/Limitations dokumentiert (inkl. In-Memory RateLimit Caveat)
 
-## Dateien/Änderungen
+---
 
-- prisma/schema.prisma
-- prisma/migrations/*_mobile_device_auth/
-- prisma/seed.ts
-- .env.example
-- src/lib/mobileAuth.ts
-- src/lib/rateLimit.ts
-- src/app/api/mobile/v1/forms/route.ts
-- src/app/api/mobile/v1/forms/[id]/route.ts
-- src/app/api/mobile/v1/leads/route.ts
-- src/app/api/mobile/v1/health/route.ts
-- src/app/api/admin/v1/mobile/keys/route.ts
-- src/app/api/admin/v1/mobile/keys/[id]/revoke/route.ts
-- src/app/api/admin/v1/mobile/devices/route.ts
-- src/app/api/admin/v1/mobile/devices/[id]/forms/route.ts
-- src/app/api/admin/v1/forms/route.ts
-- src/app/(admin)/admin/settings/devices/page.tsx
-- src/app/(admin)/admin/settings/devices/DevicesClient.tsx
-- docs/teilprojekt-2.5-mobile-device-auth.md
+## Dateien/Änderungen (Kern)
 
-## Akzeptanzkriterien – Check
+- Prisma:
+  - `prisma/schema.prisma`
+  - `prisma/migrations/*_mobile_device_auth/`
+  - `prisma/seed.ts`
+- Env:
+  - `.env.example` (ohne Secrets)
+- Libs:
+  - `src/lib/mobileAuth.ts`
+  - `src/lib/rateLimit.ts`
+- Mobile API:
+  - `/api/mobile/v1/forms` (list)
+  - `/api/mobile/v1/forms/[id]` (detail)
+  - `/api/mobile/v1/leads` (create idempotent + assignment check)
+  - `/api/mobile/v1/health` (protected)
+- Admin API:
+  - mobile keys/devices + assignments
+  - admin forms response kompatibilisiert (items alias)
+- Admin UI:
+  - `/admin/settings/devices/*`
+- Docs:
+  - `docs/teilprojekt-2.5-mobile-device-auth.md`
+  - `docs/LeadRadar2026A/03_API.md`
+  - `docs/LeadRadar2026A/04_RUNBOOK.md`
 
-- [x] ApiKey auth via x-api-key (hash only + prefix)
-- [x] Form assignment enforced (list/detail/lead create)
-- [x] Rate limit best-effort -> 429 RATE_LIMITED
-- [x] Admin Management minimal (Keys/Devices/Assignments)
-- [x] Tenant-scope strikt + leak-safe 404
-- [x] jsonOk/jsonError + traceId + x-trace-id
-- [x] Validation via Zod (validateBody/validateQuery)
+---
 
-## Tests/Proof (reproduzierbar)
+## Akzeptanzkriterien — Check
 
-Quality Gates:
-- npm run typecheck (0 errors)
-- npm run lint (warnings ok)
-- npm run build (grün)
+- ✅ ApiKey Auth via `x-api-key` (hash only + prefix)
+- ✅ Assignment Enforcement (list/detail/lead create) + leak-safe 404
+- ✅ Rate Limit best-effort → 429 `RATE_LIMITED`
+- ✅ Admin Management minimal (Keys/Devices/Assignments)
+- ✅ API Standards (`jsonOk/jsonError` + `traceId` + `x-trace-id`)
+- ✅ Zod Validation (`validateBody/validateQuery`)
+- ✅ DoD: typecheck/lint/build grün, docs updated, pushed, git clean
 
-Seed (DEV, local only):
-- `MOBILE_API_KEY_SECRET` in `.env.local` gesetzt
-- `npx prisma db seed` erzeugt demo + atlex ApiKey und loggt `x-api-key: <TOKEN>` einmalig in der Konsole
+---
 
-curl:
-- missing key => 401
-- valid key => 200 forms (assigned only)
-- not assigned form => 404
-- lead submit => 200 + leadId
-- idempotent => deduped:true
-- rate limit => 429 (best-effort loop)
-- health endpoint protected => 401 ohne key / 200 mit key
+## Tests / Proof (reproduzierbar)
 
-## Offene Punkte/Risiken
+- `npm run typecheck` ✅
+- `npm run lint` ✅ (Warnings ok)
+- `npm run build` ✅
+- Seed erzeugt demo/atlex `x-api-key` Tokens (nur Dev Output)
+- curl Proof:
+  - 401 ohne key
+  - 200 mit key
+  - 404 unassigned form (leak-safe)
+  - idempotent deduped
+  - 429 via loop
+  - health endpoint geschützt
 
-P1:
-- Rate limiting ist in-memory (Serverless/Multi-Instance nicht strikt) -> später Redis/Upstash.
+---
+
+## Offene Punkte / Risiken (P1)
+
+- P1: Rate Limit ist in-memory (serverless/multi-instance nicht strikt) → Upgrade-Pfad Redis/Upstash dokumentiert.
+
+---
 
 ## Next Step
 
-- docs/LeadRadar2026A/03_API.md ergänzen (Mobile Auth + Admin Endpoints)
-- docs/LeadRadar2026A/04_RUNBOOK.md ergänzen (MOBILE_API_KEY_SECRET + Rotation/Limitations)
-- Optional: docs/LeadRadar2026A/05_RELEASE_TESTS.md Smoke Cases für Mobile Auth/Rate limit
+➡️ TP 2.6 (Optionen, je nach Priorität):
+- Mobile “Device Heartbeat/lastSeen” + Diagnostics (operational)
+- Key Rotation Endpoint (Admin)
+- Event/QR Flow (Form Assignment via QR/Event) für Messe-Realität
+- Offline-Outbox Architektur vorbereiten (nur Design/Docs, keine Implementierung)

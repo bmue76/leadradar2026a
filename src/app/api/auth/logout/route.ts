@@ -1,14 +1,8 @@
 import { NextResponse } from "next/server";
 
-export const runtime = "nodejs";
+import { getTraceId } from "@/lib/api";
 
-function makeTraceId(): string {
-  // Node 18+ / Next runtime provides crypto.randomUUID()
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-  return typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
+export const runtime = "nodejs";
 
 function shouldExpireCookie(name: string): boolean {
   const n = name.toLowerCase();
@@ -46,12 +40,9 @@ function expireCookie(res: NextResponse, name: string) {
 }
 
 function buildLogoutResponse(req: Request) {
-  const traceId = makeTraceId();
+  const traceId = getTraceId(req);
 
-  const res = NextResponse.json(
-    { ok: true, data: { loggedOut: true }, traceId },
-    { status: 200 }
-  );
+  const res = NextResponse.json({ ok: true, data: { loggedOut: true }, traceId }, { status: 200 });
 
   res.headers.set("x-trace-id", traceId);
   res.headers.set("Cache-Control", "no-store, must-revalidate");

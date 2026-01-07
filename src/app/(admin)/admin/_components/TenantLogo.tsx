@@ -90,7 +90,10 @@ export function TenantLogo({ variant, className }: Props) {
     return (
       <div className={[styles.topbarWrap, className ?? ""].join(" ")} aria-label="Tenant logo">
         {blobUrl ? (
-          <img className={styles.topbarImg} src={blobUrl} alt="Logo" />
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img className={styles.topbarImg} src={blobUrl} alt="Logo" />
+          </>
         ) : (
           <span className={styles.topbarPlaceholder}>Logo</span>
         )}
@@ -101,7 +104,10 @@ export function TenantLogo({ variant, className }: Props) {
   return (
     <div className={[styles.frame, className ?? ""].join(" ")} aria-label="Tenant logo">
       {blobUrl ? (
-        <img className={styles.img} src={blobUrl} alt="Logo" />
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img className={styles.img} src={blobUrl} alt="Logo" />
+        </>
       ) : (
         <span className={styles.placeholder}>Logo</span>
       )}

@@ -6,12 +6,11 @@ import styles from "./BrandHeader.module.css";
 export default function BrandHeader() {
   const [useFallback, setUseFallback] = React.useState(false);
 
-  const src = useFallback
-    ? "/brand/leadradar-icon.png"
-    : "/brand/leadradar-logo.png";
+  const src = useFallback ? "/brand/leadradar-icon.png" : "/brand/leadradar-logo.png";
 
   return (
     <div className={styles.wrap} aria-label="LeadRadar">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         className={useFallback ? styles.icon : styles.logo}
         src={src}
