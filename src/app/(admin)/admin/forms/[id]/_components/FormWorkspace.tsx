@@ -19,7 +19,7 @@ export type FieldDraft = {
   checkboxDefault: boolean;
 };
 
-export default function FormWorkspace(props: {
+type Props = {
   fields: FormField[];
   selectedId: string;
   onSelect: (id: string) => void;
@@ -28,18 +28,19 @@ export default function FormWorkspace(props: {
 
   orderDirty: boolean;
   orderBusy: boolean;
-  onMoveUp: (fieldId: string) => void;
-  onMoveDown: (fieldId: string) => void;
   onSaveOrder: () => void;
+  onReorder: (nextOrderIds: string[]) => void;
+
+  draft: FieldDraft | null;
+  onDraftPatch: (patch: Partial<FieldDraft>) => void;
 
   saving: boolean;
   saveErr: string | null;
   saveTraceId: string | null;
+  onSaveSelected: () => void;
+};
 
-  draft: FieldDraft | null;
-  onDraftPatch: (patch: Partial<FieldDraft>) => void;
-  onSave: () => void;
-}) {
+export default function FormWorkspace(props: Props) {
   const selected = React.useMemo(
     () => props.fields.find((f) => f.id === props.selectedId) || null,
     [props.fields, props.selectedId]
@@ -47,6 +48,7 @@ export default function FormWorkspace(props: {
 
   return (
     <div className="grid gap-4 lg:grid-cols-[320px_1fr_360px]">
+      {/* Left: Fields */}
       <FieldsList
         fields={props.fields}
         selectedId={props.selectedId}
@@ -54,13 +56,14 @@ export default function FormWorkspace(props: {
         onAdd={props.onAdd}
         orderDirty={props.orderDirty}
         orderBusy={props.orderBusy}
-        onMoveUp={props.onMoveUp}
-        onMoveDown={props.onMoveDown}
         onSaveOrder={props.onSaveOrder}
+        onReorder={props.onReorder}
       />
 
-      <PreviewPane fields={props.fields.filter((f) => Boolean(f.isActive))} />
+      {/* Middle: Preview */}
+      <PreviewPane fields={props.fields} />
 
+      {/* Right: Properties */}
       <InspectorPane
         selected={selected}
         draft={props.draft}
@@ -68,7 +71,7 @@ export default function FormWorkspace(props: {
         saving={props.saving}
         saveErr={props.saveErr}
         saveTraceId={props.saveTraceId}
-        onSave={props.onSave}
+        onSave={props.onSaveSelected}
       />
     </div>
   );

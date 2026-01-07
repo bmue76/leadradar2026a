@@ -71,6 +71,10 @@ function deriveDraftFromField(f: FormField): FieldDraft {
   };
 }
 
+function uniq(xs: string[]) {
+  return Array.from(new Set(xs));
+}
+
 export function useFormDetail(formId: string) {
   const mountedRef = React.useRef(true);
 
@@ -94,7 +98,6 @@ export function useFormDetail(formId: string) {
   const [saveTraceId, setSaveTraceId] = React.useState<string | null>(null);
 
   const fieldsSorted = React.useMemo(() => sortFieldsStable(form?.fields || []), [form?.fields]);
-
   const fieldsById = React.useMemo(() => new Map((form?.fields || []).map((f) => [f.id, f])), [form?.fields]);
 
   const fieldsOrdered = React.useMemo(() => {
@@ -107,43 +110,52 @@ export function useFormDetail(formId: string) {
     return normalized.map((id) => fieldsById.get(id)).filter(Boolean) as FormField[];
   }, [form, order, fieldsById, fieldsSorted]);
 
-  const selected = React.useMemo(() => fieldsOrdered.find((f) => f.id === selectedId) || null, [fieldsOrdered, selectedId]);
+  const selected = React.useMemo(
+    () => fieldsOrdered.find((f) => f.id === selectedId) || null,
+    [fieldsOrdered, selectedId]
+  );
 
-  const refresh = React.useCallback(async () => {
-    setLoading(true);
-    setLoadErr(null);
+  const refresh = React.useCallback(
+    async (preferSelectedId?: string): Promise<FormDetail | null> => {
+      setLoading(true);
+      setLoadErr(null);
 
-    const res = await api<FormDetail>(`/api/admin/v1/forms/${formId}`, { method: "GET" });
+      const res = await api<FormDetail>(`/api/admin/v1/forms/${formId}`, { method: "GET" });
 
-    if (!mountedRef.current) return;
+      if (!mountedRef.current) return null;
 
-    if (!res.ok) {
-      setForm(null);
-      setOrder([]);
+      if (!res.ok) {
+        setForm(null);
+        setOrder([]);
+        setOrderDirty(false);
+        setSelectedId("");
+        setDraft(null);
+
+        const err = getErrMessage(res);
+        setLoadErr({ message: err.message, code: err.code, traceId: err.traceId });
+        setLoading(false);
+        return null;
+      }
+
+      setForm(res.data);
+
+      const nextOrder = sortFieldsStable(res.data.fields || []).map((f) => f.id);
+      setOrder(nextOrder);
       setOrderDirty(false);
-      setSelectedId("");
-      setDraft(null);
 
-      const err = getErrMessage(res);
-      setLoadErr({ message: err.message, code: err.code, traceId: err.traceId });
+      const desired = preferSelectedId && res.data.fields.some((f) => f.id === preferSelectedId)
+        ? preferSelectedId
+        : selectedId && res.data.fields.some((f) => f.id === selectedId)
+          ? selectedId
+          : res.data.fields[0]?.id || "";
+
+      setSelectedId(desired);
+
       setLoading(false);
-      return;
-    }
-
-    setForm(res.data);
-
-    const nextOrder = sortFieldsStable(res.data.fields || []).map((f) => f.id);
-    setOrder(nextOrder);
-    setOrderDirty(false);
-
-    const nextSelected =
-      selectedId && res.data.fields.some((f) => f.id === selectedId)
-        ? selectedId
-        : res.data.fields[0]?.id || "";
-    setSelectedId(nextSelected);
-
-    setLoading(false);
-  }, [formId, selectedId]);
+      return res.data;
+    },
+    [formId, selectedId]
+  );
 
   React.useEffect(() => {
     mountedRef.current = true;
@@ -165,7 +177,7 @@ export function useFormDetail(formId: string) {
     setDraft(deriveDraftFromField(selected));
     setSaveErr(null);
     setSaveTraceId(null);
-  }, [selected?.id]); // only when selection changes
+  }, [selected?.id]);
 
   function setDraftPatch(patch: Partial<FieldDraft>) {
     setDraft((prev) => (prev ? { ...prev, ...patch } : prev));
@@ -192,13 +204,7 @@ export function useFormDetail(formId: string) {
       return;
     }
 
-    // some routes return full form; if not, refresh anyway
-    if (res.ok && (res as unknown as { data?: unknown }).data) {
-      // safest: just refresh (keeps state consistent)
-      await refresh();
-    } else {
-      await refresh();
-    }
+    await refresh();
   }
 
   async function createField() {
@@ -231,37 +237,30 @@ export function useFormDetail(formId: string) {
       return;
     }
 
-    await refresh();
-
-    // after refresh: select created field by key (robust across API response shapes)
-    const after = (form?.fields || []).find((f) => f.key === key);
-    if (after?.id) setSelectedId(after.id);
+    const next = await refresh();
+    const created = next?.fields?.find((f) => f.key === key);
+    if (created?.id) setSelectedId(created.id);
   }
 
-  function swapInOrder(idA: string, idB: string) {
-    setOrder((prev) => {
-      const next = [...prev];
-      const ia = next.indexOf(idA);
-      const ib = next.indexOf(idB);
-      if (ia < 0 || ib < 0) return prev;
-      next[ia] = idB;
-      next[ib] = idA;
-      return next;
-    });
+  /** Drag&Drop reorder (client only). Persist happens via saveOrder(). */
+  function reorder(nextOrderIds: string[]) {
+    const next = uniq(nextOrderIds);
+
+    if (!form) {
+      setOrder(next);
+      setOrderDirty(true);
+      return;
+    }
+
+    const existing = new Set((form.fields || []).map((f) => f.id));
+    const normalized = [
+      ...next.filter((id) => existing.has(id)),
+      ...fieldsSorted.map((f) => f.id).filter((id) => !next.includes(id)),
+    ];
+
+    setOrder(normalized);
     setOrderDirty(true);
     setToast(null);
-  }
-
-  function moveUp(fieldId: string) {
-    const idx = order.indexOf(fieldId);
-    if (idx <= 0) return;
-    swapInOrder(order[idx - 1], order[idx]);
-  }
-
-  function moveDown(fieldId: string) {
-    const idx = order.indexOf(fieldId);
-    if (idx < 0 || idx >= order.length - 1) return;
-    swapInOrder(order[idx], order[idx + 1]);
   }
 
   async function saveOrder(onDone?: () => void) {
@@ -339,13 +338,17 @@ export function useFormDetail(formId: string) {
 
     if (!res.ok) {
       const err = getErrMessage(res);
-      const friendly = err.code === "KEY_CONFLICT" ? "Key already exists. Please choose a different key." : err.message;
+      const friendly =
+        err.code === "KEY_CONFLICT"
+          ? "Key already exists. Please choose a different key."
+          : err.message;
+
       setSaveErr(friendly || "Could not save.");
       setSaveTraceId(err.traceId || null);
       return;
     }
 
-    await refresh();
+    await refresh(selected.id);
     onDone?.();
   }
 
@@ -367,8 +370,7 @@ export function useFormDetail(formId: string) {
 
     orderDirty,
     orderBusy,
-    moveUp,
-    moveDown,
+    reorder,
     saveOrder,
 
     saving,

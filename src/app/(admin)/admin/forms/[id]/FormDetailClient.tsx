@@ -43,8 +43,7 @@ export default function FormDetailClient({ formId, initialTab }: { formId: strin
 
     orderDirty,
     orderBusy,
-    moveUp,
-    moveDown,
+    reorder,
     saveOrder,
 
     saving,
@@ -167,15 +166,14 @@ export default function FormDetailClient({ formId, initialTab }: { formId: strin
               onAdd={() => void createField()}
               orderDirty={orderDirty}
               orderBusy={orderBusy}
-              onMoveUp={moveUp}
-              onMoveDown={moveDown}
-              onSaveOrder={() => void saveOrder(() => setToast("Order saved."))}
+              onSaveOrder={() => void saveOrder()}
+              onReorder={reorder}
+              draft={draft}
+              onDraftPatch={setDraftPatch}
               saving={saving}
               saveErr={saveErr}
               saveTraceId={saveTraceId}
-              draft={draft}
-              onDraftPatch={setDraftPatch}
-              onSave={() => void saveSelectedField(() => setToast("Saved."))}
+              onSaveSelected={() => void saveSelectedField()}
             />
           )}
         </>
