@@ -31,33 +31,36 @@ export default function FormDetailClient({ formId, initialTab }: { formId: strin
     refresh,
 
     toast,
-    setToast,
+    dismissToast,
+    runToastAction,
 
     statusBusy,
     setStatus,
 
-    // builder state/actions
     fieldsOrdered,
     selectedId,
     setSelectedId,
 
-    orderDirty,
-    orderBusy,
-    reorder,
-    saveOrder,
+    showInactive,
+    setShowInactive,
 
-    saving,
+    draft,
+    setDraftPatch,
+
+    saveState,
     saveErr,
     saveTraceId,
+
     createField,
-    setDraftPatch,
-    draft,
-    saveSelectedField,
+    duplicateField,
+    deleteField,
+
+    patchFieldFlags,
+    reorderVisible,
   } = useFormDetail(formId);
 
   const statuses: FormStatus[] = React.useMemo(() => ["DRAFT", "ACTIVE", "ARCHIVED"], []);
 
-  // keep tab in sync if route wants builder; user can still switch
   React.useEffect(() => setTab(initialTab), [initialTab]);
 
   return (
@@ -66,8 +69,31 @@ export default function FormDetailClient({ formId, initialTab }: { formId: strin
         <Link href="/admin/forms" className="text-sm text-gray-600 hover:text-gray-900">
           ← Forms
         </Link>
+
         {toast ? (
-          <div className="rounded-full border bg-white px-3 py-1 text-sm text-gray-700 shadow-sm">{toast}</div>
+          <div className="flex items-center gap-2 rounded-full border bg-white px-3 py-1 text-sm text-gray-700 shadow-sm">
+            <div>{toast.message}</div>
+            {toast.actionLabel && toast.actionId ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const id = toast.actionId;
+                  if (id) void runToastAction(id);
+                }}
+                className="rounded-full border px-2 py-0.5 text-xs hover:bg-gray-50"
+              >
+                {toast.actionLabel}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={dismissToast}
+                className="rounded-full border px-2 py-0.5 text-xs hover:bg-gray-50"
+              >
+                Close
+              </button>
+            )}
+          </div>
         ) : (
           <div />
         )}
@@ -102,7 +128,6 @@ export default function FormDetailClient({ formId, initialTab }: { formId: strin
         </div>
       ) : form ? (
         <>
-          {/* Header / meta */}
           <div className="rounded-2xl border bg-white p-6">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
@@ -143,7 +168,7 @@ export default function FormDetailClient({ formId, initialTab }: { formId: strin
                   type="button"
                   onClick={() => void refresh()}
                   className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50"
-                  disabled={loading || saving}
+                  disabled={loading}
                 >
                   Refresh
                 </button>
@@ -160,20 +185,24 @@ export default function FormDetailClient({ formId, initialTab }: { formId: strin
             </div>
           ) : (
             <FormWorkspace
+              form={form}
               fields={fieldsOrdered}
               selectedId={selectedId}
               onSelect={setSelectedId}
-              onAdd={() => void createField()}
-              orderDirty={orderDirty}
-              orderBusy={orderBusy}
-              onSaveOrder={() => void saveOrder()}
-              onReorder={reorder}
+              showInactive={showInactive}
+              onToggleShowInactive={setShowInactive}
               draft={draft}
               onDraftPatch={setDraftPatch}
-              saving={saving}
+              saveState={saveState}
               saveErr={saveErr}
               saveTraceId={saveTraceId}
-              onSaveSelected={() => void saveSelectedField()}
+              onAddField={createField}
+              onDuplicateField={duplicateField}
+              onDeleteField={deleteField}
+              onPatchFieldFlags={patchFieldFlags}
+              onReorderVisible={reorderVisible}
+              statusBusy={statusBusy}
+              onSetStatus={setStatus}
             />
           )}
         </>

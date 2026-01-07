@@ -1,12 +1,14 @@
 "use client";
 
-import * as React from "react";
-import type { FormField } from "../formDetail.types";
+import type { FormDetail, FormField, FormStatus } from "../formDetail.types";
+import type { BuilderSaveState, FieldDraft as BuilderFieldDraft, FieldType } from "../_lib/builderV2.types";
 
-import FieldsList from "./workspace/FieldsList";
-import PreviewPane from "./workspace/PreviewPane";
-import InspectorPane from "./workspace/InspectorPane";
+import BuilderV2 from "./builderV2/BuilderV2";
 
+/**
+ * Legacy type export expected by older workspace components (e.g. InspectorPane).
+ * Keep it to avoid TypeScript breaks while migrating.
+ */
 export type FieldDraft = {
   key: string;
   label: string;
@@ -20,59 +22,44 @@ export type FieldDraft = {
 };
 
 type Props = {
+  form: FormDetail;
   fields: FormField[];
+
   selectedId: string;
   onSelect: (id: string) => void;
 
-  onAdd: () => void;
+  showInactive: boolean;
+  onToggleShowInactive: (v: boolean) => void;
 
-  orderDirty: boolean;
-  orderBusy: boolean;
-  onSaveOrder: () => void;
-  onReorder: (nextOrderIds: string[]) => void;
+  draft: BuilderFieldDraft | null;
+  onDraftPatch: (patch: Partial<BuilderFieldDraft>) => void;
 
-  draft: FieldDraft | null;
-  onDraftPatch: (patch: Partial<FieldDraft>) => void;
-
-  saving: boolean;
+  saveState: BuilderSaveState;
   saveErr: string | null;
   saveTraceId: string | null;
-  onSaveSelected: () => void;
+
+  onAddField: (input?: {
+    label?: string;
+    type?: FieldType;
+    required?: boolean;
+    isActive?: boolean;
+    placeholder?: string;
+    helpText?: string;
+    config?: unknown;
+    keyHint?: string;
+  }) => void;
+
+  onDuplicateField: (id: string) => void;
+  onDeleteField: (id: string) => void;
+
+  onPatchFieldFlags: (id: string, patch: { required?: boolean; isActive?: boolean }) => void;
+
+  onReorderVisible: (nextVisibleOrderIds: string[], visibleIds: string[]) => void;
+
+  statusBusy: boolean;
+  onSetStatus: (s: FormStatus) => void;
 };
 
 export default function FormWorkspace(props: Props) {
-  const selected = React.useMemo(
-    () => props.fields.find((f) => f.id === props.selectedId) || null,
-    [props.fields, props.selectedId]
-  );
-
-  return (
-    <div className="grid gap-4 lg:grid-cols-[320px_1fr_360px]">
-      {/* Left: Fields */}
-      <FieldsList
-        fields={props.fields}
-        selectedId={props.selectedId}
-        onSelect={props.onSelect}
-        onAdd={props.onAdd}
-        orderDirty={props.orderDirty}
-        orderBusy={props.orderBusy}
-        onSaveOrder={props.onSaveOrder}
-        onReorder={props.onReorder}
-      />
-
-      {/* Middle: Preview */}
-      <PreviewPane fields={props.fields} />
-
-      {/* Right: Properties */}
-      <InspectorPane
-        selected={selected}
-        draft={props.draft}
-        onDraftPatch={props.onDraftPatch}
-        saving={props.saving}
-        saveErr={props.saveErr}
-        saveTraceId={props.saveTraceId}
-        onSave={props.onSaveSelected}
-      />
-    </div>
-  );
+  return <BuilderV2 {...props} />;
 }
