@@ -1,7 +1,8 @@
 import FormDetailClient from "../FormDetailClient";
 
-export const runtime = "nodejs";
+type Params = { id: string };
 
-export default function Page({ params }: { params: { id: string } }) {
-  return <FormDetailClient formId={params.id} initialTab="builder" />;
+export default async function Page({ params }: { params: Params | Promise<Params> }) {
+  const { id } = await Promise.resolve(params);
+  return <FormDetailClient formId={id} initialTab="builder" />;
 }
