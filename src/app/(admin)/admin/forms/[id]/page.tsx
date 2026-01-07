@@ -1,13 +1,7 @@
 import FormDetailClient from "./FormDetailClient";
 
-type PageProps = {
-  params: { id: string };
-  searchParams?: { tab?: string };
-};
+export const runtime = "nodejs";
 
-export default function Page({ params, searchParams }: PageProps) {
-  const tabRaw = typeof searchParams?.tab === "string" ? searchParams.tab : "";
-  const initialTab = tabRaw.toLowerCase() === "builder" ? "builder" : "overview";
-
-  return <FormDetailClient formId={params.id} initialTab={initialTab} />;
+export default function Page({ params }: { params: { id: string } }) {
+  return <FormDetailClient formId={params.id} />;
 }

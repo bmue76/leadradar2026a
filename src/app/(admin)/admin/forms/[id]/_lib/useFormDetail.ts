@@ -54,6 +54,13 @@ export function useFormDetail(formId: string) {
   const [form, setForm] = useState<FormDetail | null>(null);
 
   const refresh = useCallback(async () => {
+    if (!formId) {
+      setForm(null);
+      setLoadErr({ message: "Missing formId." });
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setLoadErr(null);
 
@@ -76,9 +83,15 @@ export function useFormDetail(formId: string) {
 
   useEffect(() => {
     mountedRef.current = true;
-    void refresh();
+
+    // defer to avoid react-hooks/set-state-in-effect
+    const t = window.setTimeout(() => {
+      void refresh();
+    }, 0);
+
     return () => {
       mountedRef.current = false;
+      window.clearTimeout(t);
     };
   }, [refresh]);
 
