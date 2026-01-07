@@ -26,12 +26,28 @@ type FormDetail = {
   fields: FormField[];
 };
 
-function fieldInputKind(t: string): "text" | "email" | "tel" | "textarea" {
-  const tt = (t || "").toUpperCase();
-  if (tt === "EMAIL") return "email";
-  if (tt === "PHONE") return "tel";
-  if (tt === "TEXTAREA") return "textarea";
-  return "text";
+type FormValue = string | boolean | string[];
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function parseOptions(config: unknown): string[] {
+  if (!isRecord(config)) return [];
+  const opts = config.options;
+  if (!Array.isArray(opts)) return [];
+  return opts.map((x) => String(x)).map((s) => s.trim()).filter(Boolean);
+}
+
+function parseCheckboxDefault(config: unknown): boolean {
+  if (!isRecord(config)) return false;
+  const v = config.defaultValue;
+  if (typeof v === "boolean") return v;
+  return Boolean(v);
+}
+
+function normalizeType(t: string): string {
+  return String(t || "").toUpperCase();
 }
 
 function mkClientLeadId(): string {
@@ -46,11 +62,21 @@ function fmtErr(e: { code: string; message: string; traceId?: string; status?: n
   return parts.join(" · ");
 }
 
+function emptyValueForField(f: FormField): FormValue {
+  const t = normalizeType(f.type);
+  if (t === "CHECKBOX") return parseCheckboxDefault(f.config);
+  if (t === "MULTI_SELECT") return [];
+  return "";
+}
+
+function trimValue(v: FormValue): FormValue {
+  if (typeof v === "string") return v.trim();
+  if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean);
+  return v;
+}
+
 export default function CaptureClient() {
-  const [tenantSlug, setTenantSlug] = React.useState<string>(() => {
-    // Default slug (env) or localStorage value (if present)
-    return getTenantSlugClient();
-  });
+  const [tenantSlug, setTenantSlug] = React.useState<string>(() => getTenantSlugClient());
 
   const [loadingForms, setLoadingForms] = React.useState(true);
   const [forms, setForms] = React.useState<FormListItem[]>([]);
@@ -59,7 +85,7 @@ export default function CaptureClient() {
   const [loadingDetail, setLoadingDetail] = React.useState(false);
   const [detail, setDetail] = React.useState<FormDetail | null>(null);
 
-  const [values, setValues] = React.useState<Record<string, string>>({});
+  const [values, setValues] = React.useState<Record<string, FormValue>>({});
   const [submitting, setSubmitting] = React.useState(false);
 
   const [error, setError] = React.useState<string | null>(null);
@@ -122,11 +148,14 @@ export default function CaptureClient() {
 
     setDetail(res.data);
 
-    // init / preserve values (no stale closure)
     setValues((prev) => {
-      const next: Record<string, string> = { ...prev };
+      const next: Record<string, FormValue> = { ...prev };
       for (const f of res.data.fields) {
-        if (typeof next[f.key] !== "string") next[f.key] = "";
+        if (!(f.key in next)) next[f.key] = emptyValueForField(f);
+      }
+      // remove stale keys (optional cleanup)
+      for (const k of Object.keys(next)) {
+        if (!res.data.fields.some((f) => f.key === k)) delete next[k];
       }
       return next;
     });
@@ -144,7 +173,7 @@ export default function CaptureClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFormId]);
 
-  function onChangeValue(key: string, v: string) {
+  function setValue(key: string, v: FormValue) {
     setValues((prev) => ({ ...prev, [key]: v }));
   }
 
@@ -152,8 +181,22 @@ export default function CaptureClient() {
     if (!detail) return "No form selected.";
     for (const f of detail.fields) {
       if (!f.required) continue;
-      const v = (values[f.key] ?? "").trim();
-      if (!v) return `Pflichtfeld fehlt: ${f.label}`;
+
+      const t = normalizeType(f.type);
+      const v = values[f.key];
+
+      if (t === "CHECKBOX") {
+        if (v !== true) return `Pflichtfeld fehlt: ${f.label}`;
+        continue;
+      }
+
+      if (t === "MULTI_SELECT") {
+        if (!Array.isArray(v) || v.length === 0) return `Pflichtfeld fehlt: ${f.label}`;
+        continue;
+      }
+
+      const s = typeof v === "string" ? v.trim() : "";
+      if (!s) return `Pflichtfeld fehlt: ${f.label}`;
     }
     return null;
   }
@@ -175,11 +218,16 @@ export default function CaptureClient() {
 
     setSubmitting(true);
     try {
+      const payloadValues: Record<string, FormValue> = {};
+      for (const f of detail.fields) {
+        payloadValues[f.key] = trimValue(values[f.key] ?? emptyValueForField(f));
+      }
+
       const payload = {
         formId: detail.id,
         clientLeadId: mkClientLeadId(),
         capturedAt: new Date().toISOString(),
-        values: Object.fromEntries(detail.fields.map((f) => [f.key, (values[f.key] ?? "").trim()])),
+        values: payloadValues,
         meta: { source: "demo-capture" },
       };
 
@@ -197,10 +245,9 @@ export default function CaptureClient() {
 
       setSuccess(res.data);
 
-      // reset for next lead
       setValues((prev) => {
-        const next = { ...prev };
-        for (const f of detail.fields) next[f.key] = "";
+        const next: Record<string, FormValue> = { ...prev };
+        for (const f of detail.fields) next[f.key] = emptyValueForField(f);
         return next;
       });
     } finally {
@@ -212,6 +259,130 @@ export default function CaptureClient() {
     const s = tenantSlug.trim();
     setTenantSlugClient(s);
     void loadForms({ keepSelection: false });
+  }
+
+  function renderField(f: FormField) {
+    const t = normalizeType(f.type);
+    const req = f.required ? " *" : "";
+    const v = values[f.key] ?? emptyValueForField(f);
+
+    if (t === "TEXTAREA") {
+      return (
+        <div key={f.id}>
+          <label className="mb-1 block text-sm font-medium text-neutral-900">
+            {f.label}
+            <span className="text-neutral-500">{req}</span>
+          </label>
+          <textarea
+            className="min-h-[96px] w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm"
+            placeholder={f.placeholder ?? ""}
+            value={typeof v === "string" ? v : ""}
+            onChange={(ev) => setValue(f.key, ev.target.value)}
+            disabled={submitting}
+          />
+          {f.helpText ? <div className="mt-1 text-xs text-neutral-600">{f.helpText}</div> : null}
+        </div>
+      );
+    }
+
+    if (t === "SINGLE_SELECT") {
+      const opts = parseOptions(f.config);
+      return (
+        <div key={f.id}>
+          <label className="mb-1 block text-sm font-medium text-neutral-900">
+            {f.label}
+            <span className="text-neutral-500">{req}</span>
+          </label>
+          <select
+            className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+            value={typeof v === "string" ? v : ""}
+            onChange={(ev) => setValue(f.key, ev.target.value)}
+            disabled={submitting}
+          >
+            <option value="">—</option>
+            {opts.map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
+          </select>
+          {f.helpText ? <div className="mt-1 text-xs text-neutral-600">{f.helpText}</div> : null}
+        </div>
+      );
+    }
+
+    if (t === "MULTI_SELECT") {
+      const opts = parseOptions(f.config);
+      const vv = Array.isArray(v) ? v : [];
+      return (
+        <div key={f.id}>
+          <label className="mb-1 block text-sm font-medium text-neutral-900">
+            {f.label}
+            <span className="text-neutral-500">{req}</span>
+          </label>
+          <select
+            multiple
+            className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+            value={vv}
+            onChange={(ev) => {
+              const selected = Array.from(ev.target.selectedOptions).map((o) => o.value);
+              setValue(f.key, selected);
+            }}
+            disabled={submitting}
+          >
+            {opts.map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
+          </select>
+          {f.helpText ? <div className="mt-1 text-xs text-neutral-600">{f.helpText}</div> : null}
+        </div>
+      );
+    }
+
+    if (t === "CHECKBOX") {
+      const checked = v === true;
+      return (
+        <div key={f.id}>
+          <label className="flex items-center gap-2 text-sm text-neutral-900">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-neutral-300"
+              checked={checked}
+              onChange={(ev) => setValue(f.key, ev.target.checked)}
+              disabled={submitting}
+            />
+            <span className="font-medium">
+              {f.label}
+              <span className="text-neutral-500">{req}</span>
+            </span>
+          </label>
+          {f.helpText ? <div className="mt-1 text-xs text-neutral-600">{f.helpText}</div> : null}
+        </div>
+      );
+    }
+
+    const htmlType = t === "EMAIL" ? "email" : t === "PHONE" ? "tel" : "text";
+
+    return (
+      <div key={f.id}>
+        <label className="mb-1 block text-sm font-medium text-neutral-900">
+          {f.label}
+          <span className="text-neutral-500">{req}</span>
+        </label>
+        <input
+          className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm"
+          type={htmlType}
+          placeholder={f.placeholder ?? ""}
+          value={typeof v === "string" ? v : ""}
+          onChange={(ev) => setValue(f.key, ev.target.value)}
+          disabled={submitting}
+          autoComplete="off"
+        />
+        {f.helpText ? <div className="mt-1 text-xs text-neutral-600">{f.helpText}</div> : null}
+      </div>
+    );
   }
 
   return (
@@ -294,42 +465,7 @@ export default function CaptureClient() {
           <div className="text-sm text-neutral-600">Loading form detail…</div>
         ) : detail ? (
           <form onSubmit={onSubmit} className="space-y-4">
-            {detail.fields.map((f) => {
-              const kind = fieldInputKind(f.type);
-              const value = values[f.key] ?? "";
-              const req = f.required ? " *" : "";
-
-              return (
-                <div key={f.id}>
-                  <label className="mb-1 block text-sm font-medium text-neutral-900">
-                    {f.label}
-                    <span className="text-neutral-500">{req}</span>
-                  </label>
-
-                  {kind === "textarea" ? (
-                    <textarea
-                      className="min-h-[96px] w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm"
-                      placeholder={f.placeholder ?? ""}
-                      value={value}
-                      onChange={(ev) => onChangeValue(f.key, ev.target.value)}
-                      disabled={submitting}
-                    />
-                  ) : (
-                    <input
-                      className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm"
-                      type={kind}
-                      placeholder={f.placeholder ?? ""}
-                      value={value}
-                      onChange={(ev) => onChangeValue(f.key, ev.target.value)}
-                      disabled={submitting}
-                      autoComplete="off"
-                    />
-                  )}
-
-                  {f.helpText ? <div className="mt-1 text-xs text-neutral-600">{f.helpText}</div> : null}
-                </div>
-              );
-            })}
+            {detail.fields.map((f) => renderField(f))}
 
             {error ? (
               <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</div>

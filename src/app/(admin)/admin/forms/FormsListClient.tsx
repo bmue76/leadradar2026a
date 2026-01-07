@@ -95,11 +95,17 @@ export function FormsListClient() {
     void fetchForms();
   }, [fetchForms]);
 
-  const onCreated = React.useCallback(() => {
-    setFlash("Form created.");
-    void fetchForms();
-    window.setTimeout(() => setFlash(null), 2200);
-  }, [fetchForms]);
+  const onCreated = React.useCallback(
+    (formId: string, opts?: { openBuilder?: boolean }) => {
+      setFlash("Form created.");
+      void fetchForms();
+      window.setTimeout(() => setFlash(null), 2200);
+
+      if (opts?.openBuilder) router.push(`/admin/forms/${formId}/builder`);
+      else router.push(`/admin/forms/${formId}`);
+    },
+    [fetchForms, router]
+  );
 
   const clearFilters = React.useCallback(() => {
     setQ("");
