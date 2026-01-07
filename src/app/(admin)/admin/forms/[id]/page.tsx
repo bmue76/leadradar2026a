@@ -1,10 +1,13 @@
 import FormDetailClient from "./FormDetailClient";
 
-export default async function AdminFormDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = await params;
-  return <FormDetailClient formId={id} />;
+type PageProps = {
+  params: { id: string };
+  searchParams?: { tab?: string };
+};
+
+export default function Page({ params, searchParams }: PageProps) {
+  const tabRaw = typeof searchParams?.tab === "string" ? searchParams.tab : "";
+  const initialTab = tabRaw.toLowerCase() === "builder" ? "builder" : "overview";
+
+  return <FormDetailClient formId={params.id} initialTab={initialTab} />;
 }

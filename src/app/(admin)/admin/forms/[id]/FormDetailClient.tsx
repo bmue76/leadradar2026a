@@ -1,13 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { adminFetchJson } from "../../_lib/adminFetch";
-import FieldModal from "./FieldModal";
-import FieldsTable from "./FieldsTable";
-import type { ApiResponse, FieldUpsertInput, FormDetail, FormField, FormStatus } from "./formDetail.types";
+
+import FormTabs from "./_components/FormTabs";
+import OverviewPane from "./_components/OverviewPane";
+import FormWorkspace from "./_components/FormWorkspace";
+
+import { useFormDetail } from "./_lib/useFormDetail";
+import type { ApiResponse, FormDetail, FormStatus } from "./formDetail.types";
 
 type InlineError = { message: string; code?: string; traceId?: string } | null;
+type TabKey = "overview" | "builder";
 
 function clsx(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(" ");
@@ -66,99 +71,35 @@ async function api<T>(path: string, init?: RequestInit): Promise<ApiResponse<T>>
   }
 }
 
-function sortFieldsStable(fields: FormField[]) {
-  return [...fields].sort((a, b) => {
-    const ao = typeof a.sortOrder === "number" ? a.sortOrder : 0;
-    const bo = typeof b.sortOrder === "number" ? b.sortOrder : 0;
-    if (ao !== bo) return ao - bo;
-    return (a.label || "").localeCompare(b.label || "");
-  });
-}
-
-export default function FormDetailClient({ formId }: { formId: string }) {
+export default function FormDetailClient({
+  formId,
+  initialTab,
+}: {
+  formId: string;
+  initialTab: TabKey;
+}) {
   const mountedRef = useRef(true);
 
-  const [loading, setLoading] = useState(true);
-  const [loadErr, setLoadErr] = useState<InlineError>(null);
-  const [form, setForm] = useState<FormDetail | null>(null);
+  const { loading, loadErr, form, setForm, refresh } = useFormDetail(formId);
 
-  const [actionErr, setActionErr] = useState<InlineError>(null);
+  const [tab, setTab] = useState<TabKey>(initialTab);
   const [toast, setToast] = useState<string | null>(null);
 
   const [statusBusy, setStatusBusy] = useState(false);
-
-  const [order, setOrder] = useState<string[]>([]);
-  const [orderDirty, setOrderDirty] = useState(false);
-  const [orderBusy, setOrderBusy] = useState(false);
-
-  const [fieldModalOpen, setFieldModalOpen] = useState(false);
-  const [fieldModalMode, setFieldModalMode] = useState<"create" | "edit">("create");
-  const [fieldModalInitial, setFieldModalInitial] = useState<FormField | null>(null);
-  const [fieldModalBusy, setFieldModalBusy] = useState(false);
-  const [fieldModalApiError, setFieldModalApiError] = useState<InlineError>(null);
-  const [fieldModalKey, setFieldModalKey] = useState(0);
+  const [headerErr, setHeaderErr] = useState<InlineError>(null);
 
   const statuses: FormStatus[] = useMemo(() => ["DRAFT", "ACTIVE", "ARCHIVED"], []);
 
-  const fieldsSorted = useMemo(() => {
-    const fs = form?.fields || [];
-    return sortFieldsStable(fs);
-  }, [form?.fields]);
-
-  const fieldsById = useMemo(() => new Map((form?.fields || []).map((f) => [f.id, f])), [form?.fields]);
-
-  const orderedFields = useMemo(() => {
-    if (!form) return [];
-    const existing = new Set((form.fields || []).map((f) => f.id));
-    const normalized = [
-      ...order.filter((id) => existing.has(id)),
-      ...fieldsSorted.map((f) => f.id).filter((id) => !order.includes(id)),
-    ];
-    return normalized.map((id) => fieldsById.get(id)).filter(Boolean) as FormField[];
-  }, [form, order, fieldsById, fieldsSorted]);
-
-  const fetchForm = useCallback(async () => {
-    setLoading(true);
-    setLoadErr(null);
-    setActionErr(null);
-    setToast(null);
-
-    const res = await api<FormDetail>(`/api/admin/v1/forms/${formId}`);
-
-    if (!mountedRef.current) return;
-
-    if (!res.ok) {
-      setForm(null);
-      setOrder([]);
-      setOrderDirty(false);
-
-      const err = getErrMessage(res);
-      setLoadErr({ message: err.message, code: err.code, traceId: err.traceId });
-
-      setLoading(false);
-      return;
-    }
-
-    setForm(res.data);
-
-    const initialOrder = sortFieldsStable(res.data.fields || []).map((f) => f.id);
-    setOrder(initialOrder);
-    setOrderDirty(false);
-
-    setLoading(false);
-  }, [formId]);
-
   useEffect(() => {
     mountedRef.current = true;
-    const t = window.setTimeout(() => {
-      void fetchForm();
-    }, 0);
-
     return () => {
       mountedRef.current = false;
-      window.clearTimeout(t);
     };
-  }, [fetchForm]);
+  }, []);
+
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
 
   function showToast(msg: string) {
     setToast(msg);
@@ -173,7 +114,7 @@ export default function FormDetailClient({ formId }: { formId: string }) {
 
     setForm({ ...form, status: next });
     setStatusBusy(true);
-    setActionErr(null);
+    setHeaderErr(null);
 
     const res = await api<FormDetail>(`/api/admin/v1/forms/${formId}/status`, {
       method: "PATCH",
@@ -188,7 +129,7 @@ export default function FormDetailClient({ formId }: { formId: string }) {
     if (!res.ok) {
       const err = getErrMessage(res);
       setForm({ ...form, status: prev });
-      setActionErr({ message: err.message, code: err.code, traceId: err.traceId });
+      setHeaderErr({ message: err.message, code: err.code, traceId: err.traceId });
       return;
     }
 
@@ -196,157 +137,11 @@ export default function FormDetailClient({ formId }: { formId: string }) {
     showToast("Status updated.");
   }
 
-  function openCreateField() {
-    setFieldModalMode("create");
-    setFieldModalInitial(null);
-    setFieldModalApiError(null);
-    setFieldModalKey((k) => k + 1);
-    setFieldModalOpen(true);
-  }
-
-  function openEditField(field: FormField) {
-    setFieldModalMode("edit");
-    setFieldModalInitial(field);
-    setFieldModalApiError(null);
-    setFieldModalKey((k) => k + 1);
-    setFieldModalOpen(true);
-  }
-
-  async function submitField(input: FieldUpsertInput) {
-    setFieldModalBusy(true);
-    setFieldModalApiError(null);
-
-    const isEdit = fieldModalMode === "edit" && fieldModalInitial?.id;
-    const path = isEdit
-      ? `/api/admin/v1/forms/${formId}/fields/${fieldModalInitial!.id}`
-      : `/api/admin/v1/forms/${formId}/fields`;
-
-    const method = isEdit ? "PATCH" : "POST";
-
-    const res = await api<FormDetail>(path, {
-      method,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    });
-
-    if (!mountedRef.current) return;
-
-    setFieldModalBusy(false);
-
-    if (!res.ok) {
-      const err = getErrMessage(res);
-      const friendly =
-        err.code === "KEY_CONFLICT"
-          ? "Key already exists. Please choose a different key."
-          : err.message;
-
-      setFieldModalApiError({ message: friendly, code: err.code, traceId: err.traceId });
-      return;
-    }
-
-    setFieldModalOpen(false);
-    setFieldModalInitial(null);
-    setFieldModalApiError(null);
-    setForm(res.data);
-
-    const nextOrder = sortFieldsStable(res.data.fields || []).map((f) => f.id);
-    setOrder(nextOrder);
-    setOrderDirty(false);
-
-    showToast(isEdit ? "Field updated." : "Field created.");
-  }
-
-  async function deleteField(field: FormField) {
-    const ok = window.confirm(`Delete field "${field.label}"?\n\nThis cannot be undone.`);
-    if (!ok) return;
-
-    setActionErr(null);
-
-    const res = await api<FormDetail>(`/api/admin/v1/forms/${formId}/fields/${field.id}`, {
-      method: "DELETE",
-    });
-
-    if (!mountedRef.current) return;
-
-    if (!res.ok) {
-      const err = getErrMessage(res);
-      setActionErr({ message: err.message, code: err.code, traceId: err.traceId });
-      return;
-    }
-
-    setForm(res.data);
-    const nextOrder = sortFieldsStable(res.data.fields || []).map((f) => f.id);
-    setOrder(nextOrder);
-    setOrderDirty(false);
-
-    showToast("Field deleted.");
-  }
-
-  function swapInOrder(idA: string, idB: string) {
-    setOrder((prev) => {
-      const next = [...prev];
-      const ia = next.indexOf(idA);
-      const ib = next.indexOf(idB);
-      if (ia < 0 || ib < 0) return prev;
-      next[ia] = idB;
-      next[ib] = idA;
-      return next;
-    });
-    setOrderDirty(true);
-    setToast(null);
-  }
-
-  function moveUp(fieldId: string) {
-    const idx = order.indexOf(fieldId);
-    if (idx <= 0) return;
-    swapInOrder(order[idx - 1], order[idx]);
-  }
-
-  function moveDown(fieldId: string) {
-    const idx = order.indexOf(fieldId);
-    if (idx < 0 || idx >= order.length - 1) return;
-    swapInOrder(order[idx], order[idx + 1]);
-  }
-
-  async function saveOrder() {
-    if (!form) return;
-    setOrderBusy(true);
-    setActionErr(null);
-
-    const existing = new Set((form.fields || []).map((f) => f.id));
-    const normalized = [
-      ...order.filter((id) => existing.has(id)),
-      ...fieldsSorted.map((f) => f.id).filter((id) => !order.includes(id)),
-    ];
-
-    const res = await api<FormDetail>(`/api/admin/v1/forms/${formId}/fields/reorder`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ order: normalized }),
-    });
-
-    if (!mountedRef.current) return;
-
-    setOrderBusy(false);
-
-    if (!res.ok) {
-      const err = getErrMessage(res);
-      setActionErr({ message: err.message, code: err.code, traceId: err.traceId });
-      return;
-    }
-
-    setForm(res.data);
-    const nextOrder = sortFieldsStable(res.data.fields || []).map((f) => f.id);
-    setOrder(nextOrder);
-    setOrderDirty(false);
-
-    showToast("Order saved.");
-  }
-
-  const headerStatus = form?.status || "—";
+  const containerMax =
+    tab === "builder" ? "max-w-[1400px]" : "max-w-6xl";
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-6 p-6">
+    <div className={clsx("mx-auto w-full space-y-6 p-6", containerMax)}>
       <div className="flex items-center justify-between">
         <Link href="/admin/forms" className="text-sm text-gray-600 hover:text-gray-900">
           ← Forms
@@ -379,7 +174,7 @@ export default function FormDetailClient({ formId }: { formId: string }) {
           <div className="mt-4 flex gap-2">
             <button
               type="button"
-              onClick={() => void fetchForm()}
+              onClick={() => void refresh()}
               className="rounded-lg bg-black px-4 py-2 text-sm text-white hover:bg-black/90"
             >
               Retry
@@ -413,17 +208,10 @@ export default function FormDetailClient({ formId }: { formId: string }) {
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                <Link
-                  href={`/admin/forms/${form.id}/builder`}
-                  className="rounded-lg bg-black px-4 py-2 text-sm text-white hover:bg-black/90"
-                >
-                  Open builder
-                </Link>
-
                 <div className="flex items-center gap-2">
                   <div className="text-sm text-gray-500">Status</div>
                   <select
-                    value={headerStatus}
+                    value={form.status}
                     onChange={(e) => void setStatus(e.target.value as FormStatus)}
                     disabled={statusBusy}
                     className="rounded-lg border bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 disabled:opacity-50"
@@ -435,101 +223,49 @@ export default function FormDetailClient({ formId }: { formId: string }) {
                     ))}
                   </select>
                 </div>
-              </div>
-            </div>
-
-            {actionErr ? (
-              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-                <div className="font-medium">{actionErr.message}</div>
-                <div className="mt-1 text-xs text-red-700/80">
-                  {actionErr.code ? `Code: ${actionErr.code} · ` : null}
-                  {actionErr.traceId ? `traceId: ${actionErr.traceId}` : null}
-                </div>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="rounded-2xl border bg-white p-6">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <div className="text-lg font-semibold">Fields</div>
-                <div className="mt-1 text-sm text-gray-500">
-                  Manage fields, activation, and order (no drag&drop in MVP).
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                {orderDirty ? (
-                  <button
-                    type="button"
-                    onClick={() => void saveOrder()}
-                    disabled={orderBusy}
-                    className={clsx(
-                      "rounded-lg border px-4 py-2 text-sm",
-                      orderBusy ? "bg-gray-50 text-gray-500" : "hover:bg-gray-50"
-                    )}
-                  >
-                    {orderBusy ? "Saving…" : "Save order"}
-                  </button>
-                ) : (
-                  <div className="text-sm text-gray-400">Order is saved</div>
-                )}
 
                 <button
                   type="button"
-                  onClick={openCreateField}
-                  className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50"
+                  onClick={() => void refresh()}
+                  className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-60"
+                  disabled={statusBusy}
                 >
-                  Add field
+                  Refresh
                 </button>
               </div>
             </div>
 
-            <div className="mt-5">
-              {orderedFields.length === 0 ? (
-                <div className="rounded-2xl border border-dashed p-10 text-center">
-                  <div className="text-base font-medium">Add your first field</div>
-                  <div className="mt-1 text-sm text-gray-500">
-                    Start by adding a text field or a select field.
-                  </div>
-                  <button
-                    type="button"
-                    onClick={openCreateField}
-                    className="mt-4 rounded-lg border px-4 py-2 text-sm hover:bg-gray-50"
-                  >
-                    Add field
-                  </button>
+            {headerErr ? (
+              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                <div className="font-medium">{headerErr.message}</div>
+                <div className="mt-1 text-xs text-red-700/80">
+                  {headerErr.code ? `Code: ${headerErr.code} · ` : null}
+                  {headerErr.traceId ? `traceId: ${headerErr.traceId}` : null}
                 </div>
-              ) : (
-                <FieldsTable
-                  fields={form.fields}
-                  order={orderedFields.map((f) => f.id)}
-                  onMoveUp={moveUp}
-                  onMoveDown={moveDown}
-                  onEdit={openEditField}
-                  onDelete={deleteField}
-                  reorderDisabled={orderBusy}
-                />
-              )}
+              </div>
+            ) : null}
+
+            <div className="mt-5">
+              <FormTabs formId={formId} activeTab={tab} />
             </div>
           </div>
 
-          {fieldModalOpen ? (
-            <FieldModal
-              key={fieldModalKey}
-              mode={fieldModalMode}
-              initial={fieldModalInitial}
-              onClose={() => {
-                if (fieldModalBusy) return;
-                setFieldModalOpen(false);
-                setFieldModalInitial(null);
-                setFieldModalApiError(null);
-              }}
-              onSubmit={submitField}
-              busy={fieldModalBusy}
-              apiError={fieldModalApiError}
+          {tab === "overview" ? (
+            <OverviewPane
+              formId={formId}
+              form={form}
+              setForm={setForm}
+              showToast={showToast}
             />
-          ) : null}
+          ) : (
+            <FormWorkspace
+              formId={formId}
+              form={form}
+              setForm={setForm}
+              refresh={refresh}
+              showToast={showToast}
+            />
+          )}
         </>
       ) : null}
     </div>
