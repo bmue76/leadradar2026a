@@ -9,17 +9,15 @@ function renderPreviewField(f: FormField) {
   const label = f.label || f.key;
   const options = parseOptions(f.config);
 
+  const RequiredStar = f.required ? <span className="text-gray-400"> *</span> : null;
+
   if (t === "TEXTAREA") {
     return (
       <div key={f.id} className="space-y-1">
         <div className="text-sm font-medium text-gray-900">
-          {label}{f.required ? <span className="text-gray-400"> *</span> : null}
+          {label}{RequiredStar}
         </div>
-        <textarea
-          className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm"
-          rows={3}
-          placeholder={f.placeholder ?? ""}
-        />
+        <textarea className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm" rows={3} placeholder={f.placeholder ?? ""} />
         {f.helpText ? <div className="text-xs text-gray-500">{f.helpText}</div> : null}
       </div>
     );
@@ -29,13 +27,9 @@ function renderPreviewField(f: FormField) {
     return (
       <div key={f.id} className="space-y-1">
         <div className="text-sm font-medium text-gray-900">
-          {label}{f.required ? <span className="text-gray-400"> *</span> : null}
+          {label}{RequiredStar}
         </div>
-        <input
-          className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm"
-          type="email"
-          placeholder={f.placeholder ?? ""}
-        />
+        <input className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm" type="email" placeholder={f.placeholder ?? ""} />
         {f.helpText ? <div className="text-xs text-gray-500">{f.helpText}</div> : null}
       </div>
     );
@@ -45,13 +39,9 @@ function renderPreviewField(f: FormField) {
     return (
       <div key={f.id} className="space-y-1">
         <div className="text-sm font-medium text-gray-900">
-          {label}{f.required ? <span className="text-gray-400"> *</span> : null}
+          {label}{RequiredStar}
         </div>
-        <input
-          className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm"
-          type="tel"
-          placeholder={f.placeholder ?? ""}
-        />
+        <input className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm" type="tel" placeholder={f.placeholder ?? ""} />
         {f.helpText ? <div className="text-xs text-gray-500">{f.helpText}</div> : null}
       </div>
     );
@@ -61,7 +51,7 @@ function renderPreviewField(f: FormField) {
     return (
       <div key={f.id} className="space-y-1">
         <div className="text-sm font-medium text-gray-900">
-          {label}{f.required ? <span className="text-gray-400"> *</span> : null}
+          {label}{RequiredStar}
         </div>
         <select className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm">
           <option value="">—</option>
@@ -78,7 +68,7 @@ function renderPreviewField(f: FormField) {
     return (
       <div key={f.id} className="space-y-1">
         <div className="text-sm font-medium text-gray-900">
-          {label}{f.required ? <span className="text-gray-400"> *</span> : null}
+          {label}{RequiredStar}
         </div>
         <select multiple className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm">
           {options.map((o) => (
@@ -94,13 +84,9 @@ function renderPreviewField(f: FormField) {
     return (
       <div key={f.id} className="space-y-1">
         <label className="flex items-center gap-2 text-sm text-gray-900">
-          <input
-            type="checkbox"
-            className="h-4 w-4 rounded border-gray-300"
-            defaultChecked={parseCheckboxDefault(f.config)}
-          />
+          <input type="checkbox" className="h-4 w-4 rounded border-gray-300" defaultChecked={parseCheckboxDefault(f.config)} />
           <span className="font-medium">
-            {label}{f.required ? <span className="text-gray-400"> *</span> : null}
+            {label}{RequiredStar}
           </span>
         </label>
         {f.helpText ? <div className="text-xs text-gray-500">{f.helpText}</div> : null}
@@ -108,16 +94,13 @@ function renderPreviewField(f: FormField) {
     );
   }
 
+  // default TEXT
   return (
     <div key={f.id} className="space-y-1">
       <div className="text-sm font-medium text-gray-900">
-        {label}{f.required ? <span className="text-gray-400"> *</span> : null}
+        {label}{RequiredStar}
       </div>
-      <input
-        className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm"
-        type="text"
-        placeholder={f.placeholder ?? ""}
-      />
+      <input className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm" type="text" placeholder={f.placeholder ?? ""} />
       {f.helpText ? <div className="text-xs text-gray-500">{f.helpText}</div> : null}
     </div>
   );
@@ -129,16 +112,14 @@ export default function PreviewPane({ fields }: { fields: FormField[] }) {
       <div className="mb-3 flex items-center justify-between">
         <div>
           <div className="text-sm font-semibold text-gray-900">Preview</div>
-          <div className="text-xs text-gray-500">Online-only MVP preview</div>
+          <div className="text-xs text-gray-500">Renders active fields</div>
         </div>
-        <div className="text-xs text-gray-400">Shows active fields</div>
+        <div className="text-xs text-gray-400">Online-only MVP</div>
       </div>
 
       <div className="space-y-4">
         {fields.length === 0 ? (
-          <div className="rounded-2xl border border-dashed p-10 text-center text-sm text-gray-600">
-            No active fields.
-          </div>
+          <div className="rounded-2xl border border-dashed p-10 text-center text-sm text-gray-600">No active fields.</div>
         ) : (
           fields.map((f) => renderPreviewField(f))
         )}

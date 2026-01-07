@@ -1,38 +1,39 @@
-import Link from "next/link";
+"use client";
 
-type TabKey = "overview" | "builder";
+import * as React from "react";
 
-function tabClass(active: boolean) {
-  return [
-    "inline-flex items-center rounded-full px-3 py-1.5 text-sm",
-    active ? "bg-black text-white" : "border bg-white text-gray-700 hover:bg-gray-50",
-  ].join(" ");
-}
+export type TabKey = "builder" | "overview";
+
+const TABS: Array<{ key: TabKey; label: string }> = [
+  { key: "builder", label: "Builder" },
+  { key: "overview", label: "Overview" },
+];
 
 export default function FormTabs({
-  formId,
-  activeTab,
+  value,
+  onChange,
 }: {
-  formId: string;
-  activeTab: TabKey;
+  value: TabKey;
+  onChange: (k: TabKey) => void;
 }) {
-  const base = `/admin/forms/${formId}`;
-
-  const hrefOverview = base; // clean URL
-  const hrefBuilder = `${base}?tab=builder`;
-
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Link href={hrefOverview} className={tabClass(activeTab === "overview")}>
-        Overview
-      </Link>
-      <Link href={hrefBuilder} className={tabClass(activeTab === "builder")}>
-        Builder
-      </Link>
-
-      <div className="ml-2 text-xs text-gray-400">
-        One page · no duplicate editor
-      </div>
+    <div className="inline-flex rounded-xl border bg-white p-1">
+      {TABS.map((t) => {
+        const active = t.key === value;
+        return (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => onChange(t.key)}
+            className={[
+              "rounded-lg px-3 py-1.5 text-sm",
+              active ? "bg-black text-white" : "text-gray-700 hover:bg-gray-50",
+            ].join(" ")}
+          >
+            {t.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
