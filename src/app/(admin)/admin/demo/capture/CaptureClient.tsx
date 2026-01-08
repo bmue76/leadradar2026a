@@ -28,28 +28,36 @@ type FormDetail = {
 
 type FormValue = string | boolean | string[];
 
+const LS_MOBILE_KEY = "lr_demo_capture_mobile_api_key";
+
+function getMobileApiKeyClient(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return window.localStorage.getItem(LS_MOBILE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function setMobileApiKeyClient(v: string) {
+  if (typeof window === "undefined") return;
+  try {
+    if (!v) window.localStorage.removeItem(LS_MOBILE_KEY);
+    else window.localStorage.setItem(LS_MOBILE_KEY, v);
+  } catch {
+    // ignore
+  }
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function coerceBooleanLoose(v: unknown): boolean | undefined {
-  if (typeof v === "boolean") return v;
-  if (typeof v === "number") return v !== 0;
-  if (typeof v === "string") {
-    const s = v.trim().toLowerCase();
-    if (s === "true") return true;
-    if (s === "false") return false;
-    if (s === "1") return true;
-    if (s === "0") return false;
-  }
-  return undefined;
-}
-
 function parseOptions(config: unknown): string[] {
   if (!isRecord(config)) return [];
-  const raw = (config.options ?? config.selectOptions) as unknown;
-  if (!Array.isArray(raw)) return [];
-  return raw
+  const opts = config.options;
+  if (!Array.isArray(opts)) return [];
+  return opts
     .map((x) => String(x))
     .map((s) => s.trim())
     .filter(Boolean);
@@ -57,9 +65,9 @@ function parseOptions(config: unknown): string[] {
 
 function parseCheckboxDefault(config: unknown): boolean {
   if (!isRecord(config)) return false;
-  const raw = config.defaultValue ?? config.defaultBoolean ?? config.checkboxDefault;
-  const parsed = coerceBooleanLoose(raw);
-  return parsed ?? false;
+  const v = config.defaultValue;
+  if (typeof v === "boolean") return v;
+  return Boolean(v);
 }
 
 function normalizeType(t: string): string {
@@ -91,8 +99,22 @@ function trimValue(v: FormValue): FormValue {
   return v;
 }
 
+function buildMobileAuthHeaders(rawKey: string): Record<string, string> {
+  const k = rawKey.trim();
+  if (!k) return {};
+
+  // We intentionally send multiple header variants to match whatever requireMobileAuth expects.
+  // This is same-origin internal tooling; extra headers are harmless.
+  return {
+    "x-api-key": k,
+    "x-mobile-api-key": k,
+    authorization: `Bearer ${k}`,
+  };
+}
+
 export default function CaptureClient() {
   const [tenantSlug, setTenantSlug] = React.useState<string>(() => getTenantSlugClient());
+  const [mobileApiKey, setMobileApiKey] = React.useState<string>(() => getMobileApiKeyClient());
 
   const [loadingForms, setLoadingForms] = React.useState(true);
   const [forms, setForms] = React.useState<FormListItem[]>([]);
@@ -107,14 +129,34 @@ export default function CaptureClient() {
   const [error, setError] = React.useState<string | null>(null);
   const [success, setSuccess] = React.useState<{ leadId: string; deduped: boolean } | null>(null);
 
+  function ensureMobileKeyOrError(): string | null {
+    const k = mobileApiKey.trim();
+    if (!k) {
+      setError("Mobile API Key fehlt. Bitte oben unter “Mobile API Key (DEV)” setzen und Apply klicken.");
+      return null;
+    }
+    return k;
+  }
+
   async function loadForms(opts?: { keepSelection?: boolean }) {
     setLoadingForms(true);
     setError(null);
     setSuccess(null);
 
+    const k = ensureMobileKeyOrError();
+    if (!k) {
+      setForms([]);
+      setSelectedFormId("");
+      setDetail(null);
+      setValues({});
+      setLoadingForms(false);
+      return;
+    }
+
     const res = await adminFetchJson<{ forms: FormListItem[] }>("/api/mobile/v1/forms", {
       method: "GET",
       tenantSlug: tenantSlug.trim() ? tenantSlug.trim() : undefined,
+      headers: buildMobileAuthHeaders(k),
     });
 
     if (!res.ok) {
@@ -149,9 +191,18 @@ export default function CaptureClient() {
     setError(null);
     setSuccess(null);
 
+    const k = ensureMobileKeyOrError();
+    if (!k) {
+      setDetail(null);
+      setValues({});
+      setLoadingDetail(false);
+      return;
+    }
+
     const res = await adminFetchJson<FormDetail>(`/api/mobile/v1/forms/${formId}`, {
       method: "GET",
       tenantSlug: tenantSlug.trim() ? tenantSlug.trim() : undefined,
+      headers: buildMobileAuthHeaders(k),
     });
 
     if (!res.ok) {
@@ -169,8 +220,8 @@ export default function CaptureClient() {
       for (const f of res.data.fields) {
         if (!(f.key in next)) next[f.key] = emptyValueForField(f);
       }
-      for (const k of Object.keys(next)) {
-        if (!res.data.fields.some((f) => f.key === k)) delete next[k];
+      for (const kk of Object.keys(next)) {
+        if (!res.data.fields.some((f) => f.key === kk)) delete next[kk];
       }
       return next;
     });
@@ -221,6 +272,9 @@ export default function CaptureClient() {
     setError(null);
     setSuccess(null);
 
+    const k = ensureMobileKeyOrError();
+    if (!k) return;
+
     const reqErr = validateRequired();
     if (reqErr) {
       setError(reqErr);
@@ -249,7 +303,7 @@ export default function CaptureClient() {
       const res = await adminFetchJson<{ leadId: string; deduped: boolean }>("/api/mobile/v1/leads", {
         method: "POST",
         tenantSlug: tenantSlug.trim() ? tenantSlug.trim() : undefined,
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...buildMobileAuthHeaders(k) },
         body: JSON.stringify(payload),
       });
 
@@ -276,9 +330,14 @@ export default function CaptureClient() {
     void loadForms({ keepSelection: false });
   }
 
+  function onSaveMobileKey() {
+    const s = mobileApiKey.trim();
+    setMobileApiKeyClient(s);
+    void loadForms({ keepSelection: false });
+  }
+
   function renderField(f: FormField) {
-    const t0 = normalizeType(f.type);
-    const t = t0 === "SELECT" ? "SINGLE_SELECT" : t0; // alias
+    const t = normalizeType(f.type);
     const req = f.required ? " *" : "";
     const v = values[f.key] ?? emptyValueForField(f);
 
@@ -411,6 +470,31 @@ export default function CaptureClient() {
       </div>
 
       <div className="mb-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
+        <div className="mb-2 text-sm font-medium text-neutral-900">Mobile API Key (DEV)</div>
+        <div className="flex items-center gap-2">
+          <input
+            className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm font-mono"
+            value={mobileApiKey}
+            onChange={(e) => setMobileApiKey(e.target.value)}
+            placeholder="paste mobile api key (raw)"
+            disabled={submitting || loadingForms || loadingDetail}
+          />
+          <button
+            type="button"
+            onClick={onSaveMobileKey}
+            className="shrink-0 rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-60"
+            disabled={submitting || loadingForms || loadingDetail}
+          >
+            Apply
+          </button>
+        </div>
+        <div className="mt-2 text-xs text-neutral-600">
+          Required. Wird im Browser gespeichert (LocalStorage) und als Auth Header an <span className="font-mono">/api/mobile/v1/*</span>{" "}
+          gesendet.
+        </div>
+      </div>
+
+      <div className="mb-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
         <div className="mb-2 text-sm font-medium text-neutral-900">Tenant (optional, DEV Override)</div>
         <div className="flex items-center gap-2">
           <input
@@ -438,7 +522,9 @@ export default function CaptureClient() {
         <div className="mb-4 flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="text-sm font-medium text-neutral-900">Form auswählen</div>
-            <div className="text-xs text-neutral-600">Nur ACTIVE Forms werden angezeigt.</div>
+            <div className="text-xs text-neutral-600">
+              Hinweis: Mobile API listet nur ACTIVE Forms, die dem MobileDevice (ApiKey) zugewiesen sind.
+            </div>
           </div>
 
           <button
@@ -456,7 +542,12 @@ export default function CaptureClient() {
           <div className="text-sm text-neutral-600">Loading forms…</div>
         ) : forms.length === 0 ? (
           <div className="text-sm text-neutral-600">
-            Keine ACTIVE Forms gefunden. Aktiviere zuerst ein Formular unter /admin/forms.
+            Keine ACTIVE Forms gefunden. Prüfe:
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-neutral-600">
+              <li>Mobile API Key ist korrekt (sonst 401).</li>
+              <li>Form ist ACTIVE und hat mind. 1 aktives Field.</li>
+              <li>Form ist dem Device zugewiesen (MobileDeviceForm).</li>
+            </ul>
           </div>
         ) : (
           <div className="mb-5">
