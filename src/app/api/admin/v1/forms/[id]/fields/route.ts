@@ -53,56 +53,27 @@ const CoercedNullableInt = () =>
     return v;
   }, z.number().int().min(0).optional());
 
-const CreateFieldSchema = z.object({
-  key: FieldKeySchema,
-  label: z.preprocess(
-    (v) => (typeof v === "string" ? v.trim() : v),
-    z.string().min(1).max(200)
-  ),
-  type: z.nativeEnum(FieldType),
-
-  // tolerate null coming from UI drafts
-  required: NullableBoolean(),
-  isActive: NullableBoolean(),
-  sortOrder: CoercedNullableInt(),
-
-  placeholder: NullableTrimmedString(300),
-  helpText: NullableTrimmedString(500),
-
-  // tolerate null / unknown shapes
-  config: z.unknown().nullable().optional(),
-});
-
-function prismaMetaTarget(e: Prisma.PrismaClientKnownRequestError): unknown {
-  const meta = e.meta;
-  if (meta && typeof meta === "object" && "target" in meta) {
-    return (meta as { target?: unknown }).target;
-  }
-  return undefined;
-}
-
-function mapKeyConflict(e: unknown): { status: number; code: string; message: string; details?: unknown } | null {
-  if (e instanceof Prisma.PrismaClientKnownRequestError) {
-    if (e.code === "P2002") {
-      return {
-        status: 409,
-        code: "KEY_CONFLICT",
-        message: "Field key must be unique per form.",
-        details: { target: prismaMetaTarget(e) },
-      };
-    }
-  }
-  return null;
-}
-
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function coerceBooleanLoose(v: unknown): boolean | undefined {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (s === "true") return true;
+    if (s === "false") return false;
+    if (s === "1") return true;
+    if (s === "0") return false;
+  }
+  return undefined;
 }
 
 function normalizeOptionsFromConfig(config: unknown): string[] {
   if (!isRecord(config)) return [];
 
-  const opts = config.options;
+  const opts = config.options ?? config.selectOptions;
   if (Array.isArray(opts)) {
     return opts
       .map((x) => String(x))
@@ -127,6 +98,7 @@ function normalizeFieldConfig(type: FieldType, config: unknown): unknown {
   if (type === FieldType.SINGLE_SELECT || type === FieldType.MULTI_SELECT) {
     const out: Record<string, unknown> = { ...config };
     delete out.optionsText;
+    delete out.selectOptions;
     out.options = normalizeOptionsFromConfig(config);
     return out;
   }
@@ -135,7 +107,8 @@ function normalizeFieldConfig(type: FieldType, config: unknown): unknown {
     const out: Record<string, unknown> = { ...config };
 
     const raw = out.defaultValue ?? out.defaultBoolean ?? out.checkboxDefault;
-    const def = typeof raw === "boolean" ? raw : Boolean(raw);
+    const parsed = coerceBooleanLoose(raw);
+    const def = parsed ?? false;
 
     delete out.defaultBoolean;
     delete out.checkboxDefault;
@@ -145,6 +118,88 @@ function normalizeFieldConfig(type: FieldType, config: unknown): unknown {
   }
 
   return config;
+}
+
+function ensureSelectDefaults(config: unknown): Prisma.InputJsonValue {
+  const base: Record<string, unknown> = isRecord(config) ? { ...config } : {};
+  const opts = normalizeOptionsFromConfig(base);
+  base.options = opts.length > 0 ? opts : ["Option 1"];
+  delete base.optionsText;
+  delete base.selectOptions;
+  return base as Prisma.InputJsonValue;
+}
+
+function ensureCheckboxDefaults(config: unknown): Prisma.InputJsonValue {
+  const base: Record<string, unknown> = isRecord(config) ? { ...config } : {};
+  const raw = base.defaultValue ?? base.defaultBoolean ?? base.checkboxDefault;
+  const parsed = coerceBooleanLoose(raw);
+  base.defaultValue = parsed ?? false;
+  delete base.defaultBoolean;
+  delete base.checkboxDefault;
+  return base as Prisma.InputJsonValue;
+}
+
+const CreateFieldSchema = z
+  .object({
+    key: FieldKeySchema,
+    label: z.preprocess(
+      (v) => (typeof v === "string" ? v.trim() : v),
+      z.string().min(1).max(200)
+    ),
+    type: z.nativeEnum(FieldType),
+
+    // tolerate null coming from UI drafts
+    required: NullableBoolean(),
+    isActive: NullableBoolean(),
+    sortOrder: CoercedNullableInt(),
+
+    placeholder: NullableTrimmedString(300),
+    helpText: NullableTrimmedString(500),
+
+    // tolerate null / unknown shapes
+    config: z.unknown().nullable().optional(),
+  })
+  .superRefine((d, ctx) => {
+    // Enforce: if config is provided for select, it must contain >= 1 option.
+    // If config is omitted, we will set a sensible default in the handler.
+    if (d.type === FieldType.SINGLE_SELECT || d.type === FieldType.MULTI_SELECT) {
+      if (d.config !== undefined && d.config !== null) {
+        const opts = normalizeOptionsFromConfig(d.config);
+        if (opts.length < 1) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["config"],
+            message: "SELECT requires at least 1 option.",
+          });
+        }
+      }
+    }
+    if (d.type === FieldType.CHECKBOX) {
+      // no strict validation needed; handler will default to false if missing
+      return;
+    }
+  });
+
+function prismaMetaTarget(e: Prisma.PrismaClientKnownRequestError): unknown {
+  const meta = e.meta;
+  if (meta && typeof meta === "object" && "target" in meta) {
+    return (meta as { target?: unknown }).target;
+  }
+  return undefined;
+}
+
+function mapKeyConflict(e: unknown): { status: number; code: string; message: string; details?: unknown } | null {
+  if (e instanceof Prisma.PrismaClientKnownRequestError) {
+    if (e.code === "P2002") {
+      return {
+        status: 409,
+        code: "KEY_CONFLICT",
+        message: "Field key must be unique per form.",
+        details: { target: prismaMetaTarget(e) },
+      };
+    }
+  }
+  return null;
 }
 
 export async function POST(req: Request, ctx: unknown) {
@@ -176,6 +231,15 @@ export async function POST(req: Request, ctx: unknown) {
       const normalizedConfig =
         rawConfig === undefined ? undefined : (normalizeFieldConfig(body.type, rawConfig) as Prisma.InputJsonValue);
 
+      // MVP defaults (so creating/selecting types is stable even if UI didn't send config yet)
+      let finalConfig: Prisma.InputJsonValue | undefined = (normalizedConfig ?? undefined) as Prisma.InputJsonValue | undefined;
+
+      if (body.type === FieldType.SINGLE_SELECT || body.type === FieldType.MULTI_SELECT) {
+        finalConfig = ensureSelectDefaults(finalConfig);
+      } else if (body.type === FieldType.CHECKBOX) {
+        finalConfig = ensureCheckboxDefaults(finalConfig);
+      }
+
       return tx.formField.create({
         data: {
           tenantId,
@@ -191,7 +255,7 @@ export async function POST(req: Request, ctx: unknown) {
           placeholder: body.placeholder === undefined ? undefined : body.placeholder,
           helpText: body.helpText === undefined ? undefined : body.helpText,
 
-          config: (normalizedConfig ?? undefined) as Prisma.InputJsonValue | undefined,
+          config: finalConfig,
         },
       });
     });

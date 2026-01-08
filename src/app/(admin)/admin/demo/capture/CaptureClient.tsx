@@ -32,18 +32,34 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+function coerceBooleanLoose(v: unknown): boolean | undefined {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (s === "true") return true;
+    if (s === "false") return false;
+    if (s === "1") return true;
+    if (s === "0") return false;
+  }
+  return undefined;
+}
+
 function parseOptions(config: unknown): string[] {
   if (!isRecord(config)) return [];
-  const opts = config.options;
-  if (!Array.isArray(opts)) return [];
-  return opts.map((x) => String(x)).map((s) => s.trim()).filter(Boolean);
+  const raw = (config.options ?? config.selectOptions) as unknown;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((x) => String(x))
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 function parseCheckboxDefault(config: unknown): boolean {
   if (!isRecord(config)) return false;
-  const v = config.defaultValue;
-  if (typeof v === "boolean") return v;
-  return Boolean(v);
+  const raw = config.defaultValue ?? config.defaultBoolean ?? config.checkboxDefault;
+  const parsed = coerceBooleanLoose(raw);
+  return parsed ?? false;
 }
 
 function normalizeType(t: string): string {
@@ -153,7 +169,6 @@ export default function CaptureClient() {
       for (const f of res.data.fields) {
         if (!(f.key in next)) next[f.key] = emptyValueForField(f);
       }
-      // remove stale keys (optional cleanup)
       for (const k of Object.keys(next)) {
         if (!res.data.fields.some((f) => f.key === k)) delete next[k];
       }
@@ -262,7 +277,8 @@ export default function CaptureClient() {
   }
 
   function renderField(f: FormField) {
-    const t = normalizeType(f.type);
+    const t0 = normalizeType(f.type);
+    const t = t0 === "SELECT" ? "SINGLE_SELECT" : t0; // alias
     const req = f.required ? " *" : "";
     const v = values[f.key] ?? emptyValueForField(f);
 
