@@ -224,6 +224,193 @@ function FieldCard({
   );
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function parseSelectOptionsFromConfig(config: unknown): string[] {
+  if (!isRecord(config)) return [];
+  const raw = (config.options ?? config.selectOptions) as unknown;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((x) => String(x))
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function parseSelectOptionsFromText(optionsText: string): string[] {
+  return String(optionsText || "")
+    .split(/\r?\n/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function ensureOptionsTextNonEmpty(v: string): string {
+  const t = String(v || "").trim();
+  return t ? v : "Option 1";
+}
+
+function FieldPreview({
+  field,
+  disabled,
+}: {
+  field: {
+    id: string;
+    key: string;
+    label: string;
+    type: FieldType;
+    required: boolean;
+    isActive: boolean;
+    placeholder: string;
+    helpText: string;
+    config?: unknown;
+    checkboxDefault?: boolean;
+    optionsText?: string;
+  };
+  disabled: boolean;
+}) {
+  const t = field.type;
+  const req = field.required ? " *" : "";
+
+  const commonLabel = (
+    <label className="mb-1 block text-sm font-medium text-gray-900">
+      {field.label}
+      <span className="text-gray-400">{req}</span>
+    </label>
+  );
+
+  if (t === "TEXTAREA") {
+    return (
+      <div className="space-y-1">
+        {commonLabel}
+        <textarea
+          disabled
+          className={clsx(
+            "min-h-[96px] w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900",
+            disabled && "opacity-60"
+          )}
+          placeholder={field.placeholder || ""}
+          defaultValue=""
+        />
+        {field.helpText ? <div className="text-xs text-gray-500">{field.helpText}</div> : null}
+      </div>
+    );
+  }
+
+  if (t === "SINGLE_SELECT" || t === "MULTI_SELECT") {
+    const optsFromDraft = field.optionsText ? parseSelectOptionsFromText(field.optionsText) : [];
+    const optsFromCfg = parseSelectOptionsFromConfig(field.config);
+    const opts =
+      (optsFromDraft.length > 0 ? optsFromDraft : optsFromCfg).length > 0
+        ? optsFromDraft.length > 0
+          ? optsFromDraft
+          : optsFromCfg
+        : ["Option 1"];
+
+    return (
+      <div className="space-y-1">
+        {commonLabel}
+        <select
+          disabled
+          multiple={t === "MULTI_SELECT"}
+          className={clsx(
+            "w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900",
+            disabled && "opacity-60"
+          )}
+          value={t === "MULTI_SELECT" ? [] : ""}
+          onChange={() => void 0}
+        >
+          {t === "SINGLE_SELECT" ? <option value="">—</option> : null}
+          {opts.map((o) => (
+            <option key={o} value={o}>
+              {o}
+            </option>
+          ))}
+        </select>
+        {field.helpText ? <div className="text-xs text-gray-500">{field.helpText}</div> : null}
+      </div>
+    );
+  }
+
+  if (t === "CHECKBOX") {
+    const checked = Boolean(field.checkboxDefault);
+    return (
+      <div className="space-y-1">
+        <label className={clsx("flex items-center gap-2 text-sm text-gray-900", disabled && "opacity-60")}>
+          <input type="checkbox" className="h-4 w-4 rounded border-gray-300" checked={checked} readOnly disabled />
+          <span className="font-medium">
+            {field.label}
+            <span className="text-gray-400">{req}</span>
+          </span>
+        </label>
+        {field.helpText ? <div className="text-xs text-gray-500">{field.helpText}</div> : null}
+      </div>
+    );
+  }
+
+  const htmlType = t === "EMAIL" ? "email" : t === "PHONE" ? "tel" : "text";
+
+  return (
+    <div className="space-y-1">
+      {commonLabel}
+      <input
+        disabled
+        className={clsx(
+          "w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900",
+          disabled && "opacity-60"
+        )}
+        type={htmlType}
+        placeholder={field.placeholder || ""}
+        defaultValue=""
+      />
+      {field.helpText ? <div className="text-xs text-gray-500">{field.helpText}</div> : null}
+    </div>
+  );
+}
+
+function FormPreviewPanel({
+  title,
+  fields,
+  disabled,
+}: {
+  title: string;
+  fields: Array<{
+    id: string;
+    key: string;
+    label: string;
+    type: FieldType;
+    required: boolean;
+    isActive: boolean;
+    placeholder: string;
+    helpText: string;
+    config?: unknown;
+    checkboxDefault?: boolean;
+    optionsText?: string;
+  }>;
+  disabled: boolean;
+}) {
+  return (
+    <div className="rounded-2xl border bg-white p-5 shadow-sm">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-gray-900">{title}</div>
+          <div className="mt-1 text-xs text-gray-500">Realistische Vorschau (read-only).</div>
+        </div>
+      </div>
+
+      {fields.length === 0 ? (
+        <div className="rounded-xl border border-dashed p-8 text-center text-sm text-gray-500">Keine Felder.</div>
+      ) : (
+        <div className="space-y-4">
+          {fields.map((f) => (
+            <FieldPreview key={f.id} field={f} disabled={disabled} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Inspector({
   draft,
   saveState,
@@ -289,7 +476,17 @@ function Inspector({
           <div className="text-xs font-medium text-gray-700">Type</div>
           <select
             value={draft.type}
-            onChange={(e) => onDraftPatch({ type: e.target.value as FieldType })}
+            onChange={(e) => {
+              const nextType = e.target.value as FieldType;
+
+              if (nextType === "SINGLE_SELECT" || nextType === "MULTI_SELECT") {
+                const nextOptionsText = ensureOptionsTextNonEmpty(draft.optionsText);
+                onDraftPatch({ type: nextType, optionsText: nextOptionsText });
+                return;
+              }
+
+              onDraftPatch({ type: nextType });
+            }}
             className="mt-1 w-full rounded-lg border bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10"
           >
             <option value="TEXT">Text</option>
@@ -351,6 +548,10 @@ function Inspector({
             <textarea
               value={draft.optionsText}
               onChange={(e) => onDraftPatch({ optionsText: e.target.value })}
+              onBlur={() => {
+                const next = ensureOptionsTextNonEmpty(draft.optionsText);
+                if (next !== draft.optionsText) onDraftPatch({ optionsText: next });
+              }}
               className="mt-1 w-full resize-none rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10"
               rows={6}
             />
@@ -437,6 +638,46 @@ export default function BuilderV2(props: {
 
   const statuses: FormStatus[] = ["DRAFT", "ACTIVE", "ARCHIVED"];
 
+  const previewFields = React.useMemo(() => {
+    return visibleFields.map((f) => {
+      const base = {
+        id: f.id,
+        key: String(f.key ?? ""),
+        label: String(f.label ?? f.key ?? ""),
+        type: String(f.type ?? "TEXT").toUpperCase() as FieldType,
+        required: Boolean(f.required),
+        isActive: Boolean(f.isActive),
+        placeholder: String(f.placeholder ?? ""),
+        helpText: String(f.helpText ?? ""),
+        config: f.config ?? undefined,
+      };
+
+      if (props.draft && props.selectedId === f.id) {
+        const d = props.draft;
+        const merged = {
+          ...base,
+          key: d.key,
+          label: d.label,
+          type: d.type,
+          required: d.required,
+          isActive: d.isActive,
+          placeholder: d.placeholder,
+          helpText: d.helpText,
+          checkboxDefault: d.checkboxDefault,
+          optionsText: d.optionsText,
+        };
+
+        if (merged.type === "SINGLE_SELECT" || merged.type === "MULTI_SELECT") {
+          merged.optionsText = ensureOptionsTextNonEmpty(merged.optionsText ?? "");
+        }
+
+        return merged;
+      }
+
+      return base;
+    });
+  }, [visibleFields, props.draft, props.selectedId]);
+
   return (
     <div className="space-y-4">
       <div className="rounded-2xl border bg-white p-4">
@@ -490,7 +731,7 @@ export default function BuilderV2(props: {
       </div>
 
       {step === "build" ? (
-        <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
+        <div className="grid gap-4 lg:grid-cols-[380px_1fr_360px]">
           <div className="rounded-2xl border bg-white p-4">
             {visibleFields.length === 0 ? (
               <div className="rounded-2xl border border-dashed p-10 text-center">
@@ -534,6 +775,8 @@ export default function BuilderV2(props: {
               </DndContext>
             )}
           </div>
+
+          <FormPreviewPanel title="Preview" fields={previewFields} disabled={props.saveState === "saving"} />
 
           <Inspector
             draft={props.draft}
