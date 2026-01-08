@@ -13,10 +13,6 @@ export const runtime = "nodejs";
  * - "standard" template aligned with Mustervorlage:
  *   Kontaktinfos: ONLY yellow-marked OCR fields
  *   + Individualfelder (Selects + Notes)
- *
- * Backlog (not implemented here):
- * - DATE picker
- * - file/photo upload
  */
 
 const BodySchema = z.object({
@@ -143,7 +139,8 @@ export async function POST(req: Request) {
           sortOrder: idx,
           placeholder: f.placeholder ?? null,
           helpText: f.helpText ?? null,
-          config: f.config ?? null,
+          // IMPORTANT: Json? in Prisma createMany must be undefined (omit) or JsonNull/DbNull – NOT null.
+          config: f.config,
         })),
       });
 
