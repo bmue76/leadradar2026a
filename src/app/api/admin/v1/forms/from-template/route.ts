@@ -9,10 +9,13 @@ export const runtime = "nodejs";
 
 /**
  * TP 2.7 Addendum:
- * - Expand "standard" template to match the provided Formular-Vorlage PDF:
- *   Kontaktinfos + Individualfelder (select options) + Bemerkung.
+ * - "standard" template aligned with provided Mustervorlage:
+ *   Kontaktinfos: ONLY yellow-marked OCR fields
+ *   + Individualfelder (Selects + Notes)
  *
- * Note: DATE picker + file/photo upload are tracked as backlog (new FieldTypes + storage/UI).
+ * Backlog (not implemented here):
+ * - DATE picker
+ * - file/photo upload
  */
 
 const BodySchema = z.object({
@@ -31,34 +34,23 @@ type TemplateField = {
   config?: Record<string, unknown>;
 };
 
-const STANDARD_TEMPLATE_V2 = {
+const STANDARD_TEMPLATE_V3 = {
   key: "standard" as const,
-  version: 2,
+  version: 3,
   defaultName: "Messekontakt / Standard",
   defaultDescription:
-    "Standard-Leadformular (Kontaktinfos + Qualifizierung). Erstellt als DRAFT und kann danach im Builder angepasst werden.",
+    "Standard-Leadformular (Kontakt-OCR + Qualifizierung). Erstellt als DRAFT und kann danach im Builder angepasst werden.",
   fields: [
-    // Kontaktinformationen
-    { key: "company", label: "Firma", type: "TEXT", placeholder: "Firma" },
-    { key: "firstName", label: "Vorname", type: "TEXT", required: true, placeholder: "Vorname" },
-    { key: "lastName", label: "Nachname", type: "TEXT", required: true, placeholder: "Nachname" },
-    {
-      key: "salutation",
-      label: "Anrede",
-      type: "SINGLE_SELECT",
-      config: { options: ["Herr", "Frau", "Neutral"] },
-    },
-    { key: "jobTitle", label: "Funktion", type: "TEXT", placeholder: "z. B. Einkauf, CEO, Marketing" },
-    { key: "street", label: "Adresse (Strasse/Nr.)", type: "TEXT", placeholder: "Strasse / Nr." },
-    { key: "zip", label: "PLZ", type: "TEXT", placeholder: "PLZ" },
-    { key: "city", label: "Ort", type: "TEXT", placeholder: "Ort" },
-    { key: "country", label: "Land", type: "TEXT", placeholder: "Land" },
+    // Kontaktinformationen (ONLY yellow-marked OCR fields)
+    { key: "company", label: "Firma (OCR)", type: "TEXT", placeholder: "Firma" },
+    { key: "firstName", label: "Vorname (OCR)", type: "TEXT", required: true, placeholder: "Vorname" },
+    { key: "lastName", label: "Nachname (OCR)", type: "TEXT", required: true, placeholder: "Nachname" },
+    { key: "jobTitle", label: "Funktion (OCR)", type: "TEXT", placeholder: "z. B. Einkauf, CEO, Marketing" },
+    { key: "street", label: "Adresse (Strasse/Nr.) (OCR)", type: "TEXT", placeholder: "Strasse / Nr." },
+    { key: "zip", label: "PLZ (OCR)", type: "TEXT", placeholder: "PLZ" },
+    { key: "city", label: "Ort (OCR)", type: "TEXT", placeholder: "Ort" },
 
-    // Zusätzlich sinnvoll (war bereits in deinem Standard-MVP)
-    { key: "email", label: "E-Mail", type: "EMAIL", placeholder: "name@firma.ch" },
-    { key: "phone", label: "Telefon", type: "PHONE", placeholder: "+41 ..." },
-
-    // Individualfelder (gemäss PDF)
+    // Individualfelder (gemäss Vorlage)
     {
       key: "leadType",
       label: "Leadtyp",
@@ -106,22 +98,12 @@ const STANDARD_TEMPLATE_V2 = {
       config: { options: ["sehr dringend", "dringend", "nicht dringend"] },
     },
     { key: "notes", label: "Bemerkung", type: "TEXTAREA", placeholder: "Notizen / Kontext / nächste Schritte" },
-
-    // Optional (war in deinem MVP als Standard enthalten; kann im Builder deaktiviert werden)
-    {
-      key: "consent",
-      label: "Einwilligung (Consent)",
-      type: "CHECKBOX",
-      config: { defaultValue: false },
-      helpText: "Optional – je nach Datenschutz-Flow.",
-    },
   ] satisfies TemplateField[],
 };
 
 function getTemplate(key: "standard") {
-  if (key === "standard") return STANDARD_TEMPLATE_V2;
-  // (future templates)
-  return STANDARD_TEMPLATE_V2;
+  if (key === "standard") return STANDARD_TEMPLATE_V3;
+  return STANDARD_TEMPLATE_V3;
 }
 
 export async function POST(req: Request) {

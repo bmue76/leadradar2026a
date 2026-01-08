@@ -1,22 +1,27 @@
-# Addendum — TP 2.7: Standard Template v2 (Formular-Vorlage)
+# Addendum — TP 2.7: Standard Template (Mustervorlage)
 
 Datum: 2026-01-08  
-Status: DONE ✅ (Template Felder) / TODO ⏳ (Neue FieldTypes Upload/Date)
+Status: DONE ✅
 
 ## Ziel
-Den Standard-Formular-Template-Generator (/api/admin/v1/forms/from-template) so erweitern, dass die Mustervorlage
-aus dem bereitgestellten PDF direkt als DRAFT-Form angelegt wird (Kontaktinformationen + Individualfelder).
+Standard-Formular-Template so ausrichten, dass die Kontaktinformationen nur die gelb markierten OCR-Felder enthalten.
+Alle weiteren Kontaktfelder sind bewusst nicht im Template und können individuell ergänzt werden.
 
 ## Umsetzung
-- Route: POST /api/admin/v1/forms/from-template
-- Template: "standard" (Version 2)
-- Ergebnis: Beim Erstellen werden folgende Felder angelegt:
+Route:
+- POST /api/admin/v1/forms/from-template (templateKey: "standard")
 
-Kontaktinformationen:
-- company, firstName*, lastName*, salutation, jobTitle, street, zip, city, country
-Zusätzlich (aus MVP):
-- email, phone, consent (optional)
-Individualfelder (aus PDF):
+Template "standard" (Version 3):
+Kontaktinformationen (ONLY gelb markiert):
+- company (Firma, OCR)
+- firstName (Vorname, OCR) *
+- lastName (Nachname, OCR) *
+- jobTitle (Funktion, OCR)
+- street (Adresse Strasse/Nr., OCR)
+- zip (PLZ, OCR)
+- city (Ort, OCR)
+
+Individualfelder:
 - leadType (Single Select, Optionen)
 - handledBy (Single Select, Mitarbeiter/in A–C)
 - responsible (Single Select, Mitarbeiter/in A–C)
@@ -27,18 +32,11 @@ Individualfelder (aus PDF):
 - notes (TextArea)
 
 ## Proof
-1) Admin → Forms → “Neues Formular” → “Aus Vorlage erstellen”
-2) Das neue Formular öffnet sich unter /admin/forms/[id]
-3) Im Builder erscheinen alle Felder inkl. Select-Options.
+1) /admin/forms → Create form → From template
+2) Neues Formular wird erstellt (DRAFT)
+3) /admin/forms/[id] → Builder: Felder erscheinen wie oben, Select-Optionen editierbar
 
-## Backlog (innerhalb TP 2.7, aber noch NICHT umgesetzt)
-Weitere Felder aus PDF:
-- Datum (Picker) → neuer FieldType DATE + Renderer (Admin Preview + Mobile)
-- Datei-Upload / Foto-Upload → Attachment-Flow + Storage + UI + Mobile
-Diese Erweiterungen brauchen:
-- FieldType Erweiterung + Validierung
-- LeadAttachment handling (create + download) und UI
-- Storage (Dev+Prod) sauber
-
-## Commit (Vorschlag)
-feat(templates): expand standard form template fields (tp 2.7 addendum)
+## Backlog (nicht Teil dieses Addendums)
+- Datum (Picker)
+- Datei-Upload
+- Foto-Upload

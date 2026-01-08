@@ -204,7 +204,9 @@ export function CreateFormModal({ open, onClose, onCreated }: Props) {
                 onClick={() => setMode("TEMPLATE_STANDARD")}
                 className={[
                   "flex-1 rounded-xl border px-3 py-2 text-sm",
-                  mode === "TEMPLATE_STANDARD" ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 hover:bg-zinc-50",
+                  mode === "TEMPLATE_STANDARD"
+                    ? "border-zinc-900 bg-zinc-900 text-white"
+                    : "border-zinc-200 hover:bg-zinc-50",
                 ].join(" ")}
                 disabled={submitting}
               >
@@ -227,7 +229,8 @@ export function CreateFormModal({ open, onClose, onCreated }: Props) {
               <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">
                 Template: <span className="font-medium">Messekontakt / Standard</span>
                 <div className="mt-1 text-xs text-zinc-600">
-                  Includes: firstName, lastName, company, email, phone, notes, consent.
+                  Includes (Kontakt-OCR): company, firstName, lastName, jobTitle, street, zip, city. Plus: leadType,
+                  handledBy, responsible, leadQuality, interest, followUp, urgency, notes.
                 </div>
               </div>
             ) : null}
