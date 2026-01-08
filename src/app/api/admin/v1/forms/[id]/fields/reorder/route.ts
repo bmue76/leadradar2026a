@@ -1,18 +1,15 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { randomUUID } from "node:crypto";
 
-type Ctx = { params: { id: string } };
+type RouteCtx = { params: Promise<{ id: string }> };
 
 function traceId() {
-  // Node 18+ has crypto.randomUUID globally
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const c: any = globalThis.crypto;
-    if (c?.randomUUID) return c.randomUUID();
+    return randomUUID();
   } catch {
-    // ignore
+    return `trace_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   }
-  return `trace_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
 function ok<T>(data: T, tid: string) {
@@ -31,9 +28,11 @@ function uniqPreserve(xs: string[]) {
   return Array.from(new Set(xs));
 }
 
-async function handle(req: Request, ctx: Ctx) {
+async function handle(req: NextRequest, ctx: RouteCtx) {
   const tid = traceId();
-  const formId = String(ctx.params.id || "").trim();
+
+  const { id } = await ctx.params;
+  const formId = String(id || "").trim();
   if (!formId) return err(400, "BAD_REQUEST", "Missing form id.", tid);
 
   let body: unknown;
@@ -45,15 +44,16 @@ async function handle(req: Request, ctx: Ctx) {
 
   if (!isRecord(body)) return err(400, "BAD_REQUEST", "Invalid body.", tid);
 
+  // Client sends { order: [...] } — we also accept { orderedIds: [...] }
   const raw = (body.orderedIds ?? body.order) as unknown;
-  if (!Array.isArray(raw)) return err(400, "BAD_REQUEST", "Body must include orderedIds (array).", tid);
+  if (!Array.isArray(raw)) return err(400, "BAD_REQUEST", "Body must include order (array).", tid);
 
   const orderedIds = uniqPreserve(
     raw.map((x) => String(x)).map((s) => s.trim()).filter(Boolean)
   );
-  if (orderedIds.length === 0) return err(400, "BAD_REQUEST", "orderedIds must not be empty.", tid);
+  if (orderedIds.length === 0) return err(400, "BAD_REQUEST", "order must not be empty.", tid);
 
-  // Optional: if x-tenant-slug is provided, enforce it (nice safety net)
+  // Optional safety net (adminFetchJson typically sends this)
   const tenantSlug = req.headers.get("x-tenant-slug")?.trim() || "";
 
   const form = await prisma.form.findFirst({
@@ -63,7 +63,10 @@ async function handle(req: Request, ctx: Ctx) {
   if (!form) return err(404, "NOT_FOUND", "Form not found.", tid);
 
   if (tenantSlug) {
-    const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug }, select: { id: true } });
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: tenantSlug },
+      select: { id: true },
+    });
     if (!tenant || tenant.id !== form.tenantId) {
       // leak-safe
       return err(404, "NOT_FOUND", "Form not found.", tid);
@@ -78,19 +81,19 @@ async function handle(req: Request, ctx: Ctx) {
   const existingIds = fields.map((f) => f.id);
   const existingSet = new Set(existingIds);
 
-  // Must be a permutation of existing field ids
-  if (orderedIds.some((id) => !existingSet.has(id))) {
-    return err(400, "BAD_REQUEST", "orderedIds contains unknown field ids.", tid);
+  // Must be a full permutation of this form's fields
+  if (orderedIds.some((fid) => !existingSet.has(fid))) {
+    return err(400, "BAD_REQUEST", "order contains unknown field ids.", tid);
   }
   if (orderedIds.length !== existingIds.length) {
-    return err(400, "BAD_REQUEST", "orderedIds must include ALL fields of this form.", tid);
+    return err(400, "BAD_REQUEST", "order must include ALL fields of this form.", tid);
   }
 
   // Persist sortOrder (10,20,30,...)
   await prisma.$transaction(
-    orderedIds.map((id, idx) =>
+    orderedIds.map((fid, idx) =>
       prisma.formField.updateMany({
-        where: { id, formId, tenantId: form.tenantId },
+        where: { id: fid, formId, tenantId: form.tenantId },
         data: { sortOrder: (idx + 1) * 10 },
       })
     )
@@ -99,11 +102,11 @@ async function handle(req: Request, ctx: Ctx) {
   return ok({ formId, updated: orderedIds.length, orderedIds }, tid);
 }
 
-export async function POST(req: Request, ctx: Ctx) {
+export async function POST(req: NextRequest, ctx: RouteCtx) {
   return handle(req, ctx);
 }
 
-// optional: allow PUT too (handy if client changes later)
-export async function PUT(req: Request, ctx: Ctx) {
+// optional: allow PUT as well
+export async function PUT(req: NextRequest, ctx: RouteCtx) {
   return handle(req, ctx);
 }
