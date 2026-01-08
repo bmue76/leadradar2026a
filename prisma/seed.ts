@@ -2,18 +2,23 @@ import { prisma } from "../src/lib/prisma";
 import { hashPassword } from "../src/lib/password";
 import { createHmac, randomBytes } from "node:crypto";
 
-function requireMobileSecretOrNull(): string | null {
+const PREFIX_LEN = 8;
+
+function getMobileSecretOrNull(): string | null {
   const v = process.env.MOBILE_API_KEY_SECRET;
-  if (!v || v.trim().length < 16) return null;
-  return v;
+  if (!v) return null;
+  const s = v.trim();
+  if (s.length < 16) return null;
+  return s;
 }
 
 function generateApiKeyToken(): string {
+  // 32 bytes => ~43 chars base64url
   return randomBytes(32).toString("base64url");
 }
 
 function getPrefix(token: string): string {
-  return token.slice(0, 8);
+  return token.slice(0, PREFIX_LEN);
 }
 
 function hashApiKey(token: string, secret: string): string {
@@ -39,52 +44,86 @@ async function ensureSeedForm(args: { tenantId: string; formId: string; name: st
     select: { id: true },
   });
 
-  // A few basic fields (idempotent via createMany + skipDuplicates on @@unique([formId, key]))
-  await prisma.formField.createMany({
-    data: [
-      {
-        tenantId: args.tenantId,
-        formId: args.formId,
-        key: "firstName",
-        label: "First name",
-        type: "TEXT",
-        required: true,
-        sortOrder: 10,
-        isActive: true,
-      },
-      {
-        tenantId: args.tenantId,
-        formId: args.formId,
-        key: "lastName",
-        label: "Last name",
-        type: "TEXT",
-        required: true,
-        sortOrder: 20,
-        isActive: true,
-      },
-      {
-        tenantId: args.tenantId,
-        formId: args.formId,
-        key: "email",
-        label: "Email",
-        type: "EMAIL",
-        required: false,
-        sortOrder: 30,
-        isActive: true,
-      },
-      {
-        tenantId: args.tenantId,
-        formId: args.formId,
-        key: "note",
-        label: "Note",
-        type: "TEXTAREA",
-        required: false,
-        sortOrder: 40,
-        isActive: true,
-      },
-    ],
-    skipDuplicates: true,
-  });
+  // Enforce canonical seed fields (update if they exist)
+  const fields = [
+    {
+      key: "firstName",
+      label: "First name",
+      type: "TEXT" as const,
+      required: true,
+      isActive: true,
+      sortOrder: 10,
+      placeholder: null as string | null,
+      helpText: null as string | null,
+      config: null as unknown,
+    },
+    {
+      key: "lastName",
+      label: "Last name",
+      type: "TEXT" as const,
+      required: true,
+      isActive: true,
+      sortOrder: 20,
+      placeholder: null as string | null,
+      helpText: null as string | null,
+      config: null as unknown,
+    },
+    {
+      key: "email",
+      label: "Email",
+      type: "EMAIL" as const,
+      required: false,
+      isActive: true,
+      sortOrder: 30,
+      placeholder: null as string | null,
+      helpText: null as string | null,
+      config: null as unknown,
+    },
+    {
+      key: "note",
+      label: "Note",
+      type: "TEXTAREA" as const,
+      required: false,
+      isActive: true,
+      sortOrder: 40,
+      placeholder: null as string | null,
+      helpText: null as string | null,
+      config: null as unknown,
+    },
+  ];
+
+  await prisma.$transaction(
+    fields.map((f) =>
+      prisma.formField.upsert({
+        where: { formId_key: { formId: args.formId, key: f.key } },
+        update: {
+          tenantId: args.tenantId,
+          label: f.label,
+          type: f.type,
+          required: f.required,
+          isActive: f.isActive,
+          sortOrder: f.sortOrder,
+          placeholder: f.placeholder,
+          helpText: f.helpText,
+          config: f.config ?? null,
+        },
+        create: {
+          tenantId: args.tenantId,
+          formId: args.formId,
+          key: f.key,
+          label: f.label,
+          type: f.type,
+          required: f.required,
+          isActive: f.isActive,
+          sortOrder: f.sortOrder,
+          placeholder: f.placeholder,
+          helpText: f.helpText,
+          config: f.config ?? null,
+        },
+        select: { id: true },
+      })
+    )
+  );
 }
 
 async function resetSeedMobileForTenant(args: {
@@ -93,11 +132,9 @@ async function resetSeedMobileForTenant(args: {
   seedDeviceName: string;
   formIdToAssign: string;
 }) {
-  const secret = requireMobileSecretOrNull();
+  const secret = getMobileSecretOrNull();
   if (!secret) {
-    console.warn(
-      `[seed] MOBILE_API_KEY_SECRET missing/too short -> skipping mobile seed for tenant ${args.tenantSlug}`
-    );
+    console.warn(`[seed] MOBILE_API_KEY_SECRET missing/too short -> skipping mobile seed for tenant ${args.tenantSlug}`);
     return { apiKey: null as string | null };
   }
 
@@ -108,19 +145,15 @@ async function resetSeedMobileForTenant(args: {
   });
 
   if (existing) {
+    // Important order: delete assignments -> device -> apiKey (device has onDelete: Restrict)
     await prisma.$transaction([
-      prisma.mobileDeviceForm.deleteMany({
-        where: { tenantId: args.tenantId, deviceId: existing.id },
-      }),
-      prisma.mobileDevice.delete({
-        where: { id: existing.id },
-      }),
-      prisma.mobileApiKey.delete({
-        where: { id: existing.apiKeyId },
-      }),
+      prisma.mobileDeviceForm.deleteMany({ where: { tenantId: args.tenantId, deviceId: existing.id } }),
+      prisma.mobileDevice.delete({ where: { id: existing.id } }),
+      prisma.mobileApiKey.delete({ where: { id: existing.apiKeyId } }),
     ]);
   }
 
+  // Create new key (rotates on every seed run; raw key printed once)
   const token = generateApiKeyToken();
   const prefix = getPrefix(token);
   const keyHash = hashApiKey(token, secret);
@@ -159,106 +192,64 @@ async function resetSeedMobileForTenant(args: {
     return { apiKeyId: key.id, prefix: key.prefix, deviceId: device.id };
   });
 
-  console.log(
-    `[seed] Mobile API Key created for ${args.tenantSlug} (prefix ${created.prefix}) => x-api-key: ${token}`
-  );
-
+  console.log(`[seed] Mobile API Key created for ${args.tenantSlug} (prefix ${created.prefix}) => x-api-key: ${token}`);
   return { apiKey: token };
 }
 
-async function main() {
-  // Tenants
-  const tenantDemo = await prisma.tenant.upsert({
-    where: { id: "tenant_demo" },
+async function upsertTenant(args: { id: string; slug: string; name: string; country: string }) {
+  return prisma.tenant.upsert({
+    where: { id: args.id },
     update: {
-      slug: "demo",
-      name: "Demo AG",
-      country: "CH",
+      slug: args.slug,
+      name: args.name,
+      country: args.country,
     },
     create: {
-      id: "tenant_demo",
-      slug: "demo",
-      name: "Demo AG",
-      country: "CH",
+      id: args.id,
+      slug: args.slug,
+      name: args.name,
+      country: args.country,
     },
     select: { id: true, slug: true, name: true, country: true },
   });
+}
 
-  const tenantAtlex = await prisma.tenant.upsert({
-    where: { id: "tenant_atlex" },
+async function upsertUser(args: { email: string; tenantId: string; passwordHash: string }) {
+  return prisma.user.upsert({
+    where: { email: args.email },
     update: {
-      slug: "atlex",
-      name: "Atlex GmbH",
-      country: "CH",
+      tenantId: args.tenantId,
+      role: "TENANT_OWNER",
+      passwordHash: args.passwordHash,
+      firstName: "Beat",
+      lastName: "Müller",
+      emailVerifiedAt: new Date(),
     },
     create: {
-      id: "tenant_atlex",
-      slug: "atlex",
-      name: "Atlex GmbH",
-      country: "CH",
+      email: args.email,
+      tenantId: args.tenantId,
+      role: "TENANT_OWNER",
+      passwordHash: args.passwordHash,
+      firstName: "Beat",
+      lastName: "Müller",
+      emailVerifiedAt: new Date(),
     },
-    select: { id: true, slug: true, name: true, country: true },
+    select: { id: true, email: true, tenantId: true },
   });
+}
+
+async function main() {
+  const tenantDemo = await upsertTenant({ id: "tenant_demo", slug: "demo", name: "Demo AG", country: "CH" });
+  const tenantAtlex = await upsertTenant({ id: "tenant_atlex", slug: "atlex", name: "Atlex GmbH", country: "CH" });
 
   const passwordHash = await hashPassword("Admin1234!");
 
-  // Users
-  await prisma.user.upsert({
-    where: { email: "admin@demo.ch" },
-    update: {
-      tenantId: tenantDemo.id,
-      role: "TENANT_OWNER",
-      passwordHash,
-      firstName: "Beat",
-      lastName: "Müller",
-      emailVerifiedAt: new Date(),
-    },
-    create: {
-      email: "admin@demo.ch",
-      tenantId: tenantDemo.id,
-      role: "TENANT_OWNER",
-      passwordHash,
-      firstName: "Beat",
-      lastName: "Müller",
-      emailVerifiedAt: new Date(),
-    },
-  });
+  await upsertUser({ email: "admin@demo.ch", tenantId: tenantDemo.id, passwordHash });
+  await upsertUser({ email: "admin@atlex.ch", tenantId: tenantAtlex.id, passwordHash });
 
-  await prisma.user.upsert({
-    where: { email: "admin@atlex.ch" },
-    update: {
-      tenantId: tenantAtlex.id,
-      role: "TENANT_OWNER",
-      passwordHash,
-      firstName: "Beat",
-      lastName: "Müller",
-      emailVerifiedAt: new Date(),
-    },
-    create: {
-      email: "admin@atlex.ch",
-      tenantId: tenantAtlex.id,
-      role: "TENANT_OWNER",
-      passwordHash,
-      firstName: "Beat",
-      lastName: "Müller",
-      emailVerifiedAt: new Date(),
-    },
-  });
+  await ensureSeedForm({ tenantId: tenantDemo.id, formId: "form_demo_1", name: "Demo Lead Capture" });
+  await ensureSeedForm({ tenantId: tenantAtlex.id, formId: "form_atlex_1", name: "Atlex Lead Capture" });
 
-  // Seed forms for curl-proof and device assignments
-  await ensureSeedForm({
-    tenantId: tenantDemo.id,
-    formId: "form_demo_1",
-    name: "Demo Lead Capture",
-  });
-
-  await ensureSeedForm({
-    tenantId: tenantAtlex.id,
-    formId: "form_atlex_1",
-    name: "Atlex Lead Capture",
-  });
-
-  // Seed mobile device + api key + assignment (DEV output only)
   await resetSeedMobileForTenant({
     tenantId: tenantDemo.id,
     tenantSlug: "demo",
