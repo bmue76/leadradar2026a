@@ -50,6 +50,7 @@ function sortFieldsStable(fields: FormField[]) {
     const ao = typeof a.sortOrder === "number" ? a.sortOrder : 0;
     const bo = typeof b.sortOrder === "number" ? b.sortOrder : 0;
     if (ao !== bo) return ao - bo;
+    // tie-breaker only (should be rare once reorder assigns unique sortOrder)
     return String(a.label || "").localeCompare(String(b.label || ""));
   });
 }
@@ -116,7 +117,17 @@ export function useFormDetail(formId: string) {
   const [statusBusy, setStatusBusy] = React.useState(false);
 
   const [order, setOrder] = React.useState<string[]>([]);
-  const [orderDirty, setOrderDirty] = React.useState(false);
+  const orderRef = React.useRef<string[]>([]);
+  React.useEffect(() => {
+    orderRef.current = order;
+  }, [order]);
+
+  const [orderDirty, _setOrderDirty] = React.useState(false);
+  const orderDirtyRef = React.useRef(false);
+  function setOrderDirty(v: boolean) {
+    orderDirtyRef.current = v;
+    _setOrderDirty(v);
+  }
 
   const [showInactive, setShowInactive] = React.useState(false);
 
@@ -174,10 +185,12 @@ export function useFormDetail(formId: string) {
   const fieldsOrdered = React.useMemo(() => {
     if (!form) return [];
     const existing = new Set((form.fields || []).map((f) => f.id));
+
     const normalized = [
       ...order.filter((id) => existing.has(id)),
       ...fieldsSorted.map((f) => f.id).filter((id) => !order.includes(id)),
     ];
+
     return normalized.map((id) => fieldsById.get(id)).filter(Boolean) as FormField[];
   }, [form, order, fieldsById, fieldsSorted]);
 
@@ -186,6 +199,8 @@ export function useFormDetail(formId: string) {
     [fieldsOrdered, selectedId]
   );
 
+  // IMPORTANT:
+  // refresh() must NOT clobber order when orderDirty=true (e.g. while reorder save is in-flight).
   const refresh = React.useCallback(
     async (preferSelectedId?: string): Promise<FormDetail | null> => {
       setLoading(true);
@@ -208,23 +223,39 @@ export function useFormDetail(formId: string) {
         return null;
       }
 
-      setForm(res.data);
+      const nextForm = res.data;
+      setForm(nextForm);
 
-      const nextOrder = sortFieldsStable(res.data.fields || []).map((f) => f.id);
-      setOrder(nextOrder);
-      setOrderDirty(false);
+      const serverOrder = sortFieldsStable(nextForm.fields || []).map((f) => f.id);
+
+      // Preserve local order if user has a pending local reorder.
+      setOrder((prev) => {
+        if (orderDirtyRef.current) {
+          const existing = new Set(serverOrder);
+          const merged = [
+            ...prev.filter((id) => existing.has(id)),
+            ...serverOrder.filter((id) => !prev.includes(id)),
+          ];
+          return uniq(merged);
+        }
+        return serverOrder;
+      });
+
+      if (!orderDirtyRef.current) {
+        setOrderDirty(false);
+      }
 
       const desired =
-        preferSelectedId && res.data.fields.some((f) => f.id === preferSelectedId)
+        preferSelectedId && nextForm.fields.some((f) => f.id === preferSelectedId)
           ? preferSelectedId
-          : selectedId && res.data.fields.some((f) => f.id === selectedId)
+          : selectedId && nextForm.fields.some((f) => f.id === selectedId)
             ? selectedId
-            : res.data.fields[0]?.id || "";
+            : nextForm.fields[0]?.id || "";
 
       setSelectedId(desired);
 
       setLoading(false);
-      return res.data;
+      return nextForm;
     },
     [formId, selectedId]
   );
@@ -249,7 +280,6 @@ export function useFormDetail(formId: string) {
       setDraft(null);
       return;
     }
-    // selection change: reset draft & error state
     setDraft(deriveDraftFromField(selected));
     setSaveErr(null);
     setSaveTraceId(null);
@@ -280,7 +310,6 @@ export function useFormDetail(formId: string) {
   async function setStatus(next: FormStatus) {
     if (!form) return;
 
-    // Guardrail: ACTIVE requires >= 1 active field
     if (next === "ACTIVE") {
       const activeCount = (form.fields || []).filter((f) => Boolean(f.isActive)).length;
       if (activeCount < 1) {
@@ -317,14 +346,17 @@ export function useFormDetail(formId: string) {
     const key = (input?.keyHint?.trim() || `field_${Date.now()}`).trim();
     const type = input?.type ?? "TEXT";
 
+    const ph = (input?.placeholder ?? "").trim();
+    const ht = (input?.helpText ?? "").trim();
+
     const payload: Record<string, unknown> = {
       key,
       label: input?.label?.trim() || "New field",
       type,
       required: Boolean(input?.required ?? false),
       isActive: Boolean(input?.isActive ?? true),
-      placeholder: input?.placeholder?.trim().length ? input?.placeholder?.trim() : null,
-      helpText: input?.helpText?.trim().length ? input?.helpText?.trim() : null,
+      placeholder: ph.length ? ph : null,
+      helpText: ht.length ? ht : null,
       config: input?.config ?? null,
     };
 
@@ -477,7 +509,6 @@ export function useFormDetail(formId: string) {
     const recreated = next?.fields?.find((f) => f.key === s.key);
 
     if (recreated?.id) {
-      // try to restore approximate position
       const ids = sortFieldsStable(next?.fields || []).map((f) => f.id);
       const without = ids.filter((x) => x !== recreated.id);
       const insertAt = Math.min(last.index, without.length);
@@ -502,18 +533,19 @@ export function useFormDetail(formId: string) {
     const nextVisible = uniq(nextVisibleOrderIds);
     const visibleSet = new Set(visibleIds);
 
-    const positions: number[] = [];
-    order.forEach((id, idx) => {
-      if (visibleSet.has(id)) positions.push(idx);
+    setOrder((prev) => {
+      const positions: number[] = [];
+      prev.forEach((id, idx) => {
+        if (visibleSet.has(id)) positions.push(idx);
+      });
+
+      const nextOrder = [...prev];
+      for (let i = 0; i < positions.length; i++) {
+        nextOrder[positions[i]] = nextVisible[i] ?? nextOrder[positions[i]];
+      }
+      return uniq(nextOrder);
     });
 
-    const nextOrder = [...order];
-    for (let i = 0; i < positions.length; i++) {
-      nextOrder[positions[i]] = nextVisible[i] ?? nextOrder[positions[i]];
-    }
-
-    const normalized = uniq(nextOrder);
-    setOrder(normalized);
     setOrderDirty(true);
     setSaveState("dirty");
     scheduleOrderAutosave();
@@ -522,13 +554,17 @@ export function useFormDetail(formId: string) {
   async function saveOrder() {
     if (!form) return;
 
+    const currentOrder = orderRef.current;
+
     const existing = new Set((form.fields || []).map((f) => f.id));
     const normalized = [
-      ...order.filter((id) => existing.has(id)),
-      ...fieldsSorted.map((f) => f.id).filter((id) => !order.includes(id)),
+      ...currentOrder.filter((id) => existing.has(id)),
+      ...fieldsSorted.map((f) => f.id).filter((id) => !currentOrder.includes(id)),
     ];
 
     beginSave();
+    setSaveErr(null);
+    setSaveTraceId(null);
 
     const res = await api<unknown>(`/api/admin/v1/forms/${formId}/fields/reorder`, {
       method: "POST",
@@ -546,8 +582,24 @@ export function useFormDetail(formId: string) {
       return;
     }
 
-    await refresh();
+    // ✅ Optimistic apply: avoid refresh() clobber / "jump back"
+    setOrder(normalized);
     setOrderDirty(false);
+
+    // keep form.fields sortOrder in sync locally (nice-to-have)
+    setForm((prev) => {
+      if (!prev) return prev;
+      const map = new Map<string, number>();
+      normalized.forEach((id, idx) => map.set(id, (idx + 1) * 10));
+      return {
+        ...prev,
+        fields: (prev.fields || []).map((f) => ({
+          ...f,
+          sortOrder: map.get(f.id) ?? (typeof f.sortOrder === "number" ? f.sortOrder : 0),
+        })),
+      };
+    });
+
     endSaveSuccess();
   }
 
@@ -588,6 +640,7 @@ export function useFormDetail(formId: string) {
       return;
     }
 
+    // refresh is ok, but must not clobber order while orderDirty=true
     await refresh(id);
     endSaveSuccess();
   }
