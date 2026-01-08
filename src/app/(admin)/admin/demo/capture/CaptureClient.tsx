@@ -102,7 +102,6 @@ function trimValue(v: FormValue): FormValue {
 function buildMobileAuthHeaders(rawKey: string): Record<string, string> {
   const k = rawKey.trim();
   if (!k) return {};
-  // seed.ts logged: "=> x-api-key: <token>"
   return { "x-api-key": k };
 }
 
