@@ -53,6 +53,39 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+function parseFormsPayload(payload: unknown): FormListItem[] {
+  // Accept multiple shapes:
+  // A) { forms: [...] }
+  // B) { data: { forms: [...] } }  (in case wrapper leaked through)
+  // C) [...] (direct array)
+  if (Array.isArray(payload)) return payload as FormListItem[];
+
+  if (!isRecord(payload)) return [];
+
+  const formsA = payload.forms;
+  if (Array.isArray(formsA)) return formsA as FormListItem[];
+
+  const data = payload.data;
+  if (isRecord(data) && Array.isArray(data.forms)) return data.forms as FormListItem[];
+
+  return [];
+}
+
+function parseDetailPayload(payload: unknown): FormDetail | null {
+  // Accept:
+  // A) { id, name, fields: [...] }
+  // B) { data: { id, name, fields: [...] } }
+  if (!isRecord(payload)) return null;
+
+  const direct = payload;
+  if (typeof direct.id === "string" && Array.isArray(direct.fields)) return direct as unknown as FormDetail;
+
+  const data = payload.data;
+  if (isRecord(data) && typeof data.id === "string" && Array.isArray(data.fields)) return data as unknown as FormDetail;
+
+  return null;
+}
+
 function parseOptions(config: unknown): string[] {
   if (!isRecord(config)) return [];
   const opts = config.options;
@@ -146,7 +179,7 @@ export default function CaptureClient() {
       return;
     }
 
-    const res = await adminFetchJson<{ forms: FormListItem[] }>("/api/mobile/v1/forms", {
+    const res = await adminFetchJson<unknown>("/api/mobile/v1/forms", {
       method: "GET",
       tenantSlug: tenantSlug.trim() ? tenantSlug.trim() : undefined,
       headers: buildMobileAuthHeaders(k),
@@ -162,12 +195,16 @@ export default function CaptureClient() {
       return;
     }
 
-    const nextForms = res.data.forms;
+    const nextForms = parseFormsPayload(res.data);
     setForms(nextForms);
 
     const keep = opts?.keepSelection ?? false;
     const nextSelected =
-      keep && selectedFormId && nextForms.some((f) => f.id === selectedFormId) ? selectedFormId : nextForms[0]?.id ?? "";
+      keep && selectedFormId && nextForms.some((f) => f.id === selectedFormId)
+        ? selectedFormId
+        : nextForms.length > 0
+          ? nextForms[0].id
+          : "";
 
     setSelectedFormId(nextSelected);
     setLoadingForms(false);
@@ -192,7 +229,7 @@ export default function CaptureClient() {
       return;
     }
 
-    const res = await adminFetchJson<FormDetail>(`/api/mobile/v1/forms/${formId}`, {
+    const res = await adminFetchJson<unknown>(`/api/mobile/v1/forms/${formId}`, {
       method: "GET",
       tenantSlug: tenantSlug.trim() ? tenantSlug.trim() : undefined,
       headers: buildMobileAuthHeaders(k),
@@ -206,15 +243,24 @@ export default function CaptureClient() {
       return;
     }
 
-    setDetail(res.data);
+    const parsed = parseDetailPayload(res.data);
+    if (!parsed) {
+      setDetail(null);
+      setValues({});
+      setError("Unexpected response shape from /api/mobile/v1/forms/:id");
+      setLoadingDetail(false);
+      return;
+    }
+
+    setDetail(parsed);
 
     setValues((prev) => {
       const next: Record<string, FormValue> = { ...prev };
-      for (const f of res.data.fields) {
+      for (const f of parsed.fields) {
         if (!(f.key in next)) next[f.key] = emptyValueForField(f);
       }
       for (const kk of Object.keys(next)) {
-        if (!res.data.fields.some((f) => f.key === kk)) delete next[kk];
+        if (!parsed.fields.some((f) => f.key === kk)) delete next[kk];
       }
       return next;
     });
