@@ -102,14 +102,8 @@ function trimValue(v: FormValue): FormValue {
 function buildMobileAuthHeaders(rawKey: string): Record<string, string> {
   const k = rawKey.trim();
   if (!k) return {};
-
-  // We intentionally send multiple header variants to match whatever requireMobileAuth expects.
-  // This is same-origin internal tooling; extra headers are harmless.
-  return {
-    "x-api-key": k,
-    "x-mobile-api-key": k,
-    authorization: `Bearer ${k}`,
-  };
+  // seed.ts logged: "=> x-api-key: <token>"
+  return { "x-api-key": k };
 }
 
 export default function CaptureClient() {
@@ -476,7 +470,7 @@ export default function CaptureClient() {
             className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm font-mono"
             value={mobileApiKey}
             onChange={(e) => setMobileApiKey(e.target.value)}
-            placeholder="paste mobile api key (raw)"
+            placeholder="paste mobile api key (raw) — header x-api-key"
             disabled={submitting || loadingForms || loadingDetail}
           />
           <button
@@ -489,8 +483,8 @@ export default function CaptureClient() {
           </button>
         </div>
         <div className="mt-2 text-xs text-neutral-600">
-          Required. Wird im Browser gespeichert (LocalStorage) und als Auth Header an <span className="font-mono">/api/mobile/v1/*</span>{" "}
-          gesendet.
+          Required. Wird im Browser gespeichert (LocalStorage) und als <span className="font-mono">x-api-key</span> an{" "}
+          <span className="font-mono">/api/mobile/v1/*</span> gesendet.
         </div>
       </div>
 
@@ -523,7 +517,7 @@ export default function CaptureClient() {
           <div className="min-w-0">
             <div className="text-sm font-medium text-neutral-900">Form auswählen</div>
             <div className="text-xs text-neutral-600">
-              Hinweis: Mobile API listet nur ACTIVE Forms, die dem MobileDevice (ApiKey) zugewiesen sind.
+              Mobile API listet nur ACTIVE Forms, die dem Device (ApiKey) zugewiesen sind.
             </div>
           </div>
 
@@ -541,14 +535,7 @@ export default function CaptureClient() {
         {loadingForms ? (
           <div className="text-sm text-neutral-600">Loading forms…</div>
         ) : forms.length === 0 ? (
-          <div className="text-sm text-neutral-600">
-            Keine ACTIVE Forms gefunden. Prüfe:
-            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-neutral-600">
-              <li>Mobile API Key ist korrekt (sonst 401).</li>
-              <li>Form ist ACTIVE und hat mind. 1 aktives Field.</li>
-              <li>Form ist dem Device zugewiesen (MobileDeviceForm).</li>
-            </ul>
-          </div>
+          <div className="text-sm text-neutral-600">Keine ACTIVE Forms gefunden (oder Device hat keine Assignments).</div>
         ) : (
           <div className="mb-5">
             <select
