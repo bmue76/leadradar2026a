@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { Prisma, FormStatus, FieldType } from "@prisma/client";
 
 import { jsonError, jsonOk } from "@/lib/api";
 import { requireAdminAuth } from "@/lib/auth";
@@ -9,7 +10,7 @@ export const runtime = "nodejs";
 
 /**
  * TP 2.7 Addendum:
- * - "standard" template aligned with provided Mustervorlage:
+ * - "standard" template aligned with Mustervorlage:
  *   Kontaktinfos: ONLY yellow-marked OCR fields
  *   + Individualfelder (Selects + Notes)
  *
@@ -27,11 +28,11 @@ const BodySchema = z.object({
 type TemplateField = {
   key: string;
   label: string;
-  type: "TEXT" | "TEXTAREA" | "SINGLE_SELECT" | "MULTI_SELECT" | "CHECKBOX" | "EMAIL" | "PHONE";
+  type: FieldType;
   required?: boolean;
   placeholder?: string;
   helpText?: string;
-  config?: Record<string, unknown>;
+  config?: Prisma.InputJsonValue;
 };
 
 const STANDARD_TEMPLATE_V3 = {
@@ -121,11 +122,11 @@ export async function POST(req: Request) {
           tenantId,
           name,
           description,
-          status: "DRAFT",
+          status: FormStatus.DRAFT,
           config: {
             createdFromTemplate: tpl.key,
             templateVersion: tpl.version,
-          },
+          } as Prisma.InputJsonValue,
         },
         select: { id: true },
       });
@@ -142,7 +143,7 @@ export async function POST(req: Request) {
           sortOrder: idx,
           placeholder: f.placeholder ?? null,
           helpText: f.helpText ?? null,
-          config: (f.config ?? null) as any,
+          config: f.config ?? null,
         })),
       });
 
