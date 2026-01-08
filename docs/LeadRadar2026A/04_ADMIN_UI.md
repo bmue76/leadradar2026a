@@ -1,6 +1,6 @@
 # LeadRadar2026A – Admin UI Screens
 
-Stand: 2026-01-06  
+Stand: 2026-01-08  
 Design: Apple-clean (reduziert, robust, klare States) — Notion-Elemente nur wo nötig.
 
 ---
@@ -80,8 +80,57 @@ UX Notes (Apple-clean):
 - Error: “Couldn’t load exports.” + Trace + Retry
 
 Dev Tenant Context:
-- `x-tenant-slug` Header (curl)
-- UI: optional localStorage helper `leadradar.devTenantSlug` oder `DEV_TENANT_SLUG` env
+- UI DEV helper via `localStorage`:
+  - `lr_admin_tenant_slug` (Tenant override)
+  - `lr_admin_user_id` (DEV user id header)
+
+---
+
+## Screen: Mobile Ops (`/admin/settings/mobile`) — TP 2.9
+
+Ziel:
+- Mobile Ops produktfähig machen (ApiKeys/Devices/Assignments)
+- Demo Capture Key Handling vereinfachen (DEV convenience)
+
+Inhalt (MVP):
+1) Section “ApiKeys”
+- Tabelle: Prefix | Label | Status | Last used | Created | Actions (Revoke)
+- Action “Create key”:
+  - Modal: label, “Create device” (default true), deviceName
+  - Danach: One-time token Dialog (Copy + “Open Demo Capture”)
+  - DEV convenience: Token wird in `localStorage` gespeichert: `leadradar.devMobileApiKey`
+
+2) Section “Devices”
+- Tabelle: Name | Status | Last seen | Assigned forms count | ApiKey prefix | Actions (Manage)
+- Manage (Drawer):
+  - Rename
+  - Status toggle ACTIVE/DISABLED
+  - Assignments Editor (Replace Strategy)
+    - Default nur ACTIVE Forms
+    - Optional Toggle “Show drafts/archived”
+
+3) Demo Capture Shortcut
+- Button “Demo Capture (Key required)”
+- Erwartung: Demo Capture liest `leadradar.devMobileApiKey` aus localStorage.
+
+API Wiring:
+- Keys:
+  - `GET /api/admin/v1/mobile/keys`
+  - `POST /api/admin/v1/mobile/keys`
+  - `POST /api/admin/v1/mobile/keys/:id/revoke`
+- Devices:
+  - `GET /api/admin/v1/mobile/devices`
+  - `GET /api/admin/v1/mobile/devices/:id`
+  - `PATCH /api/admin/v1/mobile/devices/:id`
+- Assignments:
+  - `PUT /api/admin/v1/mobile/devices/:id/assignments`
+- Forms list (Assignments UI):
+  - `GET /api/admin/v1/mobile/forms?status=ACTIVE|ALL|...`
+
+UX Notes (ops-fokussiert):
+- Kein großes UX-Polish: robustes Management & klare Fehlerstates
+- Errors immer mit TraceID (API Standard)
+- Replace Strategy klar kommunizieren
 
 ---
 

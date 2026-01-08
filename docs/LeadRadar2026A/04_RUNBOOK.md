@@ -1,6 +1,6 @@
 # LeadRadar2026A – Runbook (Local/Deploy)
 
-Stand: 2026-01-06
+Stand: 2026-01-08
 
 ---
 
@@ -32,11 +32,10 @@ Start:
 ### Required (Local Dev)
 - `DATABASE_URL` – Postgres connection
 - `AUTH_SESSION_SECRET` – Session/Auth Secret (>= 32 chars)
-- `MOBILE_API_KEY_SECRET` – TP 2.5: HMAC Secret für ApiKey Hashing (>= 32 bytes empfohlen)
+- `MOBILE_API_KEY_SECRET` – TP 2.5: Secret für ApiKey Hashing (>= 32 bytes empfohlen)
 
 ### Optional / Dev Convenience
 - `NEXT_PUBLIC_DEFAULT_TENANT_SLUG`
-- `NEXT_PUBLIC_TENANT_SLUG_DEV`
 - Seed-bezogene Variablen (falls im Seed-Skript genutzt):
   - `SEED_TENANT_SLUG`
   - `SEED_TENANT_NAME`
@@ -80,19 +79,60 @@ TP 2.5 Seed Verhalten:
 
 ### Überblick
 - Mobile Requests müssen `x-api-key: <token>` senden.
-- ApiKeys werden in der DB nur als Hash gespeichert (HMAC-SHA256 + `MOBILE_API_KEY_SECRET`).
+- ApiKeys werden in der DB nur als Hash gespeichert (niemals Klartext).
 - Klartext Key wird nur einmalig beim Create angezeigt (Admin UI / Admin API).
+
+### Ops Telemetry
+- `GET /api/mobile/v1/forms` aktualisiert:
+  - `MobileApiKey.lastUsedAt`
+  - `MobileDevice.lastSeenAt`
+Best-effort (Phase 1). Dient primär der Ops-Übersicht im Admin.
+
+---
+
+## Mobile Ops (Admin) — TP 2.9
+
+### Admin Screen
+- `/admin/settings/mobile` (Mobile Ops)
+  - ApiKeys erstellen/listen/revoke
+  - Devices verwalten
+  - Form Assignments (Replace Strategy)
+
+### DEV Storage Keys
+Im Browser (DEV convenience):
+- Admin tenant override: `lr_admin_tenant_slug`
+- Admin dev user id (Header x-user-id): `lr_admin_user_id`
+- Mobile api key (Demo Capture + Ops): `leadradar.devMobileApiKey`
+
+Wichtig:
+- Diese Keys sind DEV helper. In PROD ist das nicht das primäre Auth-Konzept.
 
 ### Key Rotation (operativ)
 Empfohlenes Vorgehen:
-1) Neuen ApiKey erstellen (Admin: `/admin/settings/devices` oder Admin API)
-2) Mobile Client auf neuen Key umstellen
-3) Alten Key revoken (Admin revoke)
-4) Optional: Device-Zuweisungen prüfen/aktualisieren
+1) Neuen ApiKey erstellen (Admin: `/admin/settings/mobile`)
+2) Mobile Client / Device auf neuen Key umstellen
+3) Alten Key revoken (Admin Revoke)
+4) Assignments prüfen/aktualisieren (Device ↔ Forms)
 
 ### Device Form Assignment
 - Mobile Endpoints liefern/akzeptieren nur Forms, die dem Device zugewiesen sind.
 - Unassigned => 404 NOT_FOUND (leak-safe).
+- Assignments werden per Replace Strategy gesetzt:
+  - `PUT /api/admin/v1/mobile/devices/:id/assignments`
+
+---
+
+## Demo Capture (DEV-only)
+
+### Zweck
+- `/admin/demo/capture` erzeugt echte Leads über Mobile API v1, damit `/admin/leads` und CSV Exports Daten haben.
+
+### Key Handling
+- Demo Capture liest den Key aus `localStorage`:
+  - `leadradar.devMobileApiKey`
+- Optional (DEV-only): `?key=<token>`
+  - setzt `localStorage`, danach wird die URL bereinigt (Param entfernt)
+- Wenn kein Key vorhanden: Hinweis + Link zu `/admin/settings/mobile`
 
 ---
 
@@ -126,7 +166,6 @@ Das ist beabsichtigt (keine Informationsleaks).
 - `npm run typecheck` / `npm run lint` / `npm run build`
 - `npx prisma generate`
 - `npx prisma db seed`
-- Curl Proofs (siehe Teilprojekt-Doku TP 2.5)
 
 ---
 
@@ -136,4 +175,3 @@ Das ist beabsichtigt (keine Informationsleaks).
 - `DATABASE_URL`, `AUTH_SESSION_SECRET`, `MOBILE_API_KEY_SECRET` sind Pflicht für Produktivbetrieb.
 - Migrations: `npx prisma migrate deploy` im Deploy-Prozess.
 - Storage/Exports je nach Setup (Runbook erweitert sich mit Infrastrukturentscheid).
-
