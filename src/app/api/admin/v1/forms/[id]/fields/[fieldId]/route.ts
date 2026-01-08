@@ -25,14 +25,6 @@ async function getParams<T extends Record<string, string>>(ctx: unknown): Promis
   return params as T;
 }
 
-function toNullableJsonInput(
-  v: unknown | null | undefined
-): Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput | undefined {
-  if (v === undefined) return undefined; // don't update
-  if (v === null) return Prisma.DbNull; // clear to DB NULL
-  return v as Prisma.InputJsonValue;
-}
-
 const FieldKeySchema = z
   .string()
   .trim()
@@ -75,6 +67,58 @@ function mapKeyConflict(e: unknown): { status: number; code: string; message: st
   return null;
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function normalizeOptionsFromConfig(config: unknown): string[] {
+  if (!isRecord(config)) return [];
+
+  const opts = config.options;
+  if (Array.isArray(opts)) {
+    return opts
+      .map((x) => String(x))
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  const ot = config.optionsText;
+  if (typeof ot === "string") {
+    return ot
+      .split(/\r?\n/g)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+function normalizeFieldConfig(type: FieldType, config: unknown): unknown {
+  if (!isRecord(config)) return config;
+
+  if (type === FieldType.SINGLE_SELECT || type === FieldType.MULTI_SELECT) {
+    const out: Record<string, unknown> = { ...config };
+    delete out.optionsText;
+    out.options = normalizeOptionsFromConfig(config);
+    return out;
+  }
+
+  if (type === FieldType.CHECKBOX) {
+    const out: Record<string, unknown> = { ...config };
+
+    const raw = out.defaultValue ?? out.defaultBoolean ?? out.checkboxDefault;
+    const def = typeof raw === "boolean" ? raw : Boolean(raw);
+
+    delete out.defaultBoolean;
+    delete out.checkboxDefault;
+
+    out.defaultValue = def;
+    return out;
+  }
+
+  return config;
+}
+
 export async function PATCH(req: Request, ctx: unknown) {
   try {
     const { tenantId } = await requireAdminAuth(req);
@@ -85,27 +129,50 @@ export async function PATCH(req: Request, ctx: unknown) {
 
     const body = await validateBody(req, UpdateFieldSchema);
 
-    const res = await prisma.formField.updateMany({
-      where: { id: fieldId, formId, tenantId },
-      data: {
-        key: body.key,
-        label: body.label,
-        type: body.type,
-        required: body.required,
-        isActive: body.isActive,
-        placeholder: body.placeholder === undefined ? undefined : body.placeholder,
-        helpText: body.helpText === undefined ? undefined : body.helpText,
-        config: toNullableJsonInput(body.config),
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      const existing = await tx.formField.findFirst({
+        where: { id: fieldId, formId, tenantId },
+        select: { id: true, type: true },
+      });
+      if (!existing) throw httpError(404, "NOT_FOUND", "Not found.");
+
+      const effectiveType = body.type ?? existing.type;
+
+      let configUpdate:
+        | Prisma.InputJsonValue
+        | Prisma.NullableJsonNullValueInput
+        | undefined = undefined;
+
+      if (body.config === null) {
+        configUpdate = Prisma.DbNull; // clear
+      } else if (body.config !== undefined) {
+        const normalized = normalizeFieldConfig(effectiveType, body.config);
+        configUpdate = normalized as Prisma.InputJsonValue;
+      }
+
+      const res = await tx.formField.updateMany({
+        where: { id: fieldId, formId, tenantId },
+        data: {
+          key: body.key,
+          label: body.label,
+          type: body.type,
+          required: body.required,
+          isActive: body.isActive,
+          placeholder: body.placeholder === undefined ? undefined : body.placeholder,
+          helpText: body.helpText === undefined ? undefined : body.helpText,
+          config: configUpdate,
+        },
+      });
+
+      if (res.count === 0) throw httpError(404, "NOT_FOUND", "Not found.");
+
+      const row = await tx.formField.findFirst({
+        where: { id: fieldId, formId, tenantId },
+      });
+      if (!row) throw httpError(404, "NOT_FOUND", "Not found.");
+      return row;
     });
 
-    if (res.count === 0) throw httpError(404, "NOT_FOUND", "Not found.");
-
-    const updated = await prisma.formField.findFirst({
-      where: { id: fieldId, formId, tenantId },
-    });
-
-    if (!updated) throw httpError(404, "NOT_FOUND", "Not found.");
     return jsonOk(req, updated);
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
