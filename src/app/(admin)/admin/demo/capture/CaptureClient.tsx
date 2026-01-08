@@ -28,12 +28,28 @@ type FormDetail = {
 
 type FormValue = string | boolean | string[];
 
-const LS_MOBILE_KEY = "lr_demo_capture_mobile_api_key";
+const LS_MOBILE_KEY = "leadradar.devMobileApiKey"; // unified DEV key storage (TP 2.9)
+const LS_MOBILE_KEY_LEGACY = "lr_demo_capture_mobile_api_key"; // backward compat
+
+function isDevRuntime(): boolean {
+  return process.env.NODE_ENV !== "production";
+}
 
 function getMobileApiKeyClient(): string {
   if (typeof window === "undefined") return "";
   try {
-    return window.localStorage.getItem(LS_MOBILE_KEY) ?? "";
+    const v = window.localStorage.getItem(LS_MOBILE_KEY) ?? "";
+    if (v.trim()) return v;
+
+    // migrate legacy -> new
+    const legacy = window.localStorage.getItem(LS_MOBILE_KEY_LEGACY) ?? "";
+    if (legacy.trim()) {
+      window.localStorage.setItem(LS_MOBILE_KEY, legacy.trim());
+      window.localStorage.removeItem(LS_MOBILE_KEY_LEGACY);
+      return legacy.trim();
+    }
+
+    return "";
   } catch {
     return "";
   }
@@ -42,8 +58,14 @@ function getMobileApiKeyClient(): string {
 function setMobileApiKeyClient(v: string) {
   if (typeof window === "undefined") return;
   try {
-    if (!v) window.localStorage.removeItem(LS_MOBILE_KEY);
-    else window.localStorage.setItem(LS_MOBILE_KEY, v);
+    const trimmed = v.trim();
+    if (!trimmed) {
+      window.localStorage.removeItem(LS_MOBILE_KEY);
+      window.localStorage.removeItem(LS_MOBILE_KEY_LEGACY);
+    } else {
+      window.localStorage.setItem(LS_MOBILE_KEY, trimmed);
+      window.localStorage.removeItem(LS_MOBILE_KEY_LEGACY);
+    }
   } catch {
     // ignore
   }
@@ -56,7 +78,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 function parseFormsPayload(payload: unknown): FormListItem[] {
   // Accept multiple shapes:
   // A) { forms: [...] }
-  // B) { data: { forms: [...] } }  (in case wrapper leaked through)
+  // B) { data: { forms: [...] } }
   // C) [...] (direct array)
   if (Array.isArray(payload)) return payload as FormListItem[];
 
@@ -156,12 +178,20 @@ export default function CaptureClient() {
   const [success, setSuccess] = React.useState<{ leadId: string; deduped: boolean } | null>(null);
 
   function ensureMobileKeyOrError(): string | null {
-    const k = mobileApiKey.trim();
-    if (!k) {
-      setError("Mobile API Key fehlt. Bitte oben unter “Mobile API Key (DEV)” setzen und Apply klicken.");
-      return null;
+    const k1 = mobileApiKey.trim();
+    if (k1) return k1;
+
+    // fallback to storage (e.g. set by Mobile Ops screen)
+    const k2 = getMobileApiKeyClient().trim();
+    if (k2) {
+      setMobileApiKey(k2);
+      return k2;
     }
-    return k;
+
+    setError(
+      "Mobile API Key fehlt. Setze ihn unter /admin/settings/mobile (Create key) oder oben im Feld “Mobile API Key (DEV)” und Apply."
+    );
+    return null;
   }
 
   async function loadForms(opts?: { keepSelection?: boolean }) {
@@ -267,6 +297,30 @@ export default function CaptureClient() {
 
     setLoadingDetail(false);
   }
+
+  // DEV-only: support ?key=... (one click), then store + clean URL
+  React.useEffect(() => {
+    if (!isDevRuntime()) return;
+    if (typeof window === "undefined") return;
+
+    try {
+      const url = new URL(window.location.href);
+      const qKey = (url.searchParams.get("key") ?? "").trim();
+      if (qKey) {
+        setMobileApiKeyClient(qKey);
+        setMobileApiKey(qKey);
+
+        url.searchParams.delete("key");
+        const next = `${url.pathname}${url.search}${url.hash}`;
+        window.history.replaceState({}, "", next);
+
+        void loadForms({ keepSelection: false });
+      }
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   React.useEffect(() => {
     void loadForms();
@@ -499,6 +553,8 @@ export default function CaptureClient() {
     );
   }
 
+  const missingKey = !mobileApiKey.trim() && !getMobileApiKeyClient().trim();
+
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-8">
       <div className="mb-6">
@@ -507,6 +563,19 @@ export default function CaptureClient() {
           Interner Screen zum Generieren echter Leads (Mobile API v1) – damit /admin/leads und Exports “Content” haben.
         </p>
       </div>
+
+      {missingKey ? (
+        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <div className="font-medium">Key required</div>
+          <div className="mt-1 text-amber-900/80">
+            Erstelle einen ApiKey unter{" "}
+            <a className="underline" href="/admin/settings/mobile">
+              /admin/settings/mobile
+            </a>{" "}
+            oder nutze DEV-only <span className="font-mono">?key=...</span> (setzt localStorage und reinigt die URL).
+          </div>
+        </div>
+      ) : null}
 
       <div className="mb-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
         <div className="mb-2 text-sm font-medium text-neutral-900">Mobile API Key (DEV)</div>
@@ -528,8 +597,9 @@ export default function CaptureClient() {
           </button>
         </div>
         <div className="mt-2 text-xs text-neutral-600">
-          Required. Wird im Browser gespeichert (LocalStorage) und als <span className="font-mono">x-api-key</span> an{" "}
-          <span className="font-mono">/api/mobile/v1/*</span> gesendet.
+          Required. Wird in LocalStorage als <span className="font-mono">{LS_MOBILE_KEY}</span> gespeichert und als{" "}
+          <span className="font-mono">x-api-key</span> an <span className="font-mono">/api/mobile/v1/*</span> gesendet.
+          DEV-only: <span className="font-mono">?key=...</span>.
         </div>
       </div>
 

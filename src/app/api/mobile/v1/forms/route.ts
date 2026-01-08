@@ -4,11 +4,24 @@ import { prisma } from "@/lib/prisma";
 import { requireMobileAuth } from "@/lib/mobileAuth";
 import { enforceRateLimit } from "@/lib/rateLimit";
 
+export const runtime = "nodejs";
+
 export async function GET(req: Request) {
   try {
     const auth = await requireMobileAuth(req);
 
     enforceRateLimit(`mobile:${auth.apiKeyId}`, { limit: 60, windowMs: 60_000 });
+
+    // Ops telemetry
+    const now = new Date();
+    await prisma.mobileApiKey.update({
+      where: { id: auth.apiKeyId },
+      data: { lastUsedAt: now },
+    });
+    await prisma.mobileDevice.update({
+      where: { id: auth.deviceId },
+      data: { lastSeenAt: now },
+    });
 
     const assignments = await prisma.mobileDeviceForm.findMany({
       where: {

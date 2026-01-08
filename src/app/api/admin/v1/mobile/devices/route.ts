@@ -1,86 +1,94 @@
-import { z } from "zod";
 import { jsonError, jsonOk } from "@/lib/api";
-import { isHttpError, validateBody, httpError } from "@/lib/http";
-import { requireTenantContext } from "@/lib/tenantContext";
+import { httpError, isHttpError, validateBody } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
+import { requireTenantContext } from "@/lib/tenantContext";
+import { z } from "zod";
 
-const CreateSchema = z.object({
-  name: z.string().min(1).max(80),
-  apiKeyId: z.string().min(1),
+export const runtime = "nodejs";
+
+const CreateDeviceBody = z.object({
+  name: z.string().trim().min(1).max(120),
+  apiKeyId: z.string().trim().min(1),
 });
 
-export async function POST(req: Request) {
+function toDeviceRow(d: {
+  id: string;
+  name: string;
+  status: "ACTIVE" | "DISABLED";
+  lastSeenAt: Date | null;
+  createdAt: Date;
+  apiKey: { id: string; prefix: string; status: "ACTIVE" | "REVOKED"; lastUsedAt: Date | null };
+  _count: { assignments: number };
+}) {
+  return {
+    id: d.id,
+    name: d.name,
+    status: d.status,
+    lastSeenAt: d.lastSeenAt ? d.lastSeenAt.toISOString() : null,
+    createdAt: d.createdAt.toISOString(),
+    apiKeyPrefix: d.apiKey.prefix,
+    apiKeyStatus: d.apiKey.status,
+    lastUsedAt: d.apiKey.lastUsedAt ? d.apiKey.lastUsedAt.toISOString() : null,
+    assignedFormsCount: d._count.assignments,
+  };
+}
+
+export async function GET(req: Request) {
   try {
-    const t = await requireTenantContext(req);
-    const body = await validateBody(req, CreateSchema);
+    const { tenantId } = await requireTenantContext(req);
 
-    // Ensure key exists in this tenant and is ACTIVE
-    const key = await prisma.mobileApiKey.findFirst({
-      where: { id: body.apiKeyId, tenantId: t.tenantId, status: "ACTIVE" },
-      select: { id: true },
-    });
-    if (!key) throw httpError(404, "NOT_FOUND", "API key not found.");
-
-    // Enforce 1:1 key -> device via unique apiKeyId on MobileDevice
-    const existingDevice = await prisma.mobileDevice.findFirst({
-      where: { tenantId: t.tenantId, apiKeyId: body.apiKeyId },
-      select: { id: true },
-    });
-    if (existingDevice) throw httpError(409, "KEY_CONFLICT", "API key is already bound to a device.");
-
-    const device = await prisma.mobileDevice.create({
-      data: {
-        tenantId: t.tenantId,
-        name: body.name,
-        apiKeyId: body.apiKeyId,
-        status: "ACTIVE",
+    const devices = await prisma.mobileDevice.findMany({
+      where: { tenantId },
+      orderBy: [{ createdAt: "desc" }],
+      take: 200,
+      select: {
+        id: true,
+        name: true,
+        status: true,
+        lastSeenAt: true,
+        createdAt: true,
+        apiKey: { select: { id: true, prefix: true, status: true, lastUsedAt: true } },
+        _count: { select: { assignments: true } },
       },
-      select: { id: true, name: true, apiKeyId: true, status: true },
     });
 
-    return jsonOk(req, device);
+    return jsonOk(req, { items: devices.map(toDeviceRow) });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     return jsonError(req, 500, "INTERNAL", "Unexpected error.");
   }
 }
 
-export async function GET(req: Request) {
+export async function POST(req: Request) {
   try {
-    const t = await requireTenantContext(req);
+    const { tenantId } = await requireTenantContext(req);
+    const body = await validateBody(req, CreateDeviceBody);
 
-    const devices = await prisma.mobileDevice.findMany({
-      where: { tenantId: t.tenantId },
-      orderBy: { createdAt: "desc" },
+    const key = await prisma.mobileApiKey.findFirst({
+      where: { id: body.apiKeyId, tenantId },
+      select: { id: true },
+    });
+    if (!key) throw httpError(404, "NOT_FOUND", "Not found.");
+
+    const created = await prisma.mobileDevice.create({
+      data: {
+        tenantId,
+        name: body.name,
+        apiKeyId: body.apiKeyId,
+        status: "ACTIVE",
+      },
       select: {
         id: true,
         name: true,
         status: true,
         lastSeenAt: true,
-        apiKeyId: true,
-        apiKey: { select: { prefix: true } },
-        assignments: {
-          select: {
-            form: { select: { id: true, name: true, status: true } },
-          },
-          orderBy: { assignedAt: "desc" },
-          take: 200,
-        },
+        createdAt: true,
+        apiKey: { select: { id: true, prefix: true, status: true, lastUsedAt: true } },
+        _count: { select: { assignments: true } },
       },
-      take: 200,
     });
 
-    const shaped = devices.map((d) => ({
-      id: d.id,
-      name: d.name,
-      status: d.status,
-      lastSeenAt: d.lastSeenAt,
-      apiKeyId: d.apiKeyId,
-      apiKeyPrefix: d.apiKey.prefix,
-      assignedForms: d.assignments.map((a) => a.form),
-    }));
-
-    return jsonOk(req, shaped);
+    return jsonOk(req, { device: toDeviceRow(created) });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     return jsonError(req, 500, "INTERNAL", "Unexpected error.");
