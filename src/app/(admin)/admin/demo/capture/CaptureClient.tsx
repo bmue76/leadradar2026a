@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { adminFetchJson, getTenantSlugClient, setTenantSlugClient } from "../../_lib/adminFetch";
+import { getTenantSlugClient, setTenantSlugClient } from "../../_lib/adminFetch";
 
 type FormListItem = { id: string; name: string; description: string | null; status: string };
 
@@ -28,6 +28,10 @@ type FormDetail = {
 
 type FormValue = string | boolean | string[];
 
+type FetchOk<T> = { ok: true; status: number; data: T; traceId?: string };
+type FetchErr = { ok: false; status: number; code: string; message: string; traceId?: string; details?: unknown };
+type FetchRes<T> = FetchOk<T> | FetchErr;
+
 const LS_MOBILE_KEY = "lr_demo_capture_mobile_api_key";
 
 function getMobileApiKeyClient(): string {
@@ -53,47 +57,70 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function parseFormsPayload(payload: unknown): FormListItem[] {
-  // Accept multiple shapes:
-  // A) { forms: [...] }
-  // B) { data: { forms: [...] } }  (in case wrapper leaked through)
-  // C) [...] (direct array)
-  if (Array.isArray(payload)) return payload as FormListItem[];
-
-  if (!isRecord(payload)) return [];
-
-  const formsA = payload.forms;
-  if (Array.isArray(formsA)) return formsA as FormListItem[];
-
-  const data = payload.data;
-  if (isRecord(data) && Array.isArray(data.forms)) return data.forms as FormListItem[];
-
-  return [];
+function getTraceId(resp: Response, json: unknown): string | undefined {
+  const h = resp.headers.get("x-trace-id") ?? undefined;
+  if (h) return h;
+  if (isRecord(json) && typeof json.traceId === "string") return json.traceId;
+  return undefined;
 }
 
-function parseDetailPayload(payload: unknown): FormDetail | null {
-  // Accept:
-  // A) { id, name, fields: [...] }
-  // B) { data: { id, name, fields: [...] } }
-  if (!isRecord(payload)) return null;
+async function fetchJson<T>(
+  path: string,
+  opts: { method: "GET" | "POST"; tenantSlug?: string; apiKey?: string; body?: unknown }
+): Promise<FetchRes<T>> {
+  const headers: Record<string, string> = { accept: "application/json" };
 
-  const direct = payload;
-  if (typeof direct.id === "string" && Array.isArray(direct.fields)) return direct as unknown as FormDetail;
+  if (opts.tenantSlug?.trim()) headers["x-tenant-slug"] = opts.tenantSlug.trim();
+  if (opts.apiKey?.trim()) headers["x-api-key"] = opts.apiKey.trim();
 
-  const data = payload.data;
-  if (isRecord(data) && typeof data.id === "string" && Array.isArray(data.fields)) return data as unknown as FormDetail;
+  let body: string | undefined;
+  if (opts.body !== undefined) {
+    headers["content-type"] = "application/json";
+    body = JSON.stringify(opts.body);
+  }
 
-  return null;
+  const resp = await fetch(path, {
+    method: opts.method,
+    headers,
+    body,
+    credentials: "include",
+  });
+
+  let json: unknown = null;
+  try {
+    json = await resp.json();
+  } catch {
+    json = null;
+  }
+
+  const traceId = getTraceId(resp, json);
+
+  // jsonOk/jsonError envelope expected:
+  // ok: true => { ok: true, data: ... }
+  // ok: false => { ok: false, code, message, details? }
+  if (resp.ok) {
+    if (isRecord(json) && json.ok === true && "data" in json) {
+      return { ok: true, status: resp.status, data: (json as { data: T }).data, traceId };
+    }
+    // fallback: accept raw payload
+    return { ok: true, status: resp.status, data: json as T, traceId };
+  }
+
+  if (isRecord(json) && json.ok === false) {
+    const code = typeof json.code === "string" ? json.code : "HTTP_ERROR";
+    const message = typeof json.message === "string" ? json.message : "Request failed.";
+    const details = (json as { details?: unknown }).details;
+    return { ok: false, status: resp.status, code, message, traceId, details };
+  }
+
+  return { ok: false, status: resp.status, code: "HTTP_ERROR", message: `Request failed (HTTP ${resp.status}).`, traceId };
 }
 
 function parseOptions(config: unknown): string[] {
   if (!isRecord(config)) return [];
   const opts = config.options;
   if (!Array.isArray(opts)) return [];
-  return opts
-    .map((x) => String(x))
-    .map((s) => s.trim())
-    .filter(Boolean);
+  return opts.map((x) => String(x)).map((s) => s.trim()).filter(Boolean);
 }
 
 function parseCheckboxDefault(config: unknown): boolean {
@@ -132,12 +159,6 @@ function trimValue(v: FormValue): FormValue {
   return v;
 }
 
-function buildMobileAuthHeaders(rawKey: string): Record<string, string> {
-  const k = rawKey.trim();
-  if (!k) return {};
-  return { "x-api-key": k };
-}
-
 export default function CaptureClient() {
   const [tenantSlug, setTenantSlug] = React.useState<string>(() => getTenantSlugClient());
   const [mobileApiKey, setMobileApiKey] = React.useState<string>(() => getMobileApiKeyClient());
@@ -155,10 +176,10 @@ export default function CaptureClient() {
   const [error, setError] = React.useState<string | null>(null);
   const [success, setSuccess] = React.useState<{ leadId: string; deduped: boolean } | null>(null);
 
-  function ensureMobileKeyOrError(): string | null {
+  function requireKeyOrSetError(): string | null {
     const k = mobileApiKey.trim();
     if (!k) {
-      setError("Mobile API Key fehlt. Bitte oben unter “Mobile API Key (DEV)” setzen und Apply klicken.");
+      setError("Mobile API Key fehlt. Bitte oben einfügen (x-api-key) und Apply klicken.");
       return null;
     }
     return k;
@@ -169,7 +190,7 @@ export default function CaptureClient() {
     setError(null);
     setSuccess(null);
 
-    const k = ensureMobileKeyOrError();
+    const k = requireKeyOrSetError();
     if (!k) {
       setForms([]);
       setSelectedFormId("");
@@ -179,10 +200,10 @@ export default function CaptureClient() {
       return;
     }
 
-    const res = await adminFetchJson<unknown>("/api/mobile/v1/forms", {
+    const res = await fetchJson<{ forms: FormListItem[] }>("/api/mobile/v1/forms", {
       method: "GET",
       tenantSlug: tenantSlug.trim() ? tenantSlug.trim() : undefined,
-      headers: buildMobileAuthHeaders(k),
+      apiKey: k,
     });
 
     if (!res.ok) {
@@ -195,7 +216,7 @@ export default function CaptureClient() {
       return;
     }
 
-    const nextForms = parseFormsPayload(res.data);
+    const nextForms = Array.isArray(res.data?.forms) ? res.data.forms : [];
     setForms(nextForms);
 
     const keep = opts?.keepSelection ?? false;
@@ -221,7 +242,7 @@ export default function CaptureClient() {
     setError(null);
     setSuccess(null);
 
-    const k = ensureMobileKeyOrError();
+    const k = requireKeyOrSetError();
     if (!k) {
       setDetail(null);
       setValues({});
@@ -229,10 +250,10 @@ export default function CaptureClient() {
       return;
     }
 
-    const res = await adminFetchJson<unknown>(`/api/mobile/v1/forms/${formId}`, {
+    const res = await fetchJson<FormDetail>(`/api/mobile/v1/forms/${formId}`, {
       method: "GET",
       tenantSlug: tenantSlug.trim() ? tenantSlug.trim() : undefined,
-      headers: buildMobileAuthHeaders(k),
+      apiKey: k,
     });
 
     if (!res.ok) {
@@ -243,24 +264,23 @@ export default function CaptureClient() {
       return;
     }
 
-    const parsed = parseDetailPayload(res.data);
-    if (!parsed) {
+    if (!res.data || !Array.isArray(res.data.fields)) {
       setDetail(null);
       setValues({});
-      setError("Unexpected response shape from /api/mobile/v1/forms/:id");
+      setError("Unexpected response from /api/mobile/v1/forms/:id");
       setLoadingDetail(false);
       return;
     }
 
-    setDetail(parsed);
+    setDetail(res.data);
 
     setValues((prev) => {
       const next: Record<string, FormValue> = { ...prev };
-      for (const f of parsed.fields) {
+      for (const f of res.data.fields) {
         if (!(f.key in next)) next[f.key] = emptyValueForField(f);
       }
       for (const kk of Object.keys(next)) {
-        if (!parsed.fields.some((f) => f.key === kk)) delete next[kk];
+        if (!res.data.fields.some((f) => f.key === kk)) delete next[kk];
       }
       return next;
     });
@@ -311,7 +331,7 @@ export default function CaptureClient() {
     setError(null);
     setSuccess(null);
 
-    const k = ensureMobileKeyOrError();
+    const k = requireKeyOrSetError();
     if (!k) return;
 
     const reqErr = validateRequired();
@@ -339,11 +359,11 @@ export default function CaptureClient() {
         meta: { source: "demo-capture" },
       };
 
-      const res = await adminFetchJson<{ leadId: string; deduped: boolean }>("/api/mobile/v1/leads", {
+      const res = await fetchJson<{ leadId: string; deduped: boolean }>("/api/mobile/v1/leads", {
         method: "POST",
         tenantSlug: tenantSlug.trim() ? tenantSlug.trim() : undefined,
-        headers: { "content-type": "application/json", ...buildMobileAuthHeaders(k) },
-        body: JSON.stringify(payload),
+        apiKey: k,
+        body: payload,
       });
 
       if (!res.ok) {
@@ -504,7 +524,7 @@ export default function CaptureClient() {
       <div className="mb-6">
         <h1 className="text-xl font-semibold tracking-tight">Demo Capture</h1>
         <p className="mt-1 text-sm text-neutral-600">
-          Interner Screen zum Generieren echter Leads (Mobile API v1) – damit /admin/leads und Exports “Content” haben.
+          Dieser Screen spricht bewusst die Mobile API an – daher braucht es <span className="font-mono">x-api-key</span>.
         </p>
       </div>
 
@@ -528,8 +548,7 @@ export default function CaptureClient() {
           </button>
         </div>
         <div className="mt-2 text-xs text-neutral-600">
-          Required. Wird im Browser gespeichert (LocalStorage) und als <span className="font-mono">x-api-key</span> an{" "}
-          <span className="font-mono">/api/mobile/v1/*</span> gesendet.
+          Hinweis: <span className="font-mono">lastUsedAt</span>/<span className="font-mono">lastSeenAt</span> wird max. 1× pro 60s aktualisiert (Write-Storm Guard).
         </div>
       </div>
 
@@ -553,7 +572,7 @@ export default function CaptureClient() {
           </button>
         </div>
         <div className="mt-2 text-xs text-neutral-600">
-          Leer lassen = Session-Tenant. Ausfüllen = sendet <span className="font-mono">x-tenant-slug</span>.
+          Leer lassen = kein <span className="font-mono">x-tenant-slug</span>. (Mobile API Key bestimmt Tenant ohnehin.)
         </div>
       </div>
 
@@ -580,7 +599,9 @@ export default function CaptureClient() {
         {loadingForms ? (
           <div className="text-sm text-neutral-600">Loading forms…</div>
         ) : forms.length === 0 ? (
-          <div className="text-sm text-neutral-600">Keine ACTIVE Forms gefunden (oder Device hat keine Assignments).</div>
+          <div className="text-sm text-neutral-600">
+            Keine ACTIVE Forms gefunden. Prüfe: (1) x-api-key korrekt (2) Form ist dem Device zugewiesen.
+          </div>
         ) : (
           <div className="mb-5">
             <select
