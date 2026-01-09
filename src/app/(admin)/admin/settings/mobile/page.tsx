@@ -1,5 +1,5 @@
 import MobileOpsClient from "./MobileOpsClient";
 
-export default function MobileOpsPage() {
+export default function MobileSettingsPage() {
   return <MobileOpsClient />;
 }
