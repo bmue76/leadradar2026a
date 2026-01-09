@@ -21,21 +21,34 @@ function setDemoCaptureKey(token: string) {
   }
 }
 
-function friendlyMessage(code: string): string {
-  switch (code) {
-    case "INVALID_PROVISION_TOKEN":
-      return "Token ist ungültig. Bitte prüfen oder im Admin neu erstellen.";
-    case "PROVISION_TOKEN_EXPIRED":
-      return "Token ist abgelaufen. Bitte im Admin einen neuen Token erstellen.";
-    case "PROVISION_TOKEN_USED":
-      return "Token wurde bereits verwendet. Bitte einen neuen Token erstellen.";
-    case "PROVISION_TOKEN_REVOKED":
-      return "Token wurde widerrufen. Bitte im Admin einen neuen Token erstellen.";
-    case "RATE_LIMITED":
-      return "Zu viele Versuche. Bitte kurz warten und erneut versuchen.";
-    default:
-      return "Konnte Token nicht claimen. Bitte erneut versuchen.";
+function userFriendlyError(code: string): { title: string; message: string } {
+  const c = (code || "").toUpperCase();
+
+  if (c === "RATE_LIMITED") {
+    return {
+      title: "Zu viele Versuche",
+      message: "Bitte kurz warten und danach erneut versuchen.",
+    };
   }
+
+  if (c === "INVALID_PROVISION_TOKEN") {
+    return {
+      title: "Token nicht gültig",
+      message: "Der Token konnte nicht eingelöst werden. Bitte einen neuen Token/QR vom Admin anfordern.",
+    };
+  }
+
+  if (c === "MISCONFIGURED") {
+    return {
+      title: "Server-Konfiguration",
+      message: "Der Server ist nicht korrekt konfiguriert. Bitte Admin/Dev informieren.",
+    };
+  }
+
+  return {
+    title: "Fehler",
+    message: "Etwas ist schiefgelaufen. Bitte erneut versuchen.",
+  };
 }
 
 export default function ProvisionClient() {
@@ -45,7 +58,8 @@ export default function ProvisionClient() {
   const [token, setToken] = React.useState(tokenFromUrl);
   const [deviceName, setDeviceName] = React.useState("Messe Device");
   const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState<{ message: string; traceId?: string } | null>(null);
+
+  const [error, setError] = React.useState<{ title: string; message: string; traceId?: string } | null>(null);
 
   React.useEffect(() => {
     if (tokenFromUrl && !token) setToken(tokenFromUrl);
@@ -55,7 +69,7 @@ export default function ProvisionClient() {
   async function claim() {
     const t = token.trim();
     if (!t) {
-      setError({ message: "Bitte Token eingeben." });
+      setError({ title: "Token fehlt", message: "Bitte einen Provision Token eingeben." });
       return;
     }
 
@@ -69,22 +83,38 @@ export default function ProvisionClient() {
         body: JSON.stringify({ token: t, deviceName: deviceName.trim() || undefined }),
       });
 
-      const json = (await res.json()) as ApiResult<{
+      let json: ApiResult<{
         token: string;
         device: { id: string; name: string; status: string };
         apiKey: { id: string; prefix: string; status: string };
         assignedFormIds: string[];
-      }>;
+      }> | null = null;
 
-      if (!json.ok) {
-        setError({ message: friendlyMessage(json.error.code), traceId: json.traceId });
+      try {
+        json = (await res.json()) as ApiResult<{
+          token: string;
+          device: { id: string; name: string; status: string };
+          apiKey: { id: string; prefix: string; status: string };
+          assignedFormIds: string[];
+        }>;
+      } catch {
+        json = null;
+      }
+
+      if (!json || json.ok !== true) {
+        const code =
+          json && json.ok === false && json.error && typeof json.error.code === "string" ? json.error.code : res.status === 429 ? "RATE_LIMITED" : "REQUEST_FAILED";
+        const traceId = (res.headers.get("x-trace-id") || (json && "traceId" in json ? (json.traceId as string) : undefined) || undefined) as string | undefined;
+
+        const friendly = userFriendlyError(code);
+        setError({ ...friendly, traceId });
         return;
       }
 
       setDemoCaptureKey(json.data.token);
       window.location.href = "/admin/demo/capture";
     } catch (e: unknown) {
-      setError({ message: e instanceof Error ? e.message : String(e) });
+      setError({ title: "Netzwerkfehler", message: e instanceof Error ? e.message : String(e) });
     } finally {
       setLoading(false);
     }
@@ -99,9 +129,10 @@ export default function ProvisionClient() {
       </p>
 
       {error ? (
-        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          <div>{error.message}</div>
-          {error.traceId ? <div className="mt-1 text-xs text-amber-900/70">Trace-ID: <span className="font-mono">{error.traceId}</span></div> : null}
+        <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
+          <div className="font-medium">{error.title}</div>
+          <div className="mt-1 text-red-900/80">{error.message}</div>
+          {error.traceId ? <div className="mt-2 text-xs text-red-900/70">traceId: <span className="font-mono">{error.traceId}</span></div> : null}
         </div>
       ) : null}
 

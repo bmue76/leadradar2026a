@@ -35,7 +35,7 @@ Start:
 - `AUTH_SESSION_SECRET` – Session/Auth Secret (>= 32 chars)
 - `MOBILE_API_KEY_SECRET` – HMAC Secret für ApiKey Hashing (>= 32 bytes empfohlen)
 
-### Recommended (TP 3.0 Provisioning)
+### Recommended (Provisioning)
 - `MOBILE_PROVISION_TOKEN_SECRET` – HMAC Secret für Provision Token Hashing (>= 32 bytes empfohlen)
 
 ### Optional / Dev Convenience
@@ -76,7 +76,6 @@ Rotation/Incident:
 
 Hinweis:
 - Seed legt standardmäßig einen Demo-Tenant an (z.B. `tenant_demo`).
-- Für Atlex (oder andere) kann via `SEED_TENANT_SLUG=atlex` etc. gesteuert werden (abhängig vom Seed-Skript).
 - Mobile Seed erzeugt (DEV-only) einen Demo ApiKey + Device und loggt den Klartext-Token einmalig in die Konsole.
 
 ---
@@ -100,7 +99,7 @@ Hinweis:
 
 ---
 
-## Device Provisioning (TP 3.0)
+## Device Provisioning (TP 3.0 / TP 3.1)
 
 Ziel: Device-Onboarding ohne Copy/Paste von ApiKeys.
 
@@ -111,10 +110,24 @@ Ziel: Device-Onboarding ohne Copy/Paste von ApiKeys.
 4) Response liefert **neuen** Mobile ApiKey (einmalig) + Device + Assignments
 5) Danach normale Mobile Calls mit `x-api-key` (Forms/Leads)
 
-### DEV Convenience
-- `/admin/demo/provision` (DEV-only)
-  - `?token=...` wird übernommen
-  - Claim schreibt `leadradar.devMobileApiKey` und redirect `/admin/demo/capture`
+### Claim Error Semantik (strict, leak-safe)
+- invalid/expired/used/revoked => `401 INVALID_PROVISION_TOKEN` (keine Details / keine Leaks)
+- rate limited => `429 RATE_LIMITED`
+
+### Revocation / Expiry
+- Admin revoke ist nur erlaubt, wenn Status `ACTIVE` und nicht expired ist.
+- Expired ist API-seitig computed (wenn `expiresAt <= now` und DB-status noch `ACTIVE`).
+
+---
+
+## Demo Provision (DEV-only)
+
+Route: `/admin/demo/provision`
+
+- `?token=...` wird übernommen
+- Claim schreibt `leadradar.devMobileApiKey` + legacy key in localStorage
+- Redirect zu `/admin/demo/capture`
+- Error UX: ruhige Meldung + `traceId`
 
 ---
 
@@ -130,16 +143,21 @@ Key Handling:
   - übernimmt den Key (schreibt LocalStorage)
   - entfernt den QueryParam danach automatisch (URL cleanup)
 
-Empfohlenes Ops-Flow:
-- ApiKey in `/admin/settings/mobile` erzeugen → “Use for Demo Capture” klicken → Leads generieren.
-
 ---
 
 ## Rate Limiting (Phase 1 – best-effort)
 
-- In-Memory Rate Limiter pro ApiKey.
-- Limitation: bei Multi-Instance / Serverless nicht global konsistent.
-- Upgrade: Redis/Upstash (Phase 2/3).
+### Aktuell (in-memory)
+- In-Memory Rate Limiter (pro Prozess / nicht global bei Multi-Instance).
+- Mobile protected endpoints: typischerweise pro ApiKey.
+- Provision Claim: best-effort pro IP + tokenHash-prefix.
+
+### Limitation
+- Bei Multi-Instance / Serverless nicht konsistent global.
+
+### Upgrade Path (Phase 2/3)
+- Redis/Upstash als shared store für RateLimit buckets.
+- Optional: Sliding Window / token bucket.
 
 Fehler: `429 RATE_LIMITED` via jsonError inkl. `traceId`.
 
@@ -171,6 +189,5 @@ Fix:
 ```bash
 # DEV Server stoppen (Ctrl+C)
 npx prisma generate
-npx prisma migrate dev -n "mobile_provision_tokens"
 rm -rf .next
 npm run dev

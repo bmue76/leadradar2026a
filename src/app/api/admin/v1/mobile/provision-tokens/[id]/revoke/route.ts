@@ -5,6 +5,12 @@ import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 
+function effectiveStatus(status: string, expiresAt: Date): string {
+  const s = (status || "").toUpperCase();
+  if (s === "ACTIVE" && expiresAt.getTime() <= Date.now()) return "EXPIRED";
+  return s || "—";
+}
+
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }): Promise<Response> {
   try {
     const { tenantId } = await requireTenantContext(req);
@@ -12,28 +18,20 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
     const row = await prisma.mobileProvisionToken.findFirst({
       where: { id, tenantId },
-      select: { id: true, prefix: true, status: true, expiresAt: true, usedAt: true, createdAt: true, usedByDeviceId: true },
+      select: { id: true, prefix: true, status: true, expiresAt: true, usedAt: true, usedByDeviceId: true, createdAt: true },
     });
 
     if (!row) throw httpError(404, "NOT_FOUND", "Not found.");
 
-    const now = new Date();
-
-    // Only ACTIVE and not expired can be revoked (clear ops behavior).
-    if (row.status !== "ACTIVE") {
-      throw httpError(409, "PROVISION_TOKEN_INVALID_STATE", "Provision token is not active.", {
-        status: row.status,
-      });
-    }
-
-    if (row.expiresAt <= now) {
-      throw httpError(409, "PROVISION_TOKEN_EXPIRED", "Provision token is expired.");
+    const eff = effectiveStatus(row.status, row.expiresAt);
+    if (eff !== "ACTIVE") {
+      throw httpError(409, "INVALID_STATE", "Provision token is not revocable.", { status: eff });
     }
 
     const next = await prisma.mobileProvisionToken.update({
       where: { id: row.id },
       data: { status: "REVOKED" },
-      select: { id: true, prefix: true, status: true, expiresAt: true, usedAt: true, createdAt: true, usedByDeviceId: true },
+      select: { id: true, prefix: true, status: true, expiresAt: true, usedAt: true, usedByDeviceId: true, createdAt: true },
     });
 
     return jsonOk(req, { provision: next });

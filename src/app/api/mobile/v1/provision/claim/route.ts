@@ -3,10 +3,17 @@ import crypto from "crypto";
 import { jsonOk, jsonError } from "@/lib/api";
 import { validateBody, httpError, isHttpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
-import { getClientIp, rateLimitCheck } from "@/lib/rateLimit";
-import { normalizeProvisionToken, provisionTokenHash } from "@/lib/mobileProvisioning";
+import { enforceRateLimit, getClientIp } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
+
+/**
+ * TP 3.1 Policy (strict / leak-safe):
+ * - invalid/expired/revoked/used token => 401 INVALID_PROVISION_TOKEN
+ * - rate limited => 429 RATE_LIMITED
+ *
+ * No tenant IDs / existence details are revealed.
+ */
 
 const ClaimSchema = z.object({
   token: z.string().trim().min(10).max(500),
@@ -30,20 +37,8 @@ function hmacSha256Hex(secret: string, value: string): string {
 }
 
 function safeInvalidToken(): never {
-  // No details, no leaks.
+  // Strict, no details, no leaks.
   throw httpError(401, "INVALID_PROVISION_TOKEN", "Invalid provision token.");
-}
-
-function tokenNotClaimable(code: "PROVISION_TOKEN_USED" | "PROVISION_TOKEN_REVOKED" | "PROVISION_TOKEN_EXPIRED"): never {
-  // Balanced policy: token exists but cannot be claimed
-  throw httpError(409, code, "Provision token cannot be claimed.");
-}
-
-function rateLimitOrThrow(key: string, limit: number, windowSec: number) {
-  const r = rateLimitCheck({ key, limit, windowSec });
-  if (!r.ok) {
-    throw httpError(429, "RATE_LIMITED", "Too many requests.", { retryAfterSec: r.retryAfterSec });
-  }
 }
 
 function generateApiKeyToken(): { token: string; prefix: string; keyHash: string } {
@@ -55,6 +50,7 @@ function generateApiKeyToken(): { token: string; prefix: string; keyHash: string
   const body = crypto.randomBytes(24).toString("base64url");
   const token = `${prefix}_${body}`;
   const keyHash = hmacSha256Hex(secret, token);
+
   return { token, prefix, keyHash };
 }
 
@@ -69,29 +65,18 @@ function jsonToStringArray(v: unknown): string[] {
 
 export async function POST(req: Request): Promise<Response> {
   try {
+    // Best-effort abuse protection (Phase 1 / in-memory; not global across instances)
     const ip = getClientIp(req);
+    enforceRateLimit(`prov_claim:ip:${ip}`, { limit: 10, windowSec: 60 });
 
-    // Phase 1 Abuse protection (best-effort, in-memory):
-    // - 10/min per IP
-    // - 5/min per tokenHash prefix (after token parsing)
-    rateLimitOrThrow(`prov_claim:ip:${ip}`, 10, 60);
+    const body = await validateBody(req, ClaimSchema);
+    const token = body.token.trim();
 
-    let body: z.infer<typeof ClaimSchema>;
-    try {
-      body = await validateBody(req, ClaimSchema);
-    } catch (e: unknown) {
-      // For mobile claim: do not expose validation details.
-      if (isHttpError(e)) safeInvalidToken();
-      throw e;
-    }
+    // Hash incoming provision token (never store cleartext)
+    const tokenHash = hmacSha256Hex(getProvisionSecret(), token);
 
-    const token = normalizeProvisionToken(body.token);
-    if (!token) safeInvalidToken();
-
-    const provSecret = getProvisionSecret();
-    const tokenHash = provisionTokenHash(provSecret, token);
-
-    rateLimitOrThrow(`prov_claim:th:${tokenHash.slice(0, 16)}`, 5, 60);
+    // Additional best-effort limiter per tokenHash prefix (covers brute-force + spam retries)
+    enforceRateLimit(`prov_claim:tok:${tokenHash.slice(0, 12)}`, { limit: 10, windowSec: 60 });
 
     const now = new Date();
 
@@ -111,12 +96,7 @@ export async function POST(req: Request): Promise<Response> {
 
       if (!prov) safeInvalidToken();
 
-      // Balanced error semantics (still non-tenant-leaky due to high-entropy token):
-      if (prov.status === "REVOKED") tokenNotClaimable("PROVISION_TOKEN_REVOKED");
-      if (prov.status === "USED" || prov.usedAt) tokenNotClaimable("PROVISION_TOKEN_USED");
-      if (prov.expiresAt <= now) tokenNotClaimable("PROVISION_TOKEN_EXPIRED");
-
-      // Atomic single-use enforcement (race-safe): exactly one update wins.
+      // Single-use enforcement (race-safe): exactly one request can flip ACTIVE -> USED.
       const locked = await tx.mobileProvisionToken.updateMany({
         where: {
           tokenHash,
@@ -127,25 +107,11 @@ export async function POST(req: Request): Promise<Response> {
         data: { status: "USED", usedAt: now },
       });
 
-      if (locked.count !== 1) {
-        // Determine best-effort reason (still safe because token is known).
-        const cur = await tx.mobileProvisionToken.findUnique({
-          where: { tokenHash },
-          select: { status: true, expiresAt: true, usedAt: true },
-        });
-
-        if (!cur) safeInvalidToken();
-        if (cur.status === "REVOKED") tokenNotClaimable("PROVISION_TOKEN_REVOKED");
-        if (cur.status === "USED" || cur.usedAt) tokenNotClaimable("PROVISION_TOKEN_USED");
-        if (cur.expiresAt <= now) tokenNotClaimable("PROVISION_TOKEN_EXPIRED");
-
-        // Fallback: no details.
-        safeInvalidToken();
-      }
+      if (locked.count !== 1) safeInvalidToken();
 
       const deviceName = (body.deviceName?.trim() || prov.requestedDeviceName?.trim() || "Mobile Device").slice(0, 120);
 
-      // Create api key + device
+      // Create api key + device (same transaction)
       const apiKeyGen = generateApiKeyToken();
 
       const apiKey = await tx.mobileApiKey.create({
@@ -169,14 +135,14 @@ export async function POST(req: Request): Promise<Response> {
         select: { id: true, name: true, status: true, createdAt: true, lastSeenAt: true },
       });
 
-      // Attach device id to provisioning record (audit)
+      // Audit: bind usedByDeviceId (still within tx; will rollback if any step fails)
       await tx.mobileProvisionToken.update({
-        where: { id: prov.id },
+        where: { tokenHash },
         data: { usedByDeviceId: device.id },
         select: { id: true },
       });
 
-      // Apply requested assignments (filter to existing tenant forms)
+      // Apply requested assignments (filter to existing tenant forms; keep only ACTIVE)
       const requested = jsonToStringArray(prov.requestedFormIds);
       let assignedFormIds: string[] = [];
 
@@ -186,7 +152,6 @@ export async function POST(req: Request): Promise<Response> {
           select: { id: true, status: true },
         });
 
-        // Keep only ACTIVE forms to match mobile semantics
         assignedFormIds = forms.filter((f) => f.status === "ACTIVE").map((f) => f.id);
 
         if (assignedFormIds.length) {

@@ -17,7 +17,7 @@ Technik:
 - UI-Basics: `src/app/(admin)/admin/_ui/`
   - `Table` (Finder-like: ohne Gridlines/Rahmen, Row Hover, Actions nur bei Hover/Focus)
   - `Button` (Primary/Secondary/Ghost; Primary = LeadRadar Rot)
-  - `Chip` (ruhige Status-Chips, keine bunten Ampel-Farben)
+  - `Chip` (ruhige Status-Chips)
   - `EmptyState` (Icon + 1 Satz + 1 CTA)
 
 Global Admin-Prinzipien:
@@ -74,25 +74,25 @@ UX Notes:
 - Primary CTA: “Create export”
 - Secondary/Ghost: “Refresh”
 - Table: Finder-like
-- Status: Chip (QUEUED/RUNNING/DONE/FAILED) ruhig
+- Status: Chip (QUEUED/RUNNING/DONE/FAILED)
 - Empty: “No exports yet.” + Primary CTA
 - Error: “Couldn’t load exports.” + Trace + Retry
 
 ---
 
-## Screen: Mobile Ops (`/admin/settings/mobile`) — TP 2.9 + TP 3.0
+## Screen: Mobile Ops (`/admin/settings/mobile`) — TP 2.9 + TP 3.0 + TP 3.1
 
 Ziel:
 - Mobile API Betrieb produktfähig machen:
   - ApiKeys listen / erstellen (one-time token) / revoke
   - Devices listen / verwalten (rename, enable/disable)
   - Assignments (Device ↔ Forms) per Replace-Strategy pflegen
-  - Provisioning (TP 3.0): Token + Claim Flow
+  - Provisioning: Token + Claim Flow (single-use hardened, best-effort RL)
   - Demo Capture Key UX (DEV)
 
 ### UI Struktur (MVP)
 
-#### 1) Section “Provisioning” (TP 3.0)
+#### 1) Section “Provisioning”
 - CTA: “Create token”
 - Create Modal:
   - Requested DeviceName (optional)
@@ -102,14 +102,19 @@ Ziel:
   - One-time Token Anzeige + Copy
   - QR (DEV): Link zu `/admin/demo/provision?token=...`
 - Table:
-  - Prefix | Status (ACTIVE/USED/REVOKED/EXPIRED) | Expires | Used | Created | Actions (Revoke wenn ACTIVE)
+  - Prefix | Status (ACTIVE/USED/REVOKED/EXPIRED) | Expires | Used | Device | Created | Actions
+  - Actions: “Revoke” **nur** wenn Status ACTIVE (sonst disabled)
 
-#### 2) Section “ApiKeys” (TP 2.9)
+Hinweis:
+- `EXPIRED` wird API-seitig computed angezeigt, obwohl DB-status weiterhin `ACTIVE` sein kann.
+- Revoke ist nur erlaubt, wenn der Token effektiv ACTIVE und nicht expired ist (sonst 409 INVALID_STATE).
+
+#### 2) Section “ApiKeys”
 - Table: Prefix | Name | Status | Last used | Created | Actions (Revoke)
 - CTA: “Create key”
 - Create Success: One-time token Anzeige + Copy + “Use for Demo Capture” (setzt localStorage und navigiert)
 
-#### 3) Section “Devices” (TP 2.9)
+#### 3) Section “Devices”
 - Table: Name | Status | Last seen | Last used | Assigned | ApiKey prefix | Actions (Manage)
 - Manage Drawer:
   - Rename + Status
@@ -123,7 +128,7 @@ Ziel:
 
 ---
 
-## Screen: Demo Provision (`/admin/demo/provision`) — TP 3.0 (DEV-only)
+## Screen: Demo Provision (`/admin/demo/provision`) — DEV-only
 
 Ziel:
 - Provision Token claimen, ohne Mobile-App
@@ -133,7 +138,7 @@ Ziel:
 UX Notes:
 - Token Input (oder `?token=...`)
 - Button “Claim token”
-- Error zeigt Code + traceId
+- Error: ruhige Meldung + traceId
 
 ---
 
@@ -144,4 +149,3 @@ UX Notes:
 - Error: ruhig (kleiner Text)
 - Nach Login: Redirect `/admin`
 - Topbar rechts: User Menu + Logout
-

@@ -30,9 +30,10 @@ type DeviceRow = {
 type ProvisionRow = {
   id: string;
   prefix?: string;
-  status?: string;
+  status?: string; // API may return ACTIVE/USED/REVOKED/EXPIRED (EXPIRED is computed)
   expiresAt?: string;
   usedAt?: string | null;
+  usedByDeviceId?: string | null;
   createdAt?: string;
 };
 
@@ -78,6 +79,13 @@ function isoShort(d?: string | null): string {
   const dt = new Date(d);
   if (Number.isNaN(dt.getTime())) return "—";
   return dt.toISOString().replace("T", " ").slice(0, 16) + "Z";
+}
+
+function shortId(id?: string | null): string {
+  if (!id) return "—";
+  const s = String(id);
+  if (s.length <= 10) return s;
+  return `${s.slice(0, 6)}…${s.slice(-4)}`;
 }
 
 function chipClasses(status: string): string {
@@ -653,6 +661,7 @@ export default function MobileOpsClient() {
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Expires</th>
                 <th className="px-4 py-3">Used</th>
+                <th className="px-4 py-3">Device</th>
                 <th className="px-4 py-3">Created</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
@@ -660,13 +669,13 @@ export default function MobileOpsClient() {
             <tbody>
               {provLoading ? (
                 <tr>
-                  <td className="px-4 py-4 text-neutral-600" colSpan={6}>
+                  <td className="px-4 py-4 text-neutral-600" colSpan={7}>
                     Loading…
                   </td>
                 </tr>
               ) : provItems.length === 0 ? (
                 <tr>
-                  <td className="px-4 py-4 text-neutral-600" colSpan={6}>
+                  <td className="px-4 py-4 text-neutral-600" colSpan={7}>
                     No provisioning tokens yet.
                   </td>
                 </tr>
@@ -682,6 +691,7 @@ export default function MobileOpsClient() {
                       </td>
                       <td className="px-4 py-3">{isoShort(p.expiresAt ?? null)}</td>
                       <td className="px-4 py-3">{isoShort(p.usedAt ?? null)}</td>
+                      <td className="px-4 py-3 font-mono text-xs">{shortId(p.usedByDeviceId ?? null)}</td>
                       <td className="px-4 py-3">{isoShort(p.createdAt ?? null)}</td>
                       <td className="px-4 py-3 text-right">
                         <button
