@@ -77,7 +77,7 @@ model Tenant {
   id        String   @id @default(cuid())
   slug      String   @unique @default(cuid()) // default so public registration can create tenant without explicitly setting slug
   name      String
-  country   String   // ISO2, e.g. "CH"
+  country   String // ISO2, e.g. "CH"
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -92,12 +92,12 @@ model Tenant {
   logoHeight       Int?
 
   // Relations
-  users            User[]
-  forms            Form[]
-  formFields       FormField[]
-  leads            Lead[]
-  leadAttachments  LeadAttachment[]
-  exportJobs       ExportJob[]
+  users           User[]
+  forms           Form[]
+  formFields      FormField[]
+  leads           Lead[]
+  leadAttachments LeadAttachment[]
+  exportJobs      ExportJob[]
 
   // TP 2.5 — Mobile Device Auth
   mobileApiKeys     MobileApiKey[]
@@ -165,20 +165,20 @@ model Form {
 }
 
 model FormField {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   tenantId    String
   formId      String
   key         String
   label       String
   type        FieldType
-  required    Boolean  @default(false)
-  isActive    Boolean  @default(true)
-  sortOrder   Int      @default(0)
+  required    Boolean   @default(false)
+  isActive    Boolean   @default(true)
+  sortOrder   Int       @default(0)
   placeholder String?
   helpText    String?
   config      Json?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   form   Form   @relation(fields: [formId], references: [id], onDelete: Cascade)
@@ -258,19 +258,19 @@ model ExportJob {
 // TP 2.5 — Mobile Device Auth (ApiKey + Device + Assignment)
 //
 model MobileApiKey {
-  id        String             @id @default(cuid())
-  tenantId  String
-  name      String
-  prefix    String
-  keyHash   String
-  status    MobileApiKeyStatus @default(ACTIVE)
+  id       String             @id @default(cuid())
+  tenantId String
+  name     String
+  prefix   String
+  keyHash  String
+  status   MobileApiKeyStatus @default(ACTIVE)
 
   createdAt  DateTime  @default(now())
   revokedAt  DateTime?
   lastUsedAt DateTime?
 
   createdByUserId String?
-  createdByUser   User? @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdByUser   User?   @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -282,16 +282,16 @@ model MobileApiKey {
 }
 
 model MobileDevice {
-  id       String           @id @default(cuid())
+  id       String @id @default(cuid())
   tenantId String
   name     String
 
-  apiKeyId String      @unique
+  apiKeyId String       @unique
   apiKey   MobileApiKey @relation("MobileApiKeyToDevice", fields: [apiKeyId], references: [id], onDelete: Restrict)
 
   status     MobileDeviceStatus @default(ACTIVE)
   lastSeenAt DateTime?
-  createdAt  DateTime @default(now())
+  createdAt  DateTime           @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -333,14 +333,14 @@ model MobileProvisionToken {
   status    MobileProvisionTokenStatus @default(ACTIVE)
   expiresAt DateTime
 
-  usedAt          DateTime?
-  usedByDeviceId  String?
-  usedByDevice    MobileDevice? @relation("MobileProvisionTokenUsedBy", fields: [usedByDeviceId], references: [id], onDelete: SetNull)
+  usedAt         DateTime?
+  usedByDeviceId String?
+  usedByDevice   MobileDevice? @relation("MobileProvisionTokenUsedBy", fields: [usedByDeviceId], references: [id], onDelete: SetNull)
 
   requestedDeviceName String?
   requestedFormIds    Json?
 
-  createdAt DateTime @default(now())
+  createdAt       DateTime @default(now())
   createdByUserId String?
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -354,12 +354,12 @@ model MobileProvisionToken {
 // Auth — Password Reset Tokens
 //
 model PasswordResetToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  tokenHash String   @unique
+  tokenHash String    @unique
   expiresAt DateTime
   usedAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -371,12 +371,12 @@ model PasswordResetToken {
 // Auth — Email Verification Tokens (Registration)
 //
 model EmailVerificationToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  tokenHash String   @unique
+  tokenHash String    @unique
   expiresAt DateTime
   usedAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

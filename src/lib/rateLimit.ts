@@ -1,4 +1,4 @@
-/* eslint-disable no-console */
+import { httpError } from "@/lib/http";
 
 type Bucket = { count: number; resetAtMs: number };
 
@@ -73,4 +73,75 @@ export function getClientIp(req: Request): string {
 
   // dev fallback
   return "127.0.0.1";
+}
+
+type EnforceOpts = { limit: number; windowMs?: number; windowSec?: number };
+
+/**
+ * Backwards-compatible helper used across Mobile API routes.
+ *
+ * Supported call styles:
+ *   (A) enforceRateLimit(key, { limit, windowMs })
+ *   (B) enforceRateLimit(key, { limit, windowSec })
+ *   (C) enforceRateLimit(req, key, limit, windowSec?)
+ *   (D) enforceRateLimit(req, { key, limit, windowMs|windowSec })
+ *
+ * Throws httpError(429, RATE_LIMITED, ...) when exceeded.
+ */
+export function enforceRateLimit(key: string, opts: { limit: number; windowMs: number }): void;
+export function enforceRateLimit(key: string, opts: { limit: number; windowSec: number }): void;
+export function enforceRateLimit(req: Request, key: string, limit: number, windowSec?: number): void;
+export function enforceRateLimit(req: Request, opts: { key: string; limit: number; windowMs?: number; windowSec?: number }): void;
+export function enforceRateLimit(...args: unknown[]): void {
+  // Parse arguments
+  let key: string | null = null;
+  let limit = 10;
+  let windowSec = 60;
+
+  const first = args[0];
+
+  // Style A/B: (key: string, opts: {limit, windowMs|windowSec})
+  if (typeof first === "string") {
+    key = first;
+    const opts = args[1] as EnforceOpts | undefined;
+
+    if (opts && typeof opts === "object") {
+      if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) limit = Math.floor(opts.limit);
+      if (typeof opts.windowSec === "number" && Number.isFinite(opts.windowSec)) windowSec = Math.max(1, Math.floor(opts.windowSec));
+      if (typeof opts.windowMs === "number" && Number.isFinite(opts.windowMs)) windowSec = Math.max(1, Math.floor(opts.windowMs / 1000));
+    }
+  } else {
+    // Style C/D: (req, ...)
+    const maybeReq = first as Request | undefined;
+    void maybeReq;
+
+    const second = args[1];
+
+    if (typeof second === "string") {
+      // (req, key, limit, windowSec?)
+      key = second;
+      const lim = args[2] as number | undefined;
+      const win = args[3] as number | undefined;
+
+      if (typeof lim === "number" && Number.isFinite(lim)) limit = Math.floor(lim);
+      if (typeof win === "number" && Number.isFinite(win)) windowSec = Math.max(1, Math.floor(win));
+    } else if (second && typeof second === "object") {
+      // (req, { key, limit, windowMs|windowSec })
+      const opts = second as { key?: unknown; limit?: unknown; windowMs?: unknown; windowSec?: unknown };
+      if (typeof opts.key === "string") key = opts.key;
+
+      if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) limit = Math.floor(opts.limit);
+      if (typeof opts.windowSec === "number" && Number.isFinite(opts.windowSec)) windowSec = Math.max(1, Math.floor(opts.windowSec));
+      if (typeof opts.windowMs === "number" && Number.isFinite(opts.windowMs)) windowSec = Math.max(1, Math.floor(opts.windowMs / 1000));
+    }
+  }
+
+  if (!key || !key.trim()) {
+    throw httpError(500, "INTERNAL_ERROR", "Rate limit misconfigured.");
+  }
+
+  const r = rateLimitCheck({ key, limit, windowSec });
+  if (!r.ok) {
+    throw httpError(429, "RATE_LIMITED", "Too many requests.", { retryAfterSec: r.retryAfterSec });
+  }
 }
