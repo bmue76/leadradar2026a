@@ -10,17 +10,22 @@
  * - Seed prints the cleartext token once for DEV proof.
  */
 
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import crypto from "node:crypto";
-
-const prisma = new PrismaClient();
 
 function env(name: string, fallback = ""): string {
   return (process.env[name] ?? fallback).trim();
 }
 
+function envFirst(names: string[]): string {
+  for (const n of names) {
+    const v = env(n, "");
+    if (v) return v;
+  }
+  return "";
+}
+
 function hasStrongSecret(s: string): boolean {
-  // pragmatic: avoid accidental empty/short secrets
   return s.trim().length >= 16;
 }
 
@@ -31,6 +36,32 @@ function hmacSha256Hex(secret: string, token: string): string {
 function randomToken(): string {
   return `lrk_${crypto.randomBytes(24).toString("hex")}`;
 }
+
+function asInputJson(v: unknown): Prisma.InputJsonValue {
+  return v as Prisma.InputJsonValue;
+}
+
+// Prisma v7: datasource URL is NOT in schema -> must be provided at runtime (seed + app).
+const dbUrl = envFirst([
+  "DATABASE_URL",
+  "PRISMA_DATABASE_URL",
+  "POSTGRES_PRISMA_URL",
+  "POSTGRES_URL",
+  "NEON_DATABASE_URL",
+]);
+
+if (!dbUrl) {
+  console.error(
+    "[seed] Missing database url. Set DATABASE_URL (recommended) or one of: PRISMA_DATABASE_URL, POSTGRES_PRISMA_URL, POSTGRES_URL."
+  );
+  process.exit(1);
+}
+
+const prisma = new PrismaClient({
+  datasources: {
+    db: { url: dbUrl },
+  },
+});
 
 async function upsertTenant() {
   const slug = env("SEED_TENANT_SLUG", "atlex").toLowerCase();
@@ -70,8 +101,7 @@ async function upsertDemoForm(tenantId: string) {
     select: { id: true },
   });
 
-  const description =
-    "DEV Demo Form für echte Lead-Captures über Mobile API v1 (Demo Capture Screen).";
+  const description = "DEV Demo Form für echte Lead-Captures über Mobile API v1 (Demo Capture Screen).";
 
   const form = existing
     ? await prisma.form.update({
@@ -145,8 +175,8 @@ async function upsertDemoForm(tenantId: string) {
         sortOrder: f.sortOrder,
         placeholder: f.placeholder ?? undefined,
         helpText: f.helpText ?? undefined,
-        // Prisma v7: NEVER pass null here, use undefined to omit.
-        config: typeof f.config === "undefined" ? undefined : (f.config as any),
+        // Prisma v7: do NOT pass null. Use undefined to omit.
+        config: typeof f.config === "undefined" ? undefined : asInputJson(f.config),
       },
       create: {
         tenantId,
@@ -159,7 +189,7 @@ async function upsertDemoForm(tenantId: string) {
         sortOrder: f.sortOrder,
         placeholder: f.placeholder ?? undefined,
         helpText: f.helpText ?? undefined,
-        config: typeof f.config === "undefined" ? undefined : (f.config as any),
+        config: typeof f.config === "undefined" ? undefined : asInputJson(f.config),
       },
     });
   }
@@ -167,11 +197,7 @@ async function upsertDemoForm(tenantId: string) {
   return form;
 }
 
-async function recreateDemoMobileKeyAndDevice(opts: {
-  tenantId: string;
-  ownerUserId: string;
-  formId: string;
-}) {
+async function recreateDemoMobileKeyAndDevice(opts: { tenantId: string; ownerUserId: string; formId: string }) {
   const secret = env("MOBILE_API_KEY_SECRET", "");
   if (!hasStrongSecret(secret)) {
     console.log("[seed] MOBILE_API_KEY_SECRET missing/too short -> skip MobileApiKey/Device seed.");
@@ -181,7 +207,7 @@ async function recreateDemoMobileKeyAndDevice(opts: {
   const keyName = "Seed Demo Key";
   const deviceName = "Seed Demo Device";
 
-  // Clean previous seed artifacts to keep things simple and predictable
+  // Clean previous seed artifacts for predictability
   const old = await prisma.mobileApiKey.findFirst({
     where: { tenantId: opts.tenantId, name: keyName },
     select: { id: true, device: { select: { id: true } } },
