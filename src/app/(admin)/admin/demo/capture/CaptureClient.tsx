@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { adminFetchJson, setTenantSlugClient, TENANT_SLUG_STORAGE_KEY } from "../../_lib/adminFetch";
+import { adminFetchJson, getTenantSlugClient, setTenantSlugClient } from "../../_lib/adminFetch";
 
 type FormListItem = { id: string; name: string; description: string | null; status: string };
 
@@ -28,65 +28,70 @@ type FormDetail = {
 
 type FormValue = string | boolean | string[];
 
-const LS_DEV_MOBILE_KEY = "leadradar.devMobileApiKey";
-const LS_LEGACY_MOBILE_KEY = "lr_demo_capture_mobile_api_key";
+const LS_MOBILE_KEY_LEGACY = "lr_demo_capture_mobile_api_key";
+const LS_MOBILE_KEY_DEV = "leadradar.devMobileApiKey";
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
-function readLocalStorage(key: string): string {
+function getMobileApiKeyClient(): string {
   if (typeof window === "undefined") return "";
   try {
-    return window.localStorage.getItem(key) ?? "";
+    const dev = window.localStorage.getItem(LS_MOBILE_KEY_DEV) ?? "";
+    if (dev.trim()) return dev;
+    return window.localStorage.getItem(LS_MOBILE_KEY_LEGACY) ?? "";
   } catch {
     return "";
   }
 }
 
-function writeLocalStorage(key: string, value: string) {
+function setMobileApiKeyClient(v: string) {
   if (typeof window === "undefined") return;
   try {
-    if (!value) window.localStorage.removeItem(key);
-    else window.localStorage.setItem(key, value);
+    const s = v.trim();
+    if (!s) {
+      window.localStorage.removeItem(LS_MOBILE_KEY_DEV);
+      window.localStorage.removeItem(LS_MOBILE_KEY_LEGACY);
+    } else {
+      window.localStorage.setItem(LS_MOBILE_KEY_DEV, s);
+      window.localStorage.setItem(LS_MOBILE_KEY_LEGACY, s);
+    }
   } catch {
     // ignore
   }
 }
 
-function getTenantOverrideClient(): string {
-  return readLocalStorage(TENANT_SLUG_STORAGE_KEY).trim();
-}
-
-function setDevMobileApiKeyClient(v: string) {
-  const s = v.trim();
-  writeLocalStorage(LS_DEV_MOBILE_KEY, s);
-  if (s) writeLocalStorage(LS_LEGACY_MOBILE_KEY, ""); // cleanup legacy if we have new
-}
-
-function getDevMobileApiKeyClient(): string {
-  const primary = readLocalStorage(LS_DEV_MOBILE_KEY).trim();
-  if (primary) return primary;
-  const legacy = readLocalStorage(LS_LEGACY_MOBILE_KEY).trim();
-  return legacy;
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 function parseFormsPayload(payload: unknown): FormListItem[] {
+  // Accept multiple shapes:
+  // A) { forms: [...] }
+  // B) { data: { forms: [...] } }  (in case wrapper leaked through)
+  // C) [...] (direct array)
   if (Array.isArray(payload)) return payload as FormListItem[];
+
   if (!isRecord(payload)) return [];
+
   const formsA = payload.forms;
   if (Array.isArray(formsA)) return formsA as FormListItem[];
+
   const data = payload.data;
   if (isRecord(data) && Array.isArray(data.forms)) return data.forms as FormListItem[];
+
   return [];
 }
 
 function parseDetailPayload(payload: unknown): FormDetail | null {
+  // Accept:
+  // A) { id, name, fields: [...] }
+  // B) { data: { id, name, fields: [...] } }
   if (!isRecord(payload)) return null;
+
   const direct = payload;
   if (typeof direct.id === "string" && Array.isArray(direct.fields)) return direct as unknown as FormDetail;
+
   const data = payload.data;
   if (isRecord(data) && typeof data.id === "string" && Array.isArray(data.fields)) return data as unknown as FormDetail;
+
   return null;
 }
 
@@ -143,10 +148,11 @@ function buildMobileAuthHeaders(rawKey: string): Record<string, string> {
 }
 
 export default function CaptureClient() {
-  const [tenantSlug, setTenantSlug] = React.useState<string>(""); // optional override only
+  // hydration-safe defaults (avoid server vs client mismatch)
+  const [tenantSlug, setTenantSlug] = React.useState<string>("");
   const [mobileApiKey, setMobileApiKey] = React.useState<string>("");
 
-  const [loadingForms, setLoadingForms] = React.useState(false);
+  const [loadingForms, setLoadingForms] = React.useState(true);
   const [forms, setForms] = React.useState<FormListItem[]>([]);
   const [selectedFormId, setSelectedFormId] = React.useState<string>("");
 
@@ -159,17 +165,24 @@ export default function CaptureClient() {
   const [error, setError] = React.useState<string | null>(null);
   const [success, setSuccess] = React.useState<{ leadId: string; deduped: boolean } | null>(null);
 
-  const keyMissing = !mobileApiKey.trim();
+  function ensureMobileKeyOrError(kRaw: string): string | null {
+    const k = kRaw.trim();
+    if (!k) {
+      setError("Mobile API Key fehlt. Bitte oben setzen und Apply klicken (oder ?key=... verwenden).");
+      return null;
+    }
+    return k;
+  }
 
-  async function loadForms(opts?: { keepSelection?: boolean; overrideKey?: string; overrideTenantSlug?: string }) {
-    const key = (opts?.overrideKey ?? mobileApiKey).trim();
-    const tSlug = (opts?.overrideTenantSlug ?? tenantSlug).trim();
-
+  async function loadFormsWith(args?: { tenantSlug?: string; apiKey?: string; keepSelection?: boolean }) {
     setLoadingForms(true);
     setError(null);
     setSuccess(null);
 
-    if (!key) {
+    const t = (args?.tenantSlug ?? tenantSlug).trim();
+    const k0 = args?.apiKey ?? mobileApiKey;
+    const k = ensureMobileKeyOrError(k0);
+    if (!k) {
       setForms([]);
       setSelectedFormId("");
       setDetail(null);
@@ -180,8 +193,8 @@ export default function CaptureClient() {
 
     const res = await adminFetchJson<unknown>("/api/mobile/v1/forms", {
       method: "GET",
-      tenantSlug: tSlug ? tSlug : undefined,
-      headers: buildMobileAuthHeaders(key),
+      tenantSlug: t ? t : undefined,
+      headers: buildMobileAuthHeaders(k),
     });
 
     if (!res.ok) {
@@ -197,7 +210,7 @@ export default function CaptureClient() {
     const nextForms = parseFormsPayload(res.data);
     setForms(nextForms);
 
-    const keep = opts?.keepSelection ?? false;
+    const keep = args?.keepSelection ?? false;
     const nextSelected =
       keep && selectedFormId && nextForms.some((f) => f.id === selectedFormId)
         ? selectedFormId
@@ -216,14 +229,14 @@ export default function CaptureClient() {
       return;
     }
 
-    const key = mobileApiKey.trim();
-    const tSlug = tenantSlug.trim();
-
     setLoadingDetail(true);
     setError(null);
     setSuccess(null);
 
-    if (!key) {
+    const t = tenantSlug.trim();
+    const k0 = mobileApiKey;
+    const k = ensureMobileKeyOrError(k0);
+    if (!k) {
       setDetail(null);
       setValues({});
       setLoadingDetail(false);
@@ -232,8 +245,8 @@ export default function CaptureClient() {
 
     const res = await adminFetchJson<unknown>(`/api/mobile/v1/forms/${formId}`, {
       method: "GET",
-      tenantSlug: tSlug ? tSlug : undefined,
-      headers: buildMobileAuthHeaders(key),
+      tenantSlug: t ? t : undefined,
+      headers: buildMobileAuthHeaders(k),
     });
 
     if (!res.ok) {
@@ -269,30 +282,29 @@ export default function CaptureClient() {
     setLoadingDetail(false);
   }
 
-  // Init: read localStorage + optional ?key=... (DEV), then load forms if we have a key.
+  // Init: read tenant + key from localStorage, optional ?key=..., then load forms once.
   React.useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const storedTenant = getTenantOverrideClient();
-    if (storedTenant) setTenantSlug(storedTenant);
+    const initialTenant = getTenantSlugClient();
+    let initialKey = getMobileApiKeyClient();
 
     const url = new URL(window.location.href);
-    const qpKey = (url.searchParams.get("key") ?? "").trim();
-
-    let initialKey = getDevMobileApiKeyClient();
-
-    if (qpKey) {
-      initialKey = qpKey;
-      setDevMobileApiKeyClient(qpKey);
+    const qp = (url.searchParams.get("key") ?? "").trim();
+    if (qp) {
+      initialKey = qp;
+      setMobileApiKeyClient(qp);
 
       url.searchParams.delete("key");
-      window.history.replaceState({}, "", url.toString());
+      const qs = url.searchParams.toString();
+      const nextUrl = `${url.pathname}${qs ? `?${qs}` : ""}${url.hash}`;
+      window.history.replaceState({}, "", nextUrl);
     }
 
-    if (initialKey) {
-      setMobileApiKey(initialKey);
-      void loadForms({ keepSelection: false, overrideKey: initialKey, overrideTenantSlug: storedTenant });
-    }
+    setTenantSlug(initialTenant);
+    setMobileApiKey(initialKey);
+
+    void loadFormsWith({ tenantSlug: initialTenant, apiKey: initialKey, keepSelection: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -334,11 +346,8 @@ export default function CaptureClient() {
     setError(null);
     setSuccess(null);
 
-    const key = mobileApiKey.trim();
-    if (!key) {
-      setError("Mobile API Key fehlt. Bitte unter “Mobile API Key (DEV)” setzen und Apply klicken.");
-      return;
-    }
+    const k = ensureMobileKeyOrError(mobileApiKey);
+    if (!k) return;
 
     const reqErr = validateRequired();
     if (reqErr) {
@@ -368,7 +377,7 @@ export default function CaptureClient() {
       const res = await adminFetchJson<{ leadId: string; deduped: boolean }>("/api/mobile/v1/leads", {
         method: "POST",
         tenantSlug: tenantSlug.trim() ? tenantSlug.trim() : undefined,
-        headers: { "content-type": "application/json", ...buildMobileAuthHeaders(key) },
+        headers: { "content-type": "application/json", ...buildMobileAuthHeaders(k) },
         body: JSON.stringify(payload),
       });
 
@@ -392,13 +401,13 @@ export default function CaptureClient() {
   function onSaveTenantSlug() {
     const s = tenantSlug.trim();
     setTenantSlugClient(s);
-    void loadForms({ keepSelection: false });
+    void loadFormsWith({ tenantSlug: s, apiKey: mobileApiKey, keepSelection: false });
   }
 
   function onSaveMobileKey() {
     const s = mobileApiKey.trim();
-    setDevMobileApiKeyClient(s);
-    void loadForms({ keepSelection: false });
+    setMobileApiKeyClient(s);
+    void loadFormsWith({ tenantSlug, apiKey: s, keepSelection: false });
   }
 
   function renderField(f: FormField) {
@@ -525,6 +534,8 @@ export default function CaptureClient() {
     );
   }
 
+  const keyMissing = !mobileApiKey.trim();
+
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-8">
       <div className="mb-6">
@@ -532,17 +543,19 @@ export default function CaptureClient() {
         <p className="mt-1 text-sm text-neutral-600">
           Interner Screen zum Generieren echter Leads (Mobile API v1) – damit /admin/leads und Exports “Content” haben.
         </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <a className="rounded-xl border border-neutral-200 px-3 py-2 text-sm hover:bg-neutral-50" href="/admin/settings/mobile">
+            Open Mobile Ops
+          </a>
+        </div>
       </div>
 
       {keyMissing ? (
         <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <div className="font-medium">Key required</div>
           <div className="mt-1 text-xs text-amber-900/80">
-            Erstelle/verwende einen Mobile ApiKey unter{" "}
-            <a className="underline" href="/admin/settings/mobile">
-              /admin/settings/mobile
-            </a>{" "}
-            und speichere ihn als <span className="font-mono">leadradar.devMobileApiKey</span>.
+            Setze oben einen Mobile API Key oder öffne den Screen mit{" "}
+            <span className="font-mono">/admin/demo/capture?key=...</span> (DEV-only), dann wird der Key gespeichert.
           </div>
         </div>
       ) : null}
@@ -567,9 +580,9 @@ export default function CaptureClient() {
           </button>
         </div>
         <div className="mt-2 text-xs text-neutral-600">
-          Required. Wird im Browser gespeichert (LocalStorage) als{" "}
-          <span className="font-mono">{LS_DEV_MOBILE_KEY}</span> und als{" "}
-          <span className="font-mono">x-api-key</span> an <span className="font-mono">/api/mobile/v1/*</span> gesendet.
+          Required. Wird im Browser gespeichert (LocalStorage:{" "}
+          <span className="font-mono">{LS_MOBILE_KEY_DEV}</span>, legacy: <span className="font-mono">{LS_MOBILE_KEY_LEGACY}</span>)
+          und als <span className="font-mono">x-api-key</span> an <span className="font-mono">/api/mobile/v1/*</span> gesendet.
         </div>
       </div>
 
@@ -580,7 +593,7 @@ export default function CaptureClient() {
             className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
             value={tenantSlug}
             onChange={(e) => setTenantSlug(e.target.value)}
-            placeholder="tenant slug (z.B. atlex) — leer = Session Tenant"
+            placeholder="tenant slug (z.B. atlex)"
             disabled={submitting || loadingForms || loadingDetail}
           />
           <button
@@ -606,9 +619,9 @@ export default function CaptureClient() {
 
           <button
             type="button"
-            onClick={() => void loadForms({ keepSelection: true })}
+            onClick={() => void loadFormsWith({ keepSelection: true })}
             className="rounded-xl border border-neutral-200 px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-50 disabled:opacity-60"
-            disabled={loadingForms || submitting || keyMissing}
+            disabled={loadingForms || submitting}
             aria-label="Reload forms"
           >
             Reload
@@ -644,9 +657,7 @@ export default function CaptureClient() {
           <form onSubmit={onSubmit} className="space-y-4">
             {detail.fields.map((f) => renderField(f))}
 
-            {error ? (
-              <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</div>
-            ) : null}
+            {error ? <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</div> : null}
 
             {success ? (
               <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
@@ -669,7 +680,7 @@ export default function CaptureClient() {
               <button
                 type="submit"
                 className="rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-60"
-                disabled={submitting || !selectedFormId || keyMissing}
+                disabled={submitting || !selectedFormId}
               >
                 {submitting ? "Saving…" : "Lead speichern"}
               </button>

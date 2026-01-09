@@ -1,6 +1,6 @@
 # LeadRadar2026A – Admin UI Screens
 
-Stand: 2026-01-08  
+Stand: 2026-01-09  
 Design: Apple-clean (reduziert, robust, klare States) — Notion-Elemente nur wo nötig.
 
 ---
@@ -24,7 +24,6 @@ Global Admin-Prinzipien:
 - Weißraum statt Linien
 - Typografie statt Boxen
 - Pro Screen 1 Primary Action
-- Keine Card-Schatten, kein „Admin-Grau“ als Grundfläche
 - Errors zeigen Trace + Retry
 
 ---
@@ -35,10 +34,10 @@ Ziel:
 - Forms auflisten, filtern, öffnen
 - Primary CTA: Form erstellen
 
-UX Notes (Apple-clean):
-- Toolbar: Search + Status Filter + Clear (Ghost) + Refresh (Ghost)
+UX Notes:
+- Toolbar: Search + Status Filter + Clear + Refresh
 - Table: Finder-like, Actions (Open) nur bei Hover/Focus
-- Empty: Icon + “No forms yet.” + Primary CTA “Create form”
+- Empty: “No forms yet.” + Primary CTA
 - Error: “Couldn’t load forms.” + Trace + Retry
 
 ---
@@ -46,14 +45,14 @@ UX Notes (Apple-clean):
 ## Screen: Leads (`/admin/leads`) — TP 1.7 + TP 2.2
 
 Ziel:
-- Leads in einer ruhigen Tabelle anzeigen
+- Leads in ruhiger Tabelle anzeigen
 - Row öffnet Detail (Drawer)
 - Pagination über “Load more”
 
-UX Notes (Apple-clean):
-- Table: Finder-like, Actions (Open) nur bei Hover/Focus
-- Status: Chip (Active/Deleted) ruhig, nicht bunt/rot
-- Footer: “Load more” als Secondary (ruhig, kein Primary)
+UX Notes:
+- Table: Finder-like
+- Status: Chip (Active/Deleted) ruhig
+- Footer: “Load more” Secondary
 
 ---
 
@@ -71,73 +70,48 @@ API Wiring:
 - Status: `GET /api/admin/v1/exports/:id` (Polling)
 - Download: `GET /api/admin/v1/exports/:id/download`
 
-UX Notes (Apple-clean):
+UX Notes:
 - Primary CTA: “Create export”
 - Secondary/Ghost: “Refresh”
-- Table: Finder-like, Actions (Poll/Download) nur bei Hover/Focus
-- Status: Chip (QUEUED/RUNNING/DONE/FAILED) ruhig, ohne Ampel-Farben
+- Table: Finder-like
+- Status: Chip (QUEUED/RUNNING/DONE/FAILED) ruhig
 - Empty: “No exports yet.” + Primary CTA
 - Error: “Couldn’t load exports.” + Trace + Retry
 
-Dev Tenant Context:
-- UI DEV helper via `localStorage`:
-  - `lr_admin_tenant_slug` (Tenant override)
-  - `lr_admin_user_id` (DEV user id header)
-
 ---
 
-## Screen: Mobile Ops (`/admin/settings/mobile`) — TP 2.9
+## Screen: Mobile Ops (`/admin/settings/mobile`) — TP 2.9 (Ops)
 
 Ziel:
-- Mobile Ops produktfähig machen (ApiKeys/Devices/Assignments)
-- Demo Capture Key Handling vereinfachen (DEV convenience)
+- Mobile API Betrieb produktfähig machen:
+  - ApiKeys listen / erstellen (one-time token) / revoke
+  - Devices listen / verwalten (rename, enable/disable)
+  - Assignments (Device ↔ Forms) per Replace-Strategy pflegen
+  - Demo Capture Key UX (DEV)
 
-Inhalt (MVP):
+UI Struktur (MVP):
 1) Section “ApiKeys”
-- Tabelle: Prefix | Label | Status | Last used | Created | Actions (Revoke)
-- Action “Create key”:
-  - Modal: label, “Create device” (default true), deviceName
-  - Danach: One-time token Dialog (Copy + “Open Demo Capture”)
-  - DEV convenience: Token wird in `localStorage` gespeichert: `leadradar.devMobileApiKey`
+- Table: Prefix | Name | Status | Last used | Created | Actions (Revoke)
+- CTA: “Create key”
+- Create Success: One-time token Anzeige + Copy + “Use for Demo Capture” (setzt localStorage und navigiert)
 
 2) Section “Devices”
-- Tabelle: Name | Status | Last seen | Assigned forms count | ApiKey prefix | Actions (Manage)
-- Manage (Drawer):
-  - Rename
-  - Status toggle ACTIVE/DISABLED
-  - Assignments Editor (Replace Strategy)
-    - Default nur ACTIVE Forms
-    - Optional Toggle “Show drafts/archived”
+- Table: Name | Status | Last seen | Last used | Assigned | ApiKey prefix | Actions (Manage)
+- Manage Drawer:
+  - Rename + Status
+  - Assignments: Checklist (default ACTIVE), optional Toggle “Show drafts/archived”
+  - Save Assignments (Replace)
 
 3) Demo Capture Shortcut
-- Button “Demo Capture (Key required)”
-- Erwartung: Demo Capture liest `leadradar.devMobileApiKey` aus localStorage.
-
-API Wiring:
-- Keys:
-  - `GET /api/admin/v1/mobile/keys`
-  - `POST /api/admin/v1/mobile/keys`
-  - `POST /api/admin/v1/mobile/keys/:id/revoke`
-- Devices:
-  - `GET /api/admin/v1/mobile/devices`
-  - `GET /api/admin/v1/mobile/devices/:id`
-  - `PATCH /api/admin/v1/mobile/devices/:id`
-- Assignments:
-  - `PUT /api/admin/v1/mobile/devices/:id/assignments`
-- Forms list (Assignments UI):
-  - `GET /api/admin/v1/mobile/forms?status=ACTIVE|ALL|...`
-
-UX Notes (ops-fokussiert):
-- Kein großes UX-Polish: robustes Management & klare Fehlerstates
-- Errors immer mit TraceID (API Standard)
-- Replace Strategy klar kommunizieren
+- Link “Open Demo Capture”
+- Hinweis: Key required (DEV-only), Key kann via localStorage oder `?key=` übernommen werden
 
 ---
 
 ## Screen: /login (Apple-clean)
 
 - Minimal: Wordmark/Logo + Email + Password + Primary CTA “Sign in”
-- Keine Cards, keine Schatten, keine Admin-Grau-Flächen
-- Error: ruhig (kleiner Text, keine roten Banner)
+- Keine Cards, keine Schatten
+- Error: ruhig (kleiner Text)
 - Nach Login: Redirect `/admin`
-- Topbar rechts: User Menu (Name/Email) + Logout
+- Topbar rechts: User Menu + Logout
