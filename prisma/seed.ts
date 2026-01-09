@@ -1,13 +1,8 @@
 /**
  * LeadRadar2026A — DEV Seed (safe + idempotent-ish)
  *
- * - Creates/updates a demo tenant + owner user
- * - Creates/updates one ACTIVE demo form + fields
- * - If MOBILE_API_KEY_SECRET is present: creates a fresh demo MobileApiKey + bound device + assignment
- *
- * IMPORTANT:
- * - No cleartext keys stored in DB (only hash + prefix).
- * - Seed prints the cleartext token once for DEV proof.
+ * Prisma v7 + prisma.config.ts:
+ * - datasource URL is NOT in schema -> PrismaClient must be constructed with { datasourceUrl }
  */
 
 import { Prisma, PrismaClient } from "@prisma/client";
@@ -41,7 +36,7 @@ function asInputJson(v: unknown): Prisma.InputJsonValue {
   return v as Prisma.InputJsonValue;
 }
 
-// Prisma v7: datasource URL is NOT in schema -> must be provided at runtime (seed + app).
+// Prisma v7: provide datasourceUrl explicitly (because schema has no url)
 const dbUrl = envFirst([
   "DATABASE_URL",
   "PRISMA_DATABASE_URL",
@@ -58,9 +53,7 @@ if (!dbUrl) {
 }
 
 const prisma = new PrismaClient({
-  datasources: {
-    db: { url: dbUrl },
-  },
+  datasourceUrl: dbUrl,
 });
 
 async function upsertTenant() {
@@ -153,14 +146,7 @@ async function upsertDemoForm(tenantId: string) {
       helpText: "DEV: Checkbox default=false",
       config: { defaultValue: false },
     },
-    {
-      key: "note",
-      label: "Notiz",
-      type: "TEXTAREA",
-      required: false,
-      sortOrder: 80,
-      placeholder: "Kurznotiz",
-    },
+    { key: "note", label: "Notiz", type: "TEXTAREA", required: false, sortOrder: 80, placeholder: "Kurznotiz" },
   ];
 
   for (const f of fields) {
@@ -175,7 +161,6 @@ async function upsertDemoForm(tenantId: string) {
         sortOrder: f.sortOrder,
         placeholder: f.placeholder ?? undefined,
         helpText: f.helpText ?? undefined,
-        // Prisma v7: do NOT pass null. Use undefined to omit.
         config: typeof f.config === "undefined" ? undefined : asInputJson(f.config),
       },
       create: {
