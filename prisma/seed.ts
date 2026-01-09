@@ -1,8 +1,9 @@
 /**
  * LeadRadar2026A — DEV Seed (safe + idempotent-ish)
  *
- * Prisma v7 + prisma.config.ts:
- * - datasource URL is NOT in schema -> PrismaClient must be constructed with { datasourceUrl }
+ * IMPORTANT:
+ * This repo uses prisma.config.ts (Prisma v7 “config-driven” setup).
+ * In driver-adapter mode, PrismaClient expects { adapter } (NOT datasources/datasourceUrl).
  */
 
 import { Prisma, PrismaClient } from "@prisma/client";
@@ -36,65 +37,94 @@ function asInputJson(v: unknown): Prisma.InputJsonValue {
   return v as Prisma.InputJsonValue;
 }
 
-// Prisma v7: provide datasourceUrl explicitly (because schema has no url)
-const dbUrl = envFirst([
-  "DATABASE_URL",
-  "PRISMA_DATABASE_URL",
-  "POSTGRES_PRISMA_URL",
-  "POSTGRES_URL",
-  "NEON_DATABASE_URL",
-]);
+type SeedDb = {
+  prisma: PrismaClient;
+  close: () => Promise<void>;
+};
 
-if (!dbUrl) {
-  console.error(
-    "[seed] Missing database url. Set DATABASE_URL (recommended) or one of: PRISMA_DATABASE_URL, POSTGRES_PRISMA_URL, POSTGRES_URL."
-  );
-  process.exit(1);
+async function createSeedDb(): Promise<SeedDb> {
+  const dbUrl = envFirst([
+    "DATABASE_URL",
+    "PRISMA_DATABASE_URL",
+    "POSTGRES_PRISMA_URL",
+    "POSTGRES_URL",
+    "NEON_DATABASE_URL",
+  ]);
+
+  if (!dbUrl) {
+    console.error(
+      "[seed] Missing DB url. Set DATABASE_URL (recommended) or one of: PRISMA_DATABASE_URL, POSTGRES_PRISMA_URL, POSTGRES_URL."
+    );
+    process.exit(1);
+  }
+
+  // Preferred (your setup): Driver Adapter (Postgres)
+  try {
+    const adapterMod = await import("@prisma/adapter-pg");
+    const pgMod = await import("pg");
+
+    const Pool = (pgMod as unknown as { Pool: typeof import("pg").Pool }).Pool;
+    const PrismaPg = (adapterMod as unknown as { PrismaPg: new (pool: import("pg").Pool) => unknown }).PrismaPg;
+
+    const pool = new Pool({ connectionString: dbUrl });
+    const adapter = new PrismaPg(pool);
+
+    const prisma = new PrismaClient({ adapter } as unknown as Prisma.PrismaClientOptions);
+
+    return {
+      prisma,
+      close: async () => {
+        await prisma.$disconnect();
+        await pool.end();
+      },
+    };
+  } catch (e) {
+    // Fallback (only if repo is NOT in adapter mode)
+    console.warn("[seed] adapter-pg init failed, trying plain PrismaClient().", e);
+    const prisma = new PrismaClient();
+    return {
+      prisma,
+      close: async () => {
+        await prisma.$disconnect();
+      },
+    };
+  }
 }
 
-const prisma = new PrismaClient({
-  datasourceUrl: dbUrl,
-});
-
-async function upsertTenant() {
+async function upsertTenant(prisma: PrismaClient) {
   const slug = env("SEED_TENANT_SLUG", "atlex").toLowerCase();
   const name = env("SEED_TENANT_NAME", "Atlex GmbH");
   const country = env("SEED_TENANT_COUNTRY", "CH");
 
-  const tenant = await prisma.tenant.upsert({
+  return prisma.tenant.upsert({
     where: { slug },
     update: { name, country },
     create: { slug, name, country },
     select: { id: true, slug: true, name: true, country: true },
   });
-
-  return tenant;
 }
 
-async function upsertOwnerUser(tenantId: string) {
+async function upsertOwnerUser(prisma: PrismaClient, tenantId: string) {
   const email = env("SEED_OWNER_EMAIL", "owner@atlex.test").toLowerCase();
   const firstName = env("SEED_OWNER_FIRST_NAME", "Beat");
   const lastName = env("SEED_OWNER_LAST_NAME", "Owner");
 
-  const user = await prisma.user.upsert({
+  return prisma.user.upsert({
     where: { email },
     update: { tenantId, role: "TENANT_OWNER", firstName, lastName },
     create: { email, tenantId, role: "TENANT_OWNER", firstName, lastName },
     select: { id: true, email: true, tenantId: true, role: true },
   });
-
-  return user;
 }
 
-async function upsertDemoForm(tenantId: string) {
+async function upsertDemoForm(prisma: PrismaClient, tenantId: string) {
   const formName = "Demo Lead Capture";
+  const description = "DEV Demo Form für echte Lead-Captures über Mobile API v1 (Demo Capture Screen).";
 
   const existing = await prisma.form.findFirst({
     where: { tenantId, name: formName },
     select: { id: true },
   });
-
-  const description = "DEV Demo Form für echte Lead-Captures über Mobile API v1 (Demo Capture Screen).";
 
   const form = existing
     ? await prisma.form.update({
@@ -182,7 +212,10 @@ async function upsertDemoForm(tenantId: string) {
   return form;
 }
 
-async function recreateDemoMobileKeyAndDevice(opts: { tenantId: string; ownerUserId: string; formId: string }) {
+async function recreateDemoMobileKeyAndDevice(
+  prisma: PrismaClient,
+  opts: { tenantId: string; ownerUserId: string; formId: string }
+) {
   const secret = env("MOBILE_API_KEY_SECRET", "");
   if (!hasStrongSecret(secret)) {
     console.log("[seed] MOBILE_API_KEY_SECRET missing/too short -> skip MobileApiKey/Device seed.");
@@ -249,28 +282,29 @@ async function recreateDemoMobileKeyAndDevice(opts: { tenantId: string; ownerUse
 }
 
 async function main() {
-  const tenant = await upsertTenant();
-  const owner = await upsertOwnerUser(tenant.id);
-  const form = await upsertDemoForm(tenant.id);
+  const db = await createSeedDb();
+  try {
+    const tenant = await upsertTenant(db.prisma);
+    const owner = await upsertOwnerUser(db.prisma, tenant.id);
+    const form = await upsertDemoForm(db.prisma, tenant.id);
 
-  console.log("[seed] Tenant:", tenant.slug, tenant.id);
-  console.log("[seed] Owner:", owner.email, owner.id, `(role=${owner.role})`);
-  console.log("[seed] Form:", form.name, form.id, `(status=${form.status})`);
+    console.log("[seed] Tenant:", tenant.slug, tenant.id);
+    console.log("[seed] Owner:", owner.email, owner.id, `(role=${owner.role})`);
+    console.log("[seed] Form:", form.name, form.id, `(status=${form.status})`);
 
-  await recreateDemoMobileKeyAndDevice({
-    tenantId: tenant.id,
-    ownerUserId: owner.id,
-    formId: form.id,
-  });
+    await recreateDemoMobileKeyAndDevice(db.prisma, {
+      tenantId: tenant.id,
+      ownerUserId: owner.id,
+      formId: form.id,
+    });
 
-  console.log("[seed] Done.");
+    console.log("[seed] Done.");
+  } finally {
+    await db.close();
+  }
 }
 
-main()
-  .catch((e) => {
-    console.error("[seed] FAILED:", e);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+main().catch((e) => {
+  console.error("[seed] FAILED:", e);
+  process.exitCode = 1;
+});
