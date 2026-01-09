@@ -717,6 +717,9 @@ export function useFormDetail(formId: string) {
     showInactive,
     setShowInactive,
 
+    // ✅ expose for lint + future UI needs (e.g. show "Reordering…" indicator)
+    orderDirty,
+
     draft,
     setDraftPatch,
 
