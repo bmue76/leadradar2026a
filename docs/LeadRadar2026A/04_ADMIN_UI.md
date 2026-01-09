@@ -80,31 +80,60 @@ UX Notes:
 
 ---
 
-## Screen: Mobile Ops (`/admin/settings/mobile`) — TP 2.9 (Ops)
+## Screen: Mobile Ops (`/admin/settings/mobile`) — TP 2.9 + TP 3.0
 
 Ziel:
 - Mobile API Betrieb produktfähig machen:
   - ApiKeys listen / erstellen (one-time token) / revoke
   - Devices listen / verwalten (rename, enable/disable)
   - Assignments (Device ↔ Forms) per Replace-Strategy pflegen
+  - Provisioning (TP 3.0): Token + Claim Flow
   - Demo Capture Key UX (DEV)
 
-UI Struktur (MVP):
-1) Section “ApiKeys”
+### UI Struktur (MVP)
+
+#### 1) Section “Provisioning” (TP 3.0)
+- CTA: “Create token”
+- Create Modal:
+  - Requested DeviceName (optional)
+  - Expires (Minutes, clamp 5…240, default 30)
+  - Initial Assignments (ACTIVE forms checklist, optional)
+- Success:
+  - One-time Token Anzeige + Copy
+  - QR (DEV): Link zu `/admin/demo/provision?token=...`
+- Table:
+  - Prefix | Status (ACTIVE/USED/REVOKED/EXPIRED) | Expires | Used | Created | Actions (Revoke wenn ACTIVE)
+
+#### 2) Section “ApiKeys” (TP 2.9)
 - Table: Prefix | Name | Status | Last used | Created | Actions (Revoke)
 - CTA: “Create key”
 - Create Success: One-time token Anzeige + Copy + “Use for Demo Capture” (setzt localStorage und navigiert)
 
-2) Section “Devices”
+#### 3) Section “Devices” (TP 2.9)
 - Table: Name | Status | Last seen | Last used | Assigned | ApiKey prefix | Actions (Manage)
 - Manage Drawer:
   - Rename + Status
   - Assignments: Checklist (default ACTIVE), optional Toggle “Show drafts/archived”
   - Save Assignments (Replace)
 
-3) Demo Capture Shortcut
-- Link “Open Demo Capture”
-- Hinweis: Key required (DEV-only), Key kann via localStorage oder `?key=` übernommen werden
+#### 4) Demo Shortcuts (DEV)
+- Links:
+  - “Open Demo Capture” (`/admin/demo/capture`)
+  - “Open Demo Provision” (`/admin/demo/provision`)
+
+---
+
+## Screen: Demo Provision (`/admin/demo/provision`) — TP 3.0 (DEV-only)
+
+Ziel:
+- Provision Token claimen, ohne Mobile-App
+- Nach Claim wird `leadradar.devMobileApiKey` (und legacy key) in localStorage geschrieben
+- Redirect zu `/admin/demo/capture`
+
+UX Notes:
+- Token Input (oder `?token=...`)
+- Button “Claim token”
+- Error zeigt Code + traceId
 
 ---
 
@@ -115,3 +144,4 @@ UI Struktur (MVP):
 - Error: ruhig (kleiner Text)
 - Nach Login: Redirect `/admin`
 - Topbar rechts: User Menu + Logout
+

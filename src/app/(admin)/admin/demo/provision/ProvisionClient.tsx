@@ -1,0 +1,134 @@
+"use client";
+
+import * as React from "react";
+import { useSearchParams } from "next/navigation";
+
+type ApiResult<T> =
+  | { ok: true; data: T; traceId: string }
+  | { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
+
+const LS_DEMO_CAPTURE_KEY_LEGACY = "lr_demo_capture_mobile_api_key";
+const LS_DEMO_CAPTURE_KEY_DEV = "leadradar.devMobileApiKey";
+
+function setDemoCaptureKey(token: string) {
+  try {
+    const t = token.trim();
+    if (!t) return;
+    window.localStorage.setItem(LS_DEMO_CAPTURE_KEY_DEV, t);
+    window.localStorage.setItem(LS_DEMO_CAPTURE_KEY_LEGACY, t);
+  } catch {
+    // ignore
+  }
+}
+
+function fmtErr(code: string, message: string, traceId?: string) {
+  const parts = [`${code}: ${message}`];
+  if (traceId) parts.push(`trace ${traceId}`);
+  return parts.join(" · ");
+}
+
+export default function ProvisionClient() {
+  const sp = useSearchParams();
+  const tokenFromUrl = (sp.get("token") || "").trim();
+
+  const [token, setToken] = React.useState(tokenFromUrl);
+  const [deviceName, setDeviceName] = React.useState("Messe Device");
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (tokenFromUrl && !token) setToken(tokenFromUrl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tokenFromUrl]);
+
+  async function claim() {
+    const t = token.trim();
+    if (!t) {
+      setError("Please enter a token.");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const res = await fetch("/api/mobile/v1/provision/claim", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: t, deviceName: deviceName.trim() || undefined }),
+      });
+
+      const json = (await res.json()) as ApiResult<{
+        token: string;
+        device: { id: string; name: string; status: string };
+        apiKey: { id: string; prefix: string; status: string };
+        assignedFormIds: string[];
+      }>;
+
+      if (!json.ok) {
+        setError(fmtErr(json.error.code, json.error.message, json.traceId));
+        return;
+      }
+
+      setDemoCaptureKey(json.data.token);
+      window.location.href = "/admin/demo/capture";
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-xl px-6 py-10">
+      <h1 className="text-xl font-semibold tracking-tight">Demo Provision (DEV)</h1>
+      <p className="mt-1 text-sm text-neutral-600">
+        Claimt einen Provision Token und speichert den erhaltenen <span className="font-mono">x-api-key</span> in{" "}
+        <span className="font-mono">localStorage</span> (Demo Capture).
+      </p>
+
+      {error ? (
+        <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</div>
+      ) : null}
+
+      <div className="mt-6">
+        <label className="mb-1 block text-xs font-medium text-neutral-700">Provision token</label>
+        <input
+          className="w-full rounded-xl border border-neutral-200 px-3 py-2 font-mono text-xs"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          placeholder="prov_..."
+          disabled={loading}
+        />
+      </div>
+
+      <div className="mt-4">
+        <label className="mb-1 block text-xs font-medium text-neutral-700">Device name (optional)</label>
+        <input
+          className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm"
+          value={deviceName}
+          onChange={(e) => setDeviceName(e.target.value)}
+          placeholder="z.B. iPad Eingang"
+          disabled={loading}
+        />
+      </div>
+
+      <div className="mt-6 flex items-center justify-end gap-2">
+        <a
+          href="/admin/demo/capture"
+          className="rounded-xl border border-neutral-200 px-3 py-2 text-sm text-neutral-800 hover:bg-neutral-50"
+        >
+          Open Demo Capture
+        </a>
+        <button
+          type="button"
+          onClick={() => void claim()}
+          className="rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-60"
+          disabled={loading}
+        >
+          {loading ? "Claiming…" : "Claim token"}
+        </button>
+      </div>
+    </div>
+  );
+}

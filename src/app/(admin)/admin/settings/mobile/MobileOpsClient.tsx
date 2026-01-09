@@ -1,7 +1,9 @@
 "use client";
 
 import * as React from "react";
+import Image from "next/image";
 import { adminFetchJson } from "../../_lib/adminFetch";
+import { qrToDataUrl } from "@/lib/qrcode";
 
 type ApiKeyRow = {
   id: string;
@@ -25,6 +27,15 @@ type DeviceRow = {
   assignedForms?: Array<{ id: string; name: string; status: string }>;
 };
 
+type ProvisionRow = {
+  id: string;
+  prefix?: string;
+  status?: string;
+  expiresAt?: string;
+  usedAt?: string | null;
+  createdAt?: string;
+};
+
 type FormListItem = { id: string; name: string; status: string; description?: string | null };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -42,8 +53,6 @@ function pickArray(payload: unknown): unknown[] {
 }
 
 function pickAdminFormsList(payload: unknown): unknown[] {
-  // Admin forms list returns data: { forms: [...], items: [...] } (per docs),
-  // but we accept variants and wrappers.
   if (Array.isArray(payload)) return payload;
   if (!isRecord(payload)) return [];
 
@@ -73,10 +82,12 @@ function isoShort(d?: string | null): string {
 
 function chipClasses(status: string): string {
   const s = (status || "").toUpperCase();
-  const base = "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium";
-  if (s === "ACTIVE") return `${base} bg-emerald-50 text-emerald-900 border border-emerald-200`;
-  if (s === "REVOKED" || s === "DISABLED") return `${base} bg-neutral-100 text-neutral-700 border border-neutral-200`;
-  return `${base} bg-neutral-100 text-neutral-700 border border-neutral-200`;
+  const base = "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border";
+  if (s === "ACTIVE") return `${base} bg-emerald-50 text-emerald-900 border-emerald-200`;
+  if (s === "USED") return `${base} bg-indigo-50 text-indigo-900 border-indigo-200`;
+  if (s === "EXPIRED") return `${base} bg-amber-50 text-amber-900 border-amber-200`;
+  if (s === "REVOKED" || s === "DISABLED") return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
+  return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
 }
 
 async function copyToClipboard(text: string): Promise<boolean> {
@@ -109,7 +120,35 @@ function fmtErr(e: { code: string; message: string; traceId?: string; status?: n
   return parts.join(" · ");
 }
 
+function effectiveProvisionStatus(row: ProvisionRow): string {
+  const s = (row.status || "—").toUpperCase();
+  if (s === "ACTIVE" && row.expiresAt) {
+    const ex = new Date(row.expiresAt).getTime();
+    if (!Number.isNaN(ex) && ex <= Date.now()) return "EXPIRED";
+  }
+  return s;
+}
+
 export default function MobileOpsClient() {
+  // Provisioning
+  const [provLoading, setProvLoading] = React.useState(true);
+  const [provItems, setProvItems] = React.useState<ProvisionRow[]>([]);
+  const [provError, setProvError] = React.useState<string | null>(null);
+
+  // Create Provision Modal
+  const [provCreateOpen, setProvCreateOpen] = React.useState(false);
+  const [provDeviceName, setProvDeviceName] = React.useState("Messe Device");
+  const [provExpiresMin, setProvExpiresMin] = React.useState<number>(30);
+  const [provFormIds, setProvFormIds] = React.useState<Set<string>>(new Set());
+  const [provSubmitting, setProvSubmitting] = React.useState(false);
+
+  const [provOneTimeToken, setProvOneTimeToken] = React.useState<string | null>(null);
+  const [provOneTimeMeta, setProvOneTimeMeta] = React.useState<{ prefix?: string; id?: string; expiresAt?: string } | null>(
+    null
+  );
+  const [provOneTimeCopied, setProvOneTimeCopied] = React.useState(false);
+  const [provQrDataUrl, setProvQrDataUrl] = React.useState<string | null>(null);
+
   // ApiKeys
   const [keysLoading, setKeysLoading] = React.useState(true);
   const [keys, setKeys] = React.useState<ApiKeyRow[]>([]);
@@ -151,6 +190,22 @@ export default function MobileOpsClient() {
   const [savingDevice, setSavingDevice] = React.useState(false);
   const [savingAssignments, setSavingAssignments] = React.useState(false);
 
+  async function loadProvisionTokens() {
+    setProvLoading(true);
+    setProvError(null);
+    const res = await adminFetchJson<unknown>("/api/admin/v1/mobile/provision-tokens?limit=50", { method: "GET" });
+    if (!res.ok) {
+      setProvItems([]);
+      setProvError(fmtErr(res));
+      setProvLoading(false);
+      return;
+    }
+    const rows = pickArray(res.data) as unknown[];
+    const parsed: ProvisionRow[] = rows.map((r) => (isRecord(r) ? (r as ProvisionRow) : null)).filter(Boolean) as ProvisionRow[];
+    setProvItems(parsed);
+    setProvLoading(false);
+  }
+
   async function loadKeys() {
     setKeysLoading(true);
     setKeysError(null);
@@ -162,9 +217,7 @@ export default function MobileOpsClient() {
       return;
     }
     const rows = pickArray(res.data) as unknown[];
-    const parsed: ApiKeyRow[] = rows
-      .map((r) => (isRecord(r) ? (r as ApiKeyRow) : null))
-      .filter(Boolean) as ApiKeyRow[];
+    const parsed: ApiKeyRow[] = rows.map((r) => (isRecord(r) ? (r as ApiKeyRow) : null)).filter(Boolean) as ApiKeyRow[];
     setKeys(parsed);
     setKeysLoading(false);
   }
@@ -180,18 +233,145 @@ export default function MobileOpsClient() {
       return;
     }
     const rows = pickArray(res.data) as unknown[];
-    const parsed: DeviceRow[] = rows
-      .map((r) => (isRecord(r) ? (r as DeviceRow) : null))
-      .filter(Boolean) as DeviceRow[];
+    const parsed: DeviceRow[] = rows.map((r) => (isRecord(r) ? (r as DeviceRow) : null)).filter(Boolean) as DeviceRow[];
     setDevices(parsed);
     setDevicesLoading(false);
   }
 
   React.useEffect(() => {
+    void loadProvisionTokens();
     void loadKeys();
     void loadDevices();
   }, []);
 
+  // Forms list helper (reused for device assignments + provisioning modal)
+  async function loadFormsForAssignments() {
+    setFormsLoading(true);
+
+    const url = showNonActiveForms ? "/api/admin/v1/forms" : "/api/admin/v1/forms?status=ACTIVE";
+    const res = await adminFetchJson<unknown>(url, { method: "GET" });
+
+    if (!res.ok) {
+      setManageError(fmtErr(res));
+      setForms([]);
+      setFormsLoading(false);
+      return;
+    }
+
+    const arr = pickAdminFormsList(res.data);
+    const parsed: FormListItem[] = arr.map((x) => (isRecord(x) ? (x as FormListItem) : null)).filter(Boolean) as FormListItem[];
+
+    setForms(parsed);
+    setFormsLoading(false);
+  }
+
+  // Provisioning UI
+  function openProvisionCreate() {
+    setProvCreateOpen(true);
+    setProvDeviceName("Messe Device");
+    setProvExpiresMin(30);
+    setProvFormIds(new Set());
+    setProvSubmitting(false);
+    setProvOneTimeToken(null);
+    setProvOneTimeMeta(null);
+    setProvOneTimeCopied(false);
+    setProvQrDataUrl(null);
+
+    // ensure forms list is available (ACTIVE)
+    setShowNonActiveForms(false);
+    setTimeout(() => void loadFormsForAssignments(), 0);
+  }
+
+  function toggleProvForm(id: string) {
+    setProvFormIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function onCreateProvisionToken() {
+    const deviceName = provDeviceName.trim();
+    const expiresInMinutes = Math.max(5, Math.min(240, Math.floor(Number(provExpiresMin || 30))));
+    const formIds = Array.from(provFormIds);
+
+    setProvSubmitting(true);
+    setProvError(null);
+    setProvOneTimeToken(null);
+    setProvOneTimeMeta(null);
+    setProvOneTimeCopied(false);
+    setProvQrDataUrl(null);
+
+    try {
+      const body: Record<string, unknown> = { expiresInMinutes };
+      if (deviceName) body.deviceName = deviceName;
+      if (formIds.length) body.formIds = formIds;
+
+      const res = await adminFetchJson<unknown>("/api/admin/v1/mobile/provision-tokens", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        setProvError(fmtErr(res));
+        return;
+      }
+
+      if (!isRecord(res.data)) {
+        setProvError("Unexpected response shape from POST /api/admin/v1/mobile/provision-tokens");
+        return;
+      }
+
+      const d = res.data as Record<string, unknown>;
+      const token = typeof d.token === "string" ? d.token : null;
+
+      let id: string | undefined;
+      let prefix: string | undefined;
+      let expiresAt: string | undefined;
+
+      if (isRecord(d.provision)) {
+        const p = d.provision as Record<string, unknown>;
+        if (typeof p.id === "string") id = p.id;
+        if (typeof p.prefix === "string") prefix = p.prefix;
+        if (typeof p.expiresAt === "string") expiresAt = p.expiresAt;
+      }
+
+      if (!token) {
+        setProvError("Create succeeded, but no one-time token returned by API.");
+        return;
+      }
+
+      setProvOneTimeToken(token);
+      setProvOneTimeMeta({ id, prefix, expiresAt });
+
+      // Generate QR (DEV): link to demo provision page
+      try {
+        const origin = window.location.origin;
+        const demoUrl = `${origin}/admin/demo/provision?token=${encodeURIComponent(token)}`;
+        const dataUrl = await qrToDataUrl(demoUrl, { margin: 1, width: 180 });
+        setProvQrDataUrl(dataUrl);
+      } catch {
+        // QR is optional; ignore errors.
+      }
+
+      await loadProvisionTokens();
+    } finally {
+      setProvSubmitting(false);
+    }
+  }
+
+  async function onRevokeProvisionToken(id: string) {
+    const res = await adminFetchJson<unknown>(`/api/admin/v1/mobile/provision-tokens/${id}/revoke`, { method: "POST" });
+    if (!res.ok) {
+      setProvError(fmtErr(res));
+      return;
+    }
+    await loadProvisionTokens();
+  }
+
+  // Existing ApiKey UI
   function openCreate() {
     setCreateOpen(true);
     setCreateName("");
@@ -327,8 +507,7 @@ export default function MobileOpsClient() {
       if (ak.lastUsedAt === null) lastUsedAt = null;
     }
 
-    const lastSeenAt =
-      typeof d.lastSeenAt === "string" ? d.lastSeenAt : d.lastSeenAt === null ? null : null;
+    const lastSeenAt = typeof d.lastSeenAt === "string" ? d.lastSeenAt : d.lastSeenAt === null ? null : null;
 
     const assigned = (Array.isArray(d.assignedForms) ? d.assignedForms : []) as unknown[];
     const assignedIds = new Set<string>();
@@ -346,28 +525,6 @@ export default function MobileOpsClient() {
     setManageLoading(false);
 
     void loadFormsForAssignments();
-  }
-
-  async function loadFormsForAssignments() {
-    setFormsLoading(true);
-
-    const url = showNonActiveForms ? "/api/admin/v1/forms" : "/api/admin/v1/forms?status=ACTIVE";
-    const res = await adminFetchJson<unknown>(url, { method: "GET" });
-
-    if (!res.ok) {
-      setManageError(fmtErr(res));
-      setForms([]);
-      setFormsLoading(false);
-      return;
-    }
-
-    const arr = pickAdminFormsList(res.data);
-    const parsed: FormListItem[] = arr
-      .map((x) => (isRecord(x) ? (x as FormListItem) : null))
-      .filter(Boolean) as FormListItem[];
-
-    setForms(parsed);
-    setFormsLoading(false);
   }
 
   function toggleForm(id: string) {
@@ -444,23 +601,26 @@ export default function MobileOpsClient() {
     return `${f.name} ${f.status}`.toLowerCase().includes(q);
   });
 
+  const provSelectableForms = forms.filter((f) => f.status === "ACTIVE");
+
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-8">
       <div className="mb-6">
         <h1 className="text-xl font-semibold tracking-tight">Mobile Ops</h1>
         <p className="mt-1 text-sm text-neutral-600">
-          Produktiver Admin-Screen für Mobile API Betrieb: ApiKeys, Devices, Assignments. Fokus Operations – kein UX-Polish.
+          Produktiver Admin-Screen für Mobile API Betrieb: Provisioning, ApiKeys, Devices, Assignments. Fokus Operations – kein UX-Polish.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <a
-            href="/admin/demo/capture"
-            className="rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"
-          >
+          <a href="/admin/demo/capture" className="rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800">
             Open Demo Capture
+          </a>
+          <a href="/admin/demo/provision" className="rounded-xl border border-neutral-200 px-3 py-2 text-sm text-neutral-800 hover:bg-neutral-50">
+            Open Demo Provision
           </a>
           <button
             type="button"
             onClick={() => {
+              void loadProvisionTokens();
               void loadKeys();
               void loadDevices();
             }}
@@ -471,29 +631,90 @@ export default function MobileOpsClient() {
         </div>
       </div>
 
+      {/* Provisioning */}
+      <div className="mb-10">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-medium text-neutral-900">Provisioning</div>
+            <div className="text-xs text-neutral-600">One-time Provision Token (QR/Copy) → Mobile Claim erstellt Device + ApiKey + optional Assignments.</div>
+          </div>
+          <button type="button" onClick={openProvisionCreate} className="rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800">
+            Create token
+          </button>
+        </div>
+
+        {provError ? <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{provError}</div> : null}
+
+        <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-neutral-50 text-xs text-neutral-600">
+              <tr>
+                <th className="px-4 py-3">Prefix</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Expires</th>
+                <th className="px-4 py-3">Used</th>
+                <th className="px-4 py-3">Created</th>
+                <th className="px-4 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {provLoading ? (
+                <tr>
+                  <td className="px-4 py-4 text-neutral-600" colSpan={6}>
+                    Loading…
+                  </td>
+                </tr>
+              ) : provItems.length === 0 ? (
+                <tr>
+                  <td className="px-4 py-4 text-neutral-600" colSpan={6}>
+                    No provisioning tokens yet.
+                  </td>
+                </tr>
+              ) : (
+                provItems.map((p) => {
+                  const s = effectiveProvisionStatus(p);
+                  const canRevoke = s === "ACTIVE";
+                  return (
+                    <tr key={p.id} className="border-t border-neutral-100">
+                      <td className="px-4 py-3 font-mono text-xs">{p.prefix ?? "—"}</td>
+                      <td className="px-4 py-3">
+                        <span className={chipClasses(s)}>{s}</span>
+                      </td>
+                      <td className="px-4 py-3">{isoShort(p.expiresAt ?? null)}</td>
+                      <td className="px-4 py-3">{isoShort(p.usedAt ?? null)}</td>
+                      <td className="px-4 py-3">{isoShort(p.createdAt ?? null)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => void onRevokeProvisionToken(p.id)}
+                          className="rounded-xl border border-neutral-200 px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-50 disabled:opacity-60"
+                          disabled={!canRevoke}
+                        >
+                          Revoke
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       {/* ApiKeys */}
       <div className="mb-8">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
             <div className="text-sm font-medium text-neutral-900">ApiKeys</div>
-            <div className="text-xs text-neutral-600">
-              Prefix + Status + lastUsedAt. Klartext-Key gibt es nur 1x beim Create.
-            </div>
+            <div className="text-xs text-neutral-600">Prefix + Status + lastUsedAt. Klartext-Key gibt es nur 1x beim Create.</div>
           </div>
-          <button
-            type="button"
-            onClick={openCreate}
-            className="rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"
-          >
+          <button type="button" onClick={openCreate} className="rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800">
             Create key
           </button>
         </div>
 
-        {keysError ? (
-          <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-            {keysError}
-          </div>
-        ) : null}
+        {keysError ? <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{keysError}</div> : null}
 
         <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white">
           <table className="w-full text-left text-sm">
@@ -557,17 +778,11 @@ export default function MobileOpsClient() {
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
             <div className="text-sm font-medium text-neutral-900">Devices</div>
-            <div className="text-xs text-neutral-600">
-              1:1 an ApiKey gebunden. Assignments (Device ↔ Forms) werden replace-saved.
-            </div>
+            <div className="text-xs text-neutral-600">1:1 an ApiKey gebunden. Assignments (Device ↔ Forms) werden replace-saved.</div>
           </div>
         </div>
 
-        {devicesError ? (
-          <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-            {devicesError}
-          </div>
-        ) : null}
+        {devicesError ? <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{devicesError}</div> : null}
 
         <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white">
           <table className="w-full text-left text-sm">
@@ -629,6 +844,159 @@ export default function MobileOpsClient() {
           </table>
         </div>
       </div>
+
+      {/* Create Provision Token Modal */}
+      {provCreateOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-neutral-200 bg-white p-5 shadow-lg">
+            <div className="mb-3">
+              <div className="text-sm font-medium text-neutral-900">Create Provision Token</div>
+              <div className="text-xs text-neutral-600">Klartext Token wird nur 1x angezeigt. Danach nur prefix/hash.</div>
+            </div>
+
+            {provOneTimeToken ? (
+              <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                <div className="text-sm font-medium text-emerald-900">One-time token</div>
+                <div className="mt-2 break-all rounded-xl border border-emerald-200 bg-white px-3 py-2 font-mono text-xs text-emerald-900">
+                  {provOneTimeToken}
+                </div>
+
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const ok = await copyToClipboard(provOneTimeToken);
+                      setProvOneTimeCopied(ok);
+                    }}
+                    className="rounded-xl bg-neutral-900 px-3 py-2 text-sm font-medium text-white hover:bg-neutral-800"
+                  >
+                    {provOneTimeCopied ? "Copied" : "Copy"}
+                  </button>
+                  <a
+                    className="rounded-xl border border-neutral-200 px-3 py-2 text-sm text-neutral-800 hover:bg-neutral-50"
+                    href={`/admin/demo/provision?token=${encodeURIComponent(provOneTimeToken)}`}
+                  >
+                    Open Demo Provision
+                  </a>
+                </div>
+
+                <div className="mt-2 text-xs text-emerald-900/70">
+                  Prefix: <span className="font-mono">{provOneTimeMeta?.prefix ?? "—"}</span> · Expires:{" "}
+                  <span className="font-mono">{isoShort(provOneTimeMeta?.expiresAt ?? null)}</span>
+                </div>
+
+                {provQrDataUrl ? (
+                  <div className="mt-4">
+                    <div className="text-xs font-medium text-emerald-900">QR (DEV)</div>
+                    <div className="mt-2 inline-block rounded-xl border border-emerald-200 bg-white p-2">
+                      <Image
+                        src={provQrDataUrl}
+                        alt="Provision QR"
+                        width={180}
+                        height={180}
+                        unoptimized
+                        className="h-[180px] w-[180px]"
+                      />
+                    </div>
+                    <div className="mt-1 text-xs text-emerald-900/70">
+                      QR enthält Link zu <span className="font-mono">/admin/demo/provision?token=...</span>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {!provOneTimeToken ? (
+              <>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-neutral-700">Device name (optional)</label>
+                    <input
+                      className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm"
+                      value={provDeviceName}
+                      onChange={(e) => setProvDeviceName(e.target.value)}
+                      placeholder="z.B. iPad Eingang"
+                      disabled={provSubmitting}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-neutral-700">Expires (minutes)</label>
+                    <input
+                      type="number"
+                      className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm"
+                      value={provExpiresMin}
+                      onChange={(e) => setProvExpiresMin(Number(e.target.value))}
+                      min={5}
+                      max={240}
+                      disabled={provSubmitting}
+                    />
+                    <div className="mt-1 text-xs text-neutral-600">Clamp: 5…240 (default 30)</div>
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-2xl border border-neutral-200 p-4">
+                  <div className="mb-2 text-sm font-medium text-neutral-900">Initial assignments (ACTIVE forms)</div>
+                  <div className="mb-3 text-xs text-neutral-600">Optional. Nur ACTIVE Forms werden beim Claim zugewiesen.</div>
+
+                  {formsLoading ? (
+                    <div className="text-sm text-neutral-600">Loading forms…</div>
+                  ) : provSelectableForms.length === 0 ? (
+                    <div className="text-sm text-neutral-600">No ACTIVE forms.</div>
+                  ) : (
+                    <div className="max-h-[260px] overflow-auto rounded-xl border border-neutral-200">
+                      <ul className="divide-y divide-neutral-100">
+                        {provSelectableForms.map((f) => {
+                          const checked = provFormIds.has(f.id);
+                          return (
+                            <li key={f.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                              <label className="flex min-w-0 items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  className="h-4 w-4 rounded border-neutral-300"
+                                  checked={checked}
+                                  onChange={() => toggleProvForm(f.id)}
+                                />
+                                <span className="truncate text-sm text-neutral-900">{f.name}</span>
+                              </label>
+                              <span className={chipClasses(f.status)}>{f.status}</span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  )}
+
+                  <div className="mt-2 text-xs text-neutral-600">
+                    Selected: <span className="font-mono">{provFormIds.size}</span>
+                  </div>
+                </div>
+              </>
+            ) : null}
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setProvCreateOpen(false)}
+                className="rounded-xl border border-neutral-200 px-3 py-2 text-sm text-neutral-800 hover:bg-neutral-50"
+                disabled={provSubmitting}
+              >
+                Close
+              </button>
+
+              {!provOneTimeToken ? (
+                <button
+                  type="button"
+                  onClick={() => void onCreateProvisionToken()}
+                  className="rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-60"
+                  disabled={provSubmitting}
+                >
+                  {provSubmitting ? "Creating…" : "Create"}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Create Key Modal */}
       {createOpen ? (
@@ -757,11 +1125,7 @@ export default function MobileOpsClient() {
               </button>
             </div>
 
-            {manageError ? (
-              <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-                {manageError}
-              </div>
-            ) : null}
+            {manageError ? <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{manageError}</div> : null}
 
             {manageLoading ? (
               <div className="text-sm text-neutral-600">Loading…</div>
@@ -801,9 +1165,7 @@ export default function MobileOpsClient() {
 
                 <div className="rounded-2xl border border-neutral-200 p-4">
                   <div className="mb-2 text-sm font-medium text-neutral-900">Assignments</div>
-                  <div className="mb-3 text-xs text-neutral-600">
-                    Replace strategy: gespeicherte Auswahl ersetzt die bisherigen Assignments.
-                  </div>
+                  <div className="mb-3 text-xs text-neutral-600">Replace strategy: gespeicherte Auswahl ersetzt die bisherigen Assignments.</div>
 
                   <div className="mb-3 flex flex-wrap items-center gap-2">
                     <input

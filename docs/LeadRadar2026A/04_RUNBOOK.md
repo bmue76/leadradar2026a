@@ -35,6 +35,9 @@ Start:
 - `AUTH_SESSION_SECRET` – Session/Auth Secret (>= 32 chars)
 - `MOBILE_API_KEY_SECRET` – HMAC Secret für ApiKey Hashing (>= 32 bytes empfohlen)
 
+### Recommended (TP 3.0 Provisioning)
+- `MOBILE_PROVISION_TOKEN_SECRET` – HMAC Secret für Provision Token Hashing (>= 32 bytes empfohlen)
+
 ### Optional / Dev Convenience
 - `NEXT_PUBLIC_DEFAULT_TENANT_SLUG`
 - `NEXT_PUBLIC_DEV_USER_ID`
@@ -97,6 +100,24 @@ Hinweis:
 
 ---
 
+## Device Provisioning (TP 3.0)
+
+Ziel: Device-Onboarding ohne Copy/Paste von ApiKeys.
+
+### Ops Flow (Admin → Device)
+1) Admin: `/admin/settings/mobile` → Section “Provisioning” → “Create token”
+2) Token erscheint **einmalig** + QR (DEV)
+3) Mobile/App: `POST /api/mobile/v1/provision/claim` mit Provision Token
+4) Response liefert **neuen** Mobile ApiKey (einmalig) + Device + Assignments
+5) Danach normale Mobile Calls mit `x-api-key` (Forms/Leads)
+
+### DEV Convenience
+- `/admin/demo/provision` (DEV-only)
+  - `?token=...` wird übernommen
+  - Claim schreibt `leadradar.devMobileApiKey` und redirect `/admin/demo/capture`
+
+---
+
 ## Demo Capture (DEV-only)
 
 Route: `/admin/demo/capture`
@@ -141,3 +162,15 @@ Das ist beabsichtigt.
 ### Häufige Checks
 - `npm run typecheck` / `npm run lint` / `npm run build`
 - `npm run db:seed`
+
+### TP 3.0 – 500 "prisma.mobileProvisionToken is undefined"
+Ursache:
+- Prisma Client wurde noch ohne das Model generiert (alte @prisma/client artifacts / Dev Server Cache)
+
+Fix:
+```bash
+# DEV Server stoppen (Ctrl+C)
+npx prisma generate
+npx prisma migrate dev -n "mobile_provision_tokens"
+rm -rf .next
+npm run dev

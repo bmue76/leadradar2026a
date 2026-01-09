@@ -62,6 +62,15 @@ enum MobileDeviceStatus {
 }
 
 //
+// TP 3.0 — Device Provisioning
+//
+enum MobileProvisionTokenStatus {
+  ACTIVE
+  REVOKED
+  USED
+}
+
+//
 // Core base models
 //
 model Tenant {
@@ -91,9 +100,12 @@ model Tenant {
   exportJobs       ExportJob[]
 
   // TP 2.5 — Mobile Device Auth
-  mobileApiKeys    MobileApiKey[]
-  mobileDevices    MobileDevice[]
+  mobileApiKeys     MobileApiKey[]
+  mobileDevices     MobileDevice[]
   mobileAssignments MobileDeviceForm[]
+
+  // TP 3.0 — Provisioning
+  mobileProvisionTokens MobileProvisionToken[]
 
   @@index([country])
 }
@@ -246,7 +258,7 @@ model ExportJob {
 // TP 2.5 — Mobile Device Auth (ApiKey + Device + Assignment)
 //
 model MobileApiKey {
-  id        String           @id @default(cuid())
+  id        String             @id @default(cuid())
   tenantId  String
   name      String
   prefix    String
@@ -258,7 +270,7 @@ model MobileApiKey {
   lastUsedAt DateTime?
 
   createdByUserId String?
-  createdByUser   User?   @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdByUser   User? @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -270,11 +282,11 @@ model MobileApiKey {
 }
 
 model MobileDevice {
-  id       String            @id @default(cuid())
+  id       String           @id @default(cuid())
   tenantId String
   name     String
 
-  apiKeyId String @unique
+  apiKeyId String      @unique
   apiKey   MobileApiKey @relation("MobileApiKeyToDevice", fields: [apiKeyId], references: [id], onDelete: Restrict)
 
   status     MobileDeviceStatus @default(ACTIVE)
@@ -284,6 +296,9 @@ model MobileDevice {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   assignments MobileDeviceForm[]
+
+  // TP 3.0 — Provision token audit (optional)
+  provisionTokensUsed MobileProvisionToken[] @relation("MobileProvisionTokenUsedBy")
 
   @@index([tenantId, status, createdAt])
   @@index([tenantId, apiKeyId])
@@ -296,13 +311,43 @@ model MobileDeviceForm {
 
   assignedAt DateTime @default(now())
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   device MobileDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
-  form   Form @relation(fields: [formId], references: [id], onDelete: Cascade)
+  form   Form         @relation(fields: [formId], references: [id], onDelete: Cascade)
 
   @@id([tenantId, deviceId, formId])
   @@index([tenantId, deviceId])
   @@index([tenantId, formId])
+}
+
+//
+// TP 3.0 — Mobile Provision Tokens
+//
+model MobileProvisionToken {
+  id       String @id @default(cuid())
+  tenantId String
+
+  prefix    String
+  tokenHash String @unique
+
+  status    MobileProvisionTokenStatus @default(ACTIVE)
+  expiresAt DateTime
+
+  usedAt          DateTime?
+  usedByDeviceId  String?
+  usedByDevice    MobileDevice? @relation("MobileProvisionTokenUsedBy", fields: [usedByDeviceId], references: [id], onDelete: SetNull)
+
+  requestedDeviceName String?
+  requestedFormIds    Json?
+
+  createdAt DateTime @default(now())
+  createdByUserId String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status, expiresAt])
+  @@index([tenantId, createdAt])
+  @@index([prefix, status])
 }
 
 //
