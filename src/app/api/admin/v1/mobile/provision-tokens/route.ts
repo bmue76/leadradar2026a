@@ -3,7 +3,7 @@ import { jsonOk, jsonError } from "@/lib/api";
 import { validateBody, validateQuery, httpError, isHttpError } from "@/lib/http";
 import { requireTenantContext } from "@/lib/tenantContext";
 import { prisma } from "@/lib/prisma";
-import crypto from "crypto";
+import { generateProvisionToken } from "@/lib/mobileProvisioning";
 
 export const runtime = "nodejs";
 
@@ -24,29 +24,17 @@ function getProvisionSecret(): string {
   return s;
 }
 
-function hmacSha256Hex(secret: string, value: string): string {
-  return crypto.createHmac("sha256", secret).update(value).digest("hex");
-}
-
-function generatePrefix8(): string {
-  // 6 bytes base64url => 8 chars
-  return crypto.randomBytes(6).toString("base64url").slice(0, 8);
-}
-
-function generateProvisionToken(): { token: string; prefix: string; tokenHash: string } {
-  const secret = getProvisionSecret();
-  const prefix = generatePrefix8();
-  // Make token body start with prefix (human-friendly), then add randomness.
-  const body = `${prefix}${crypto.randomBytes(24).toString("base64url")}`;
-  const token = `prov_${prefix}_${body}`;
-  const tokenHash = hmacSha256Hex(secret, token);
-  return { token, prefix, tokenHash };
-}
-
 function clampExpiresMinutes(raw?: number): number {
   const v = typeof raw === "number" && Number.isFinite(raw) ? raw : 30;
   // MVP clamp: 5..240 minutes
   return Math.max(5, Math.min(240, Math.floor(v)));
+}
+
+type EffectiveStatus = "ACTIVE" | "REVOKED" | "USED" | "EXPIRED";
+
+function computeEffectiveStatus(row: { status: "ACTIVE" | "REVOKED" | "USED"; expiresAt: Date }, now: Date): EffectiveStatus {
+  if (row.status === "ACTIVE" && row.expiresAt <= now) return "EXPIRED";
+  return row.status;
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -60,19 +48,12 @@ export async function POST(req: Request): Promise<Response> {
     const requestedDeviceName = body.deviceName?.trim() || null;
     const requestedFormIds = Array.isArray(body.formIds) ? body.formIds.slice(0, 200) : [];
 
-    let created:
-      | {
-          id: string;
-          prefix: string;
-          status: string;
-          expiresAt: Date;
-          createdAt: Date;
-        }
-      | null = null;
+    const secret = getProvisionSecret();
 
     // Collision extremely unlikely, but keep it robust.
     for (let attempt = 0; attempt < 3; attempt++) {
-      const { token, prefix, tokenHash } = generateProvisionToken();
+      const { token, prefix, tokenHash } = generateProvisionToken(secret);
+
       try {
         const row = await prisma.mobileProvisionToken.create({
           data: {
@@ -87,8 +68,6 @@ export async function POST(req: Request): Promise<Response> {
           select: { id: true, prefix: true, status: true, expiresAt: true, createdAt: true },
         });
 
-        created = row;
-
         return jsonOk(
           req,
           {
@@ -96,6 +75,7 @@ export async function POST(req: Request): Promise<Response> {
               id: row.id,
               prefix: row.prefix,
               status: row.status,
+              effectiveStatus: computeEffectiveStatus(row, new Date()),
               expiresAt: row.expiresAt,
               createdAt: row.createdAt,
             },
@@ -111,7 +91,6 @@ export async function POST(req: Request): Promise<Response> {
       }
     }
 
-    if (!created) throw httpError(500, "INTERNAL_ERROR", "Internal server error.");
     throw httpError(500, "INTERNAL_ERROR", "Internal server error.");
   } catch (e: unknown) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
@@ -139,13 +118,20 @@ export async function GET(req: Request): Promise<Response> {
         status: true,
         expiresAt: true,
         usedAt: true,
+        usedByDeviceId: true,
         createdAt: true,
       },
     });
 
     const hasMore = rows.length > limit;
-    const items = hasMore ? rows.slice(0, limit) : rows;
-    const nextCursor = hasMore ? items[items.length - 1]?.id ?? null : null;
+    const itemsRaw = hasMore ? rows.slice(0, limit) : rows;
+    const nextCursor = hasMore ? itemsRaw[itemsRaw.length - 1]?.id ?? null : null;
+
+    const now = new Date();
+    const items = itemsRaw.map((r) => ({
+      ...r,
+      effectiveStatus: computeEffectiveStatus(r, now),
+    }));
 
     return jsonOk(req, { items, nextCursor });
   } catch (e: unknown) {

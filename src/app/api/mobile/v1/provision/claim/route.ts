@@ -3,6 +3,8 @@ import crypto from "crypto";
 import { jsonOk, jsonError } from "@/lib/api";
 import { validateBody, httpError, isHttpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
+import { getClientIp, rateLimitCheck } from "@/lib/rateLimit";
+import { normalizeProvisionToken, provisionTokenHash } from "@/lib/mobileProvisioning";
 
 export const runtime = "nodejs";
 
@@ -10,27 +12,6 @@ const ClaimSchema = z.object({
   token: z.string().trim().min(10).max(500),
   deviceName: z.string().trim().min(1).max(120).optional(),
 });
-
-function getClientIp(req: Request): string {
-  const xf = (req.headers.get("x-forwarded-for") || "").split(",")[0]?.trim();
-  return xf || req.headers.get("x-real-ip")?.trim() || "unknown";
-}
-
-// Best-effort in-memory rate limiter (Phase 1). Not global across instances.
-type Bucket = { count: number; resetAtMs: number };
-const globalForRl = globalThis as unknown as { __lr_provision_rl__?: Map<string, Bucket> };
-const RL = (globalForRl.__lr_provision_rl__ ??= new Map<string, Bucket>());
-
-function rateLimitOrThrow(key: string, maxPerMinute: number) {
-  const now = Date.now();
-  const cur = RL.get(key);
-  if (!cur || cur.resetAtMs <= now) {
-    RL.set(key, { count: 1, resetAtMs: now + 60_000 });
-    return;
-  }
-  cur.count += 1;
-  if (cur.count > maxPerMinute) throw httpError(429, "RATE_LIMITED", "Too many requests.");
-}
 
 function getProvisionSecret(): string {
   const s = (process.env.MOBILE_PROVISION_TOKEN_SECRET || process.env.MOBILE_API_KEY_SECRET || "").trim();
@@ -51,6 +32,18 @@ function hmacSha256Hex(secret: string, value: string): string {
 function safeInvalidToken(): never {
   // No details, no leaks.
   throw httpError(401, "INVALID_PROVISION_TOKEN", "Invalid provision token.");
+}
+
+function tokenNotClaimable(code: "PROVISION_TOKEN_USED" | "PROVISION_TOKEN_REVOKED" | "PROVISION_TOKEN_EXPIRED"): never {
+  // Balanced policy: token exists but cannot be claimed
+  throw httpError(409, code, "Provision token cannot be claimed.");
+}
+
+function rateLimitOrThrow(key: string, limit: number, windowSec: number) {
+  const r = rateLimitCheck({ key, limit, windowSec });
+  if (!r.ok) {
+    throw httpError(429, "RATE_LIMITED", "Too many requests.", { retryAfterSec: r.retryAfterSec });
+  }
 }
 
 function generateApiKeyToken(): { token: string; prefix: string; keyHash: string } {
@@ -77,13 +70,28 @@ function jsonToStringArray(v: unknown): string[] {
 export async function POST(req: Request): Promise<Response> {
   try {
     const ip = getClientIp(req);
-    rateLimitOrThrow(`prov_claim:${ip}`, 30);
 
-    const body = await validateBody(req, ClaimSchema);
-    const token = body.token.trim();
+    // Phase 1 Abuse protection (best-effort, in-memory):
+    // - 10/min per IP
+    // - 5/min per tokenHash prefix (after token parsing)
+    rateLimitOrThrow(`prov_claim:ip:${ip}`, 10, 60);
 
-    // Hash incoming provision token
-    const tokenHash = hmacSha256Hex(getProvisionSecret(), token);
+    let body: z.infer<typeof ClaimSchema>;
+    try {
+      body = await validateBody(req, ClaimSchema);
+    } catch (e: unknown) {
+      // For mobile claim: do not expose validation details.
+      if (isHttpError(e)) safeInvalidToken();
+      throw e;
+    }
+
+    const token = normalizeProvisionToken(body.token);
+    if (!token) safeInvalidToken();
+
+    const provSecret = getProvisionSecret();
+    const tokenHash = provisionTokenHash(provSecret, token);
+
+    rateLimitOrThrow(`prov_claim:th:${tokenHash.slice(0, 16)}`, 5, 60);
 
     const now = new Date();
 
@@ -103,7 +111,12 @@ export async function POST(req: Request): Promise<Response> {
 
       if (!prov) safeInvalidToken();
 
-      // Atomically "lock" token usage (single winner)
+      // Balanced error semantics (still non-tenant-leaky due to high-entropy token):
+      if (prov.status === "REVOKED") tokenNotClaimable("PROVISION_TOKEN_REVOKED");
+      if (prov.status === "USED" || prov.usedAt) tokenNotClaimable("PROVISION_TOKEN_USED");
+      if (prov.expiresAt <= now) tokenNotClaimable("PROVISION_TOKEN_EXPIRED");
+
+      // Atomic single-use enforcement (race-safe): exactly one update wins.
       const locked = await tx.mobileProvisionToken.updateMany({
         where: {
           tokenHash,
@@ -114,7 +127,21 @@ export async function POST(req: Request): Promise<Response> {
         data: { status: "USED", usedAt: now },
       });
 
-      if (locked.count !== 1) safeInvalidToken();
+      if (locked.count !== 1) {
+        // Determine best-effort reason (still safe because token is known).
+        const cur = await tx.mobileProvisionToken.findUnique({
+          where: { tokenHash },
+          select: { status: true, expiresAt: true, usedAt: true },
+        });
+
+        if (!cur) safeInvalidToken();
+        if (cur.status === "REVOKED") tokenNotClaimable("PROVISION_TOKEN_REVOKED");
+        if (cur.status === "USED" || cur.usedAt) tokenNotClaimable("PROVISION_TOKEN_USED");
+        if (cur.expiresAt <= now) tokenNotClaimable("PROVISION_TOKEN_EXPIRED");
+
+        // Fallback: no details.
+        safeInvalidToken();
+      }
 
       const deviceName = (body.deviceName?.trim() || prov.requestedDeviceName?.trim() || "Mobile Device").slice(0, 120);
 
@@ -144,7 +171,7 @@ export async function POST(req: Request): Promise<Response> {
 
       // Attach device id to provisioning record (audit)
       await tx.mobileProvisionToken.update({
-        where: { tokenHash },
+        where: { id: prov.id },
         data: { usedByDeviceId: device.id },
         select: { id: true },
       });

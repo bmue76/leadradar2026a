@@ -1,52 +1,76 @@
-import { httpError } from "@/lib/http";
+/* eslint-disable no-console */
 
-/**
- * Best-effort in-memory rate limiting.
- * NOTE: In serverless/multi-instance environments this is NOT strict.
- * Later: Redis/Upstash.
- */
 type Bucket = { count: number; resetAtMs: number };
 
-const buckets = new Map<string, Bucket>();
+// Keep state across Next.js dev HMR (best-effort, Phase 1).
+const globalForRl = globalThis as unknown as { __lr_rate_limit__?: Map<string, Bucket> };
+const BUCKETS = (globalForRl.__lr_rate_limit__ ??= new Map<string, Bucket>());
 
-export type RateLimitConfig = {
-  limit: number; // requests per window
-  windowMs: number;
-};
-
-export type RateLimitResult = {
-  allowed: boolean;
-  remaining: number;
-  resetAtMs: number;
-};
-
-export function checkRateLimit(key: string, cfg: RateLimitConfig): RateLimitResult {
-  const now = Date.now();
-  const b = buckets.get(key);
-
-  if (!b || now >= b.resetAtMs) {
-    const resetAtMs = now + cfg.windowMs;
-    buckets.set(key, { count: 1, resetAtMs });
-    return { allowed: true, remaining: cfg.limit - 1, resetAtMs };
-  }
-
-  if (b.count >= cfg.limit) {
-    return { allowed: false, remaining: 0, resetAtMs: b.resetAtMs };
-  }
-
-  b.count += 1;
-  buckets.set(key, b);
-  return { allowed: true, remaining: cfg.limit - b.count, resetAtMs: b.resetAtMs };
+function nowMs() {
+  return Date.now();
 }
 
-export function enforceRateLimit(key: string, cfg: RateLimitConfig) {
-  const res = checkRateLimit(key, cfg);
-  if (!res.allowed) {
-    const retryAfterSec = Math.max(1, Math.ceil((res.resetAtMs - Date.now()) / 1000));
-    throw httpError(429, "RATE_LIMITED", "Too many requests.", {
-      retryAfterSec,
-      resetAt: new Date(res.resetAtMs).toISOString(),
-    });
+function cleanupExpired(now: number) {
+  // best-effort cleanup to avoid unbounded growth
+  if (BUCKETS.size < 2000) return;
+  for (const [k, v] of BUCKETS.entries()) {
+    if (v.resetAtMs <= now) BUCKETS.delete(k);
   }
-  return res;
+}
+
+export type RateLimitResult =
+  | { ok: true; limit: number; remaining: number; resetAtMs: number }
+  | { ok: false; limit: number; remaining: 0; retryAfterSec: number; resetAtMs: number };
+
+export function rateLimitCheck(opts: {
+  key: string;
+  limit: number;
+  windowSec: number;
+  now?: number;
+}): RateLimitResult {
+  const now = opts.now ?? nowMs();
+  cleanupExpired(now);
+
+  const windowMs = Math.max(1, Math.floor(opts.windowSec * 1000));
+  const existing = BUCKETS.get(opts.key);
+
+  if (!existing || existing.resetAtMs <= now) {
+    const resetAtMs = now + windowMs;
+    BUCKETS.set(opts.key, { count: 1, resetAtMs });
+    return { ok: true, limit: opts.limit, remaining: Math.max(0, opts.limit - 1), resetAtMs };
+  }
+
+  if (existing.count >= opts.limit) {
+    const retryAfterSec = Math.max(1, Math.ceil((existing.resetAtMs - now) / 1000));
+    return { ok: false, limit: opts.limit, remaining: 0, retryAfterSec, resetAtMs: existing.resetAtMs };
+  }
+
+  existing.count += 1;
+  BUCKETS.set(opts.key, existing);
+
+  return {
+    ok: true,
+    limit: opts.limit,
+    remaining: Math.max(0, opts.limit - existing.count),
+    resetAtMs: existing.resetAtMs,
+  };
+}
+
+export function getClientIp(req: Request): string {
+  const h = req.headers;
+
+  const xff = h.get("x-forwarded-for");
+  if (xff) {
+    const first = xff.split(",")[0]?.trim();
+    if (first) return first;
+  }
+
+  const realIp = h.get("x-real-ip")?.trim();
+  if (realIp) return realIp;
+
+  const cf = h.get("cf-connecting-ip")?.trim();
+  if (cf) return cf;
+
+  // dev fallback
+  return "127.0.0.1";
 }

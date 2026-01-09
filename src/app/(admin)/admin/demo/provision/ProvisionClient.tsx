@@ -21,10 +21,21 @@ function setDemoCaptureKey(token: string) {
   }
 }
 
-function fmtErr(code: string, message: string, traceId?: string) {
-  const parts = [`${code}: ${message}`];
-  if (traceId) parts.push(`trace ${traceId}`);
-  return parts.join(" · ");
+function friendlyMessage(code: string): string {
+  switch (code) {
+    case "INVALID_PROVISION_TOKEN":
+      return "Token ist ungültig. Bitte prüfen oder im Admin neu erstellen.";
+    case "PROVISION_TOKEN_EXPIRED":
+      return "Token ist abgelaufen. Bitte im Admin einen neuen Token erstellen.";
+    case "PROVISION_TOKEN_USED":
+      return "Token wurde bereits verwendet. Bitte einen neuen Token erstellen.";
+    case "PROVISION_TOKEN_REVOKED":
+      return "Token wurde widerrufen. Bitte im Admin einen neuen Token erstellen.";
+    case "RATE_LIMITED":
+      return "Zu viele Versuche. Bitte kurz warten und erneut versuchen.";
+    default:
+      return "Konnte Token nicht claimen. Bitte erneut versuchen.";
+  }
 }
 
 export default function ProvisionClient() {
@@ -34,7 +45,7 @@ export default function ProvisionClient() {
   const [token, setToken] = React.useState(tokenFromUrl);
   const [deviceName, setDeviceName] = React.useState("Messe Device");
   const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<{ message: string; traceId?: string } | null>(null);
 
   React.useEffect(() => {
     if (tokenFromUrl && !token) setToken(tokenFromUrl);
@@ -44,7 +55,7 @@ export default function ProvisionClient() {
   async function claim() {
     const t = token.trim();
     if (!t) {
-      setError("Please enter a token.");
+      setError({ message: "Bitte Token eingeben." });
       return;
     }
 
@@ -66,14 +77,14 @@ export default function ProvisionClient() {
       }>;
 
       if (!json.ok) {
-        setError(fmtErr(json.error.code, json.error.message, json.traceId));
+        setError({ message: friendlyMessage(json.error.code), traceId: json.traceId });
         return;
       }
 
       setDemoCaptureKey(json.data.token);
       window.location.href = "/admin/demo/capture";
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError({ message: e instanceof Error ? e.message : String(e) });
     } finally {
       setLoading(false);
     }
@@ -88,7 +99,10 @@ export default function ProvisionClient() {
       </p>
 
       {error ? (
-        <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</div>
+        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <div>{error.message}</div>
+          {error.traceId ? <div className="mt-1 text-xs text-amber-900/70">Trace-ID: <span className="font-mono">{error.traceId}</span></div> : null}
+        </div>
       ) : null}
 
       <div className="mt-6">

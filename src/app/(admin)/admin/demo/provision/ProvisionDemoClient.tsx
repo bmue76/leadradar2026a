@@ -7,10 +7,27 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function fmtErr(e: { code: string; message: string; traceId?: string; status?: number }): string {
-  const parts = [`${e.code}: ${e.message}`];
+function friendlyMessage(code: string): string {
+  switch (code) {
+    case "INVALID_PROVISION_TOKEN":
+      return "Token ist ungültig. Bitte prüfen oder im Admin neu erstellen.";
+    case "PROVISION_TOKEN_EXPIRED":
+      return "Token ist abgelaufen. Bitte im Admin einen neuen Token erstellen.";
+    case "PROVISION_TOKEN_USED":
+      return "Token wurde bereits verwendet. Bitte einen neuen Token erstellen.";
+    case "PROVISION_TOKEN_REVOKED":
+      return "Token wurde widerrufen. Bitte im Admin einen neuen Token erstellen.";
+    case "RATE_LIMITED":
+      return "Zu viele Versuche. Bitte kurz warten und erneut versuchen.";
+    default:
+      return "Konnte Token nicht claimen. Bitte erneut versuchen.";
+  }
+}
+
+function fmtErr(e: { code: string; traceId?: string; status?: number }): string {
+  const parts = [friendlyMessage(e.code)];
   if (typeof e.status === "number") parts.push(`HTTP ${e.status}`);
-  if (e.traceId) parts.push(`trace ${e.traceId}`);
+  if (e.traceId) parts.push(`Trace-ID ${e.traceId}`);
   return parts.join(" · ");
 }
 
@@ -71,34 +88,27 @@ export default function ProvisionDemoClient() {
         payload = null;
       }
 
-      const traceId = res.headers.get("x-trace-id") || (isRecord(payload) ? (payload.traceId as string | undefined) : undefined);
+      const traceId =
+        res.headers.get("x-trace-id") ||
+        (isRecord(payload) ? ((payload.traceId as string | undefined) ?? undefined) : undefined);
 
       if (!res.ok) {
         const code =
           isRecord(payload) && isRecord(payload.error) && typeof payload.error.code === "string"
             ? (payload.error.code as string)
             : "REQUEST_FAILED";
-        const message =
-          isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === "string"
-            ? (payload.error.message as string)
-            : "Request failed.";
-        setError(fmtErr({ code, message, traceId, status: res.status }));
+        setError(fmtErr({ code, traceId, status: res.status }));
         return;
       }
 
       if (!isRecord(payload) || payload.ok !== true || !isRecord(payload.data)) {
-        setError(fmtErr({ code: "BAD_RESPONSE", message: "Unexpected response shape.", traceId, status: res.status }));
+        setError(fmtErr({ code: "BAD_RESPONSE", traceId, status: res.status }));
         return;
       }
 
       const data = payload.data as Record<string, unknown>;
 
-      const apiKeyToken =
-        typeof data.token === "string"
-          ? (data.token as string)
-          : isRecord(data.apiKey) && typeof (data.apiKey as Record<string, unknown>).token === "string"
-          ? ((data.apiKey as Record<string, unknown>).token as string)
-          : null;
+      const apiKeyToken = typeof data.token === "string" ? (data.token as string) : null;
 
       const apiKeyPrefix =
         isRecord(data.apiKey) && typeof (data.apiKey as Record<string, unknown>).prefix === "string"
@@ -119,7 +129,7 @@ export default function ProvisionDemoClient() {
       const assignedCount = assignedFormIds.filter((x) => typeof x === "string").length;
 
       if (!apiKeyToken) {
-        setError(fmtErr({ code: "MISSING_API_KEY", message: "Claim succeeded, but no api key returned.", traceId }));
+        setError(fmtErr({ code: "MISSING_API_KEY", traceId }));
         return;
       }
 
@@ -127,7 +137,6 @@ export default function ProvisionDemoClient() {
 
       setClaimed({ apiKeyPrefix, deviceId, deviceName: devName, assignedCount });
 
-      // Go to demo capture
       window.location.href = "/admin/demo/capture";
     } finally {
       setSubmitting(false);
@@ -142,14 +151,14 @@ export default function ProvisionDemoClient() {
       </p>
 
       {error ? (
-        <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+        <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           {error}
         </div>
       ) : null}
 
       {claimed ? (
         <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-          Claimed. Redirecting…{" "}
+          Claimed. Redirecting…
           <div className="mt-2 text-xs text-emerald-900/70">
             Device: <span className="font-mono">{claimed.deviceName ?? "—"}</span> · Prefix:{" "}
             <span className="font-mono">{claimed.apiKeyPrefix ?? "—"}</span> · Assigned:{" "}
