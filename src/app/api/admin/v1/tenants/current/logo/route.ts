@@ -181,7 +181,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const form = await req.formData();
-  const file = form.get("file");
+  const file = (form as unknown as { get: (name: string) => unknown }).get("file");
 
   if (!(file instanceof File)) {
     return jsonError({

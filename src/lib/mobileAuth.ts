@@ -3,7 +3,12 @@ import { prisma } from "@/lib/prisma";
 import { httpError } from "@/lib/http";
 
 const HEADER_NAME = "x-api-key";
-const PREFIX_LEN = 8;
+
+// Legacy (adminCreateMobileApiKey): prefix = first 8 chars of token
+const PREFIX_LEN_LEGACY = 8;
+
+// New (provision/claim): token format lrk_<8hex>_<random> => prefix stored as "lrk_<8hex>" (12 chars)
+const LRK_PREFIX_LEN = 12;
 
 // We deliberately only support x-api-key to keep mobile simple & deterministic.
 export type MobileAuthContext = {
@@ -27,8 +32,29 @@ export function generateMobileApiKeyToken(): string {
   return randomBytes(32).toString("base64url");
 }
 
-export function getApiKeyPrefix(token: string): string {
-  return token.slice(0, PREFIX_LEN);
+/**
+ * Return possible prefixes for lookup.
+ * - Legacy keys: first 8 chars
+ * - lrk keys (provision/claim): "lrk_<8hex>" (12 chars)
+ *
+ * We query by prefix (narrow), then verify by HMAC hash (authoritative).
+ */
+export function getApiKeyPrefixes(token: string): string[] {
+  const t = (token ?? "").trim();
+  if (!t) return [];
+
+  const out: string[] = [];
+
+  // Always include legacy prefix
+  if (t.length >= PREFIX_LEN_LEGACY) out.push(t.slice(0, PREFIX_LEN_LEGACY));
+
+  // Include lrk prefix when it matches expected structure: lrk_ + 8 hex = 12 chars
+  if (t.startsWith("lrk_") && t.length >= LRK_PREFIX_LEN) {
+    out.push(t.slice(0, LRK_PREFIX_LEN));
+  }
+
+  // De-dup while preserving order
+  return Array.from(new Set(out));
 }
 
 export function hashMobileApiKey(token: string): string {
@@ -49,17 +75,21 @@ export async function requireMobileAuth(req: Request): Promise<MobileAuthContext
   const token = req.headers.get(HEADER_NAME)?.trim() ?? "";
   if (!token) throw httpError(401, "UNAUTHENTICATED", "Missing API key.");
 
-  // Basic sanity: avoid prefix errors / tiny tokens
-  if (token.length < PREFIX_LEN + 8) {
+  const prefixes = getApiKeyPrefixes(token);
+
+  // Basic sanity: avoid tiny tokens / prefix errors
+  if (!prefixes.length || token.length < PREFIX_LEN_LEGACY + 8) {
     throw httpError(401, "UNAUTHENTICATED", "Invalid API key.");
   }
 
-  const prefix = getApiKeyPrefix(token);
   const tokenHash = hashMobileApiKey(token);
 
   // Prefix narrows lookup without storing plaintext. (We still verify by HMAC hash.)
   const candidates = await prisma.mobileApiKey.findMany({
-    where: { prefix, status: "ACTIVE" },
+    where: {
+      prefix: { in: prefixes },
+      status: "ACTIVE",
+    },
     select: {
       id: true,
       tenantId: true,
@@ -88,10 +118,8 @@ export async function requireMobileAuth(req: Request): Promise<MobileAuthContext
 
     // Best-effort "last used" timestamps (avoid write storm: only update if older than 60s)
     const now = new Date();
-    const shouldUpdateKey =
-      !k.lastUsedAt || now.getTime() - k.lastUsedAt.getTime() > 60_000;
-    const shouldUpdateDevice =
-      !device.lastSeenAt || now.getTime() - device.lastSeenAt.getTime() > 60_000;
+    const shouldUpdateKey = !k.lastUsedAt || now.getTime() - k.lastUsedAt.getTime() > 60_000;
+    const shouldUpdateDevice = !device.lastSeenAt || now.getTime() - device.lastSeenAt.getTime() > 60_000;
 
     if (shouldUpdateKey || shouldUpdateDevice) {
       await prisma.$transaction([
@@ -133,7 +161,9 @@ export async function adminCreateMobileApiKey(args: {
   createdByUserId?: string | null;
 }): Promise<{ id: string; prefix: string; apiKey: string; createdAt: Date; deviceId?: string }> {
   const token = generateMobileApiKeyToken();
-  const prefix = getApiKeyPrefix(token);
+
+  // Legacy format uses first 8 chars as prefix
+  const prefix = token.slice(0, PREFIX_LEN_LEGACY);
   const keyHash = hashMobileApiKey(token);
 
   const res = await prisma.$transaction(async (tx) => {
