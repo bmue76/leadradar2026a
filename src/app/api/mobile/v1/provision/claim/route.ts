@@ -44,13 +44,21 @@ function safeInvalidToken(): never {
 function generateApiKeyToken(): { token: string; prefix: string; keyHash: string } {
   const secret = getMobileApiKeySecret();
 
-  // Token format compatible with existing Mobile API keys: lrk_<8hex>_<random>
+  /**
+   * IMPORTANT:
+   * requireMobileAuth() narrows lookup via prefix = token.slice(0, 8).
+   * Therefore we MUST store prefix exactly like that, otherwise the key will never validate.
+   *
+   * Token format (human-friendly): lrk_<8hex>_<random>
+   */
   const p = crypto.randomBytes(4).toString("hex"); // 8 hex
-  const prefix = `lrk_${p}`;
   const body = crypto.randomBytes(24).toString("base64url");
-  const token = `${prefix}_${body}`;
-  const keyHash = hmacSha256Hex(secret, token);
+  const token = `lrk_${p}_${body}`;
 
+  // Must match src/lib/mobileAuth.ts PREFIX_LEN (=8)
+  const prefix = token.slice(0, 8);
+
+  const keyHash = hmacSha256Hex(secret, token);
   return { token, prefix, keyHash };
 }
 
@@ -169,12 +177,21 @@ export async function POST(req: Request): Promise<Response> {
       return { device, apiKey, apiKeyToken: apiKeyGen.token, assignedFormIds };
     });
 
-    return jsonOk(req, {
-      device: result.device,
-      apiKey: result.apiKey,
-      token: result.apiKeyToken, // one-time x-api-key value
-      assignedFormIds: result.assignedFormIds,
-    });
+    // Return api key cleartext ONCE (body + header). No further endpoint ever returns it again.
+    return jsonOk(
+      req,
+      {
+        device: result.device,
+        apiKey: result.apiKey,
+        token: result.apiKeyToken,
+        assignedFormIds: result.assignedFormIds,
+      },
+      {
+        headers: {
+          "x-api-key": result.apiKeyToken,
+        },
+      }
+    );
   } catch (e: unknown) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     console.error("POST /api/mobile/v1/provision/claim failed", e);
