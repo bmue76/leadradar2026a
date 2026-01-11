@@ -2,6 +2,9 @@
 
 Status: DONE ✅  
 Datum: 2026-01-10
+Commits:
+- da59ad4 feat(mobile): provisioning + forms + lead capture (tp 3.2)
+- 4b0a803 fix(provisioning): align api key prefix + return x-api-key header
 
 ## Ziel
 Erste produktfähige Mobile App (MVP):
@@ -18,6 +21,8 @@ Erste produktfähige Mobile App (MVP):
 - `/forms/[id]`: GET `/api/mobile/v1/forms/:id` → render MVP FieldTypes, minimale Validierung, POST `/api/mobile/v1/leads` mit `clientLeadId`.
 - 401-Handling: “Gerät nicht autorisiert” → reset key → neu aktivieren.
 - Offline vorbereitet (nur Interfaces/Placeholders): `PendingLead`, `enqueueLead`, `flushQueue`.
+- Provision claim generiert Prefix kompatibel zu requireMobileAuth() (prefix = token.slice(0,8)), sonst wären Keys nie validierbar.
+- Claim liefert apiKey zusätzlich im Header x-api-key (Body bleibt weiterhin maßgeblich).
 
 ## Relevante Dateien
 - `apps/mobile/app/index.tsx` (Boot redirect)
