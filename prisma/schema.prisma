@@ -71,6 +71,15 @@ enum MobileProvisionTokenStatus {
 }
 
 //
+// TP 3.3 — Events (Messen)
+//
+enum EventStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+//
 // Core base models
 //
 model Tenant {
@@ -98,6 +107,9 @@ model Tenant {
   leads           Lead[]
   leadAttachments LeadAttachment[]
   exportJobs      ExportJob[]
+
+  // TP 3.3 — Events
+  events Event[]
 
   // TP 2.5 — Mobile Device Auth
   mobileApiKeys     MobileApiKey[]
@@ -139,6 +151,34 @@ model User {
 
   @@index([tenantId])
   @@index([emailVerifiedAt])
+}
+
+//
+// TP 3.3 — Events (Messen)
+//
+model Event {
+  id       String @id @default(cuid(2))
+  tenantId String
+
+  name     String
+  location String?
+  startsAt DateTime?
+  endsAt   DateTime?
+
+  status    EventStatus @default(DRAFT)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Leads tagged with this event
+  leads Lead[] @relation("EventLeads")
+
+  // Devices bound to this event (activeEventId)
+  activeDevices MobileDevice[] @relation("ActiveEvent")
+
+  @@index([tenantId, status])
+  @@index([tenantId, startsAt])
 }
 
 //
@@ -192,6 +232,9 @@ model Lead {
   tenantId String
   formId   String
 
+  // TP 3.3 — Event tagging (optional, server-side)
+  eventId String?
+
   // Idempotency (Mobile retry-safe)
   clientLeadId String
 
@@ -209,8 +252,11 @@ model Lead {
   form        Form             @relation(fields: [formId], references: [id], onDelete: Cascade)
   attachments LeadAttachment[]
 
+  event Event? @relation("EventLeads", fields: [eventId], references: [id], onDelete: SetNull)
+
   @@unique([tenantId, clientLeadId])
   @@index([tenantId, formId, capturedAt])
+  @@index([tenantId, eventId, capturedAt])
 }
 
 model LeadAttachment {
@@ -293,6 +339,10 @@ model MobileDevice {
   lastSeenAt DateTime?
   createdAt  DateTime           @default(now())
 
+  // TP 3.3 — Event binding (optional)
+  activeEventId String?
+  activeEvent   Event?  @relation("ActiveEvent", fields: [activeEventId], references: [id], onDelete: SetNull)
+
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   assignments MobileDeviceForm[]
@@ -302,6 +352,7 @@ model MobileDevice {
 
   @@index([tenantId, status, createdAt])
   @@index([tenantId, apiKeyId])
+  @@index([tenantId, activeEventId])
 }
 
 model MobileDeviceForm {

@@ -1,447 +1,622 @@
 "use client";
 
-import * as React from "react";
-import { adminFetchJson } from "../_lib/adminFetch";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { adminFetchJson as _adminFetchJson } from "../_lib/adminFetch";
+import LeadDetailDrawer from "./LeadDetailDrawer";
+import LeadsTable from "./LeadsTable";
+import type {
+  AdminFormListItem,
+  AdminFormsListData,
+  AdminLeadListItem,
+  AdminLeadsListData,
+  ApiResponse,
+} from "./leads.types";
 
-type LeadItem = {
-  id: string;
-  formId: string;
-  eventId?: string | null;
-  capturedAt: string;
-  isDeleted: boolean;
-  values: Record<string, unknown>;
-};
+type AdminFetchJsonFn = <T = unknown>(path: string, init?: RequestInit) => Promise<T>;
 
-type FormItem = { id: string; name: string; status: string };
-type EventItem = { id: string; name: string; status: string; location?: string | null; startsAt?: string | null };
+const adminFetchJson = _adminFetchJson as unknown as AdminFetchJsonFn;
+
+type EventListItem = { id: string; name: string; status?: string; startsAt?: string | null; endsAt?: string | null };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function fmtErr(e: { code: string; message: string; traceId?: string; status?: number }): string {
-  const parts = [`${e.code}: ${e.message}`];
-  if (typeof e.status === "number") parts.push(`HTTP ${e.status}`);
-  if (e.traceId) parts.push(`trace ${e.traceId}`);
-  return parts.join(" · ");
+function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
 }
 
-function isoShort(d?: string | null): string {
-  if (!d) return "—";
-  const dt = new Date(d);
-  if (Number.isNaN(dt.getTime())) return "—";
-  return dt.toISOString().replace("T", " ").slice(0, 16) + "Z";
-}
-
-function pickArray(payload: unknown): unknown[] {
-  if (Array.isArray(payload)) return payload;
-  if (!isRecord(payload)) return [];
-  if (Array.isArray(payload.items)) return payload.items as unknown[];
-  if (Array.isArray(payload.forms)) return payload.forms as unknown[];
-  if (Array.isArray(payload.events)) return payload.events as unknown[];
-  if (isRecord(payload.data)) {
-    const d = payload.data as Record<string, unknown>;
-    if (Array.isArray(d.items)) return d.items as unknown[];
-    if (Array.isArray(d.forms)) return d.forms as unknown[];
-    if (Array.isArray(d.events)) return d.events as unknown[];
+function toIsoFromDateInput(value: string, endOfDay: boolean): string | null {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  if (endOfDay) {
+    d.setHours(23, 59, 59, 999);
+  } else {
+    d.setHours(0, 0, 0, 0);
   }
-  return [];
+  return d.toISOString();
 }
 
-async function copyToClipboard(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
+function safePreviewFromValues(values?: Record<string, unknown> | null): string {
+  if (!values || typeof values !== "object") return "—";
 
-function chipClasses(kind: "event" | "none" | "archived" | "draft" | "active"): string {
-  const base = "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border";
-  if (kind === "active") return `${base} bg-emerald-50 text-emerald-900 border-emerald-200`;
-  if (kind === "draft") return `${base} bg-sky-50 text-sky-900 border-sky-200`;
-  if (kind === "archived") return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
-  if (kind === "none") return `${base} bg-amber-50 text-amber-900 border-amber-200`;
-  return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
-}
+  const pick = (k: string): string | null => {
+    const v = (values as Record<string, unknown>)[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+    if (typeof v === "number" && Number.isFinite(v)) return String(v);
+    return null;
+  };
 
-function leadPreview(values: Record<string, unknown>): string {
-  const keys = ["company", "organization", "firma", "firstName", "lastName", "name", "email", "phone", "mobile"];
+  const candidates = [
+    "company",
+    "firma",
+    "organization",
+    "email",
+    "eMail",
+    "mail",
+    "lastName",
+    "lastname",
+    "nachname",
+    "firstName",
+    "firstname",
+    "vorname",
+    "name",
+  ];
+
   const parts: string[] = [];
-
-  for (const k of keys) {
-    const v = values[k];
-    if (typeof v === "string" && v.trim()) parts.push(`${k}: ${v.trim()}`);
+  for (const k of candidates) {
+    const v = pick(k);
+    if (v && !parts.includes(v)) parts.push(v);
+    if (parts.length >= 3) break;
   }
 
-  if (parts.length > 0) return parts.slice(0, 3).join(" · ");
-
-  // fallback: first 3 entries
-  const entries = Object.entries(values)
-    .filter(([, v]) => typeof v === "string" && (v as string).trim())
-    .slice(0, 3)
-    .map(([k, v]) => `${k}: ${(v as string).trim()}`);
-
-  return entries.length ? entries.join(" · ") : "—";
+  if (parts.length > 0) return parts.join(" · ");
+  return "—";
 }
+
+function mergeUniqueById(existing: AdminLeadListItem[], incoming: AdminLeadListItem[]) {
+  const map = new Map<string, AdminLeadListItem>();
+  for (const it of existing) map.set(it.id, it);
+  for (const it of incoming) map.set(it.id, it);
+  return Array.from(map.values());
+}
+
+function extractForms(payload: AdminFormsListData | AdminFormListItem[] | unknown): AdminFormListItem[] {
+  if (Array.isArray(payload)) return payload as AdminFormListItem[];
+  if (!payload || typeof payload !== "object") return [];
+  const p = payload as AdminFormsListData;
+  return (p.items ?? p.forms ?? []) as AdminFormListItem[];
+}
+
+function extractLeadsList(payload: AdminLeadsListData | unknown): { items: AdminLeadListItem[]; nextCursor: string | null } {
+  if (!payload || typeof payload !== "object") return { items: [], nextCursor: null };
+  const p = payload as AdminLeadsListData;
+  const items = (p.items ?? p.leads ?? []) as AdminLeadListItem[];
+  const nextCursor = (p.nextCursor ?? p.cursor ?? null) as string | null;
+  return { items, nextCursor };
+}
+
+function extractEvents(payload: unknown): EventListItem[] {
+  const arr: unknown[] = (() => {
+    if (Array.isArray(payload)) return payload;
+    if (!isRecord(payload)) return [];
+    if (Array.isArray(payload.items)) return payload.items as unknown[];
+    if (Array.isArray(payload.events)) return payload.events as unknown[];
+    if (isRecord(payload.data)) {
+      const d = payload.data as Record<string, unknown>;
+      if (Array.isArray(d.items)) return d.items as unknown[];
+      if (Array.isArray(d.events)) return d.events as unknown[];
+    }
+    return [];
+  })();
+
+  return arr
+    .map((x) => {
+      if (!isRecord(x)) return null;
+      const id = typeof x.id === "string" ? x.id : "";
+      const name = typeof x.name === "string" ? x.name : "";
+      if (!id || !name) return null;
+      return {
+        id,
+        name,
+        status: typeof x.status === "string" ? x.status : undefined,
+        startsAt: typeof x.startsAt === "string" ? x.startsAt : x.startsAt === null ? null : undefined,
+        endsAt: typeof x.endsAt === "string" ? x.endsAt : x.endsAt === null ? null : undefined,
+      } satisfies EventListItem;
+    })
+    .filter(Boolean) as EventListItem[];
+}
+
+type LoadState = "idle" | "loading" | "error";
 
 export default function LeadsClient() {
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState<string | null>(null);
+  // Filters
+  const [formId, setFormId] = useState<string>("");
+  const [eventId, setEventId] = useState<string>("");
+  const [includeDeleted, setIncludeDeleted] = useState<boolean>(false);
+  const [fromDate, setFromDate] = useState<string>(""); // YYYY-MM-DD
+  const [toDate, setToDate] = useState<string>(""); // YYYY-MM-DD
+  const [limit, setLimit] = useState<number>(50);
 
-  const [items, setItems] = React.useState<LeadItem[]>([]);
-  const [nextCursor, setNextCursor] = React.useState<string | null>(null);
+  // Events map (for filter dropdown)
+  const [eventsState, setEventsState] = useState<LoadState>("idle");
+  const [events, setEvents] = useState<EventListItem[]>([]);
+  const eventsById = useMemo(() => {
+    const m = new Map<string, EventListItem>();
+    for (const e of events) m.set(e.id, e);
+    return m;
+  }, [events]);
 
-  // filters
-  const [limit, setLimit] = React.useState<number>(50);
-  const [includeDeleted, setIncludeDeleted] = React.useState(false);
+  // Forms map (for display + filter dropdown)
+  const [formsState, setFormsState] = useState<LoadState>("idle");
+  const [forms, setForms] = useState<AdminFormListItem[]>([]);
+  const formsById = useMemo(() => {
+    const m = new Map<string, AdminFormListItem>();
+    for (const f of forms) m.set(f.id, f);
+    return m;
+  }, [forms]);
 
-  const [formId, setFormId] = React.useState<string>("");
-  const [eventId, setEventId] = React.useState<string>(""); // ""=all, "none"=null, else id
+  // Leads list + cursor
+  const [listState, setListState] = useState<LoadState>("idle");
+  const [items, setItems] = useState<AdminLeadListItem[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [traceId, setTraceId] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string>("");
 
-  const [from, setFrom] = React.useState<string>("");
-  const [to, setTo] = React.useState<string>("");
+  const [loadingMore, setLoadingMore] = useState<boolean>(false);
 
-  // lookups
-  const [forms, setForms] = React.useState<FormItem[]>([]);
-  const [events, setEvents] = React.useState<EventItem[]>([]);
+  // Drawer
+  const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
 
-  const formsById = React.useMemo(() => new Map(forms.map((f) => [f.id, f])), [forms]);
-  const eventsById = React.useMemo(() => new Map(events.map((e) => [e.id, e])), [events]);
+  // Avoid out-of-order list responses overwriting newer state
+  const listReqSeq = useRef(0);
 
-  async function loadLookups() {
-    // forms
-    const fRes = await adminFetchJson<unknown>("/api/admin/v1/forms?limit=200", { method: "GET" });
-    if (fRes.ok) {
-      const arr = pickArray(fRes.data);
-      const parsed: FormItem[] = arr.map((x) => (isRecord(x) ? (x as FormItem) : null)).filter(Boolean) as FormItem[];
-      setForms(parsed);
+  const loadEvents = useCallback(async () => {
+    setEventsState("loading");
+    try {
+      const res = (await adminFetchJson<ApiResponse<unknown>>("/api/admin/v1/events?status=ACTIVE&limit=200", {
+        method: "GET",
+      })) as ApiResponse<unknown>;
+      if (!res.ok) {
+        setEventsState("error");
+        setTraceId(res.traceId ?? null);
+        setErrorMessage(res.error?.message || "Failed to load events.");
+        return;
+      }
+      const list = extractEvents(res.data);
+      setEvents(list);
+      setEventsState("idle");
+    } catch (e) {
+      setEventsState("error");
+      setErrorMessage(e instanceof Error ? e.message : "Failed to load events.");
     }
-
-    // events
-    const eRes = await adminFetchJson<unknown>("/api/admin/v1/events?limit=200", { method: "GET" });
-    if (eRes.ok) {
-      const arr = pickArray(eRes.data);
-      const parsed: EventItem[] = arr.map((x) => (isRecord(x) ? (x as EventItem) : null)).filter(Boolean) as EventItem[];
-      // Sort: startsAt desc
-      parsed.sort((a, b) => {
-        const sa = a.startsAt ? new Date(a.startsAt).getTime() : 0;
-        const sb = b.startsAt ? new Date(b.startsAt).getTime() : 0;
-        return sb - sa;
-      });
-      setEvents(parsed);
-    }
-  }
-
-  function buildQuery(cursor?: string | null): string {
-    const q = new URLSearchParams();
-    q.set("limit", String(Math.max(1, Math.min(200, Math.floor(limit || 50)))));
-
-    if (includeDeleted) q.set("includeDeleted", "true");
-    if (formId) q.set("formId", formId);
-
-    if (eventId === "none") q.set("eventId", "none");
-    else if (eventId) q.set("eventId", eventId);
-
-    // from/to (ISO)
-    if (from) {
-      const dt = new Date(from);
-      if (!Number.isNaN(dt.getTime())) q.set("from", dt.toISOString());
-    }
-    if (to) {
-      const dt = new Date(to);
-      if (!Number.isNaN(dt.getTime())) q.set("to", dt.toISOString());
-    }
-
-    if (cursor) q.set("cursor", cursor);
-
-    return q.toString();
-  }
-
-  async function loadPage(cursor?: string | null, mode: "replace" | "append" = "replace") {
-    setLoading(true);
-    setError(null);
-
-    const qs = buildQuery(cursor ?? null);
-    const url = `/api/admin/v1/leads?${qs}`;
-
-    const res = await adminFetchJson<unknown>(url, { method: "GET" });
-    if (!res.ok) {
-      setError(fmtErr(res));
-      setLoading(false);
-      return;
-    }
-
-    if (!isRecord(res.data)) {
-      setError("Unexpected response shape from GET /api/admin/v1/leads");
-      setLoading(false);
-      return;
-    }
-
-    const d = res.data as Record<string, unknown>;
-    const arr = Array.isArray(d.items) ? (d.items as unknown[]) : [];
-    const parsed: LeadItem[] = arr.map((x) => (isRecord(x) ? (x as LeadItem) : null)).filter(Boolean) as LeadItem[];
-
-    const nc = typeof d.nextCursor === "string" ? d.nextCursor : d.nextCursor === null ? null : null;
-
-    if (mode === "append") setItems((prev) => [...prev, ...parsed]);
-    else setItems(parsed);
-
-    setNextCursor(nc);
-    setLoading(false);
-  }
-
-  React.useEffect(() => {
-    void loadLookups();
-    void loadPage(null, "replace");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const loadForms = useCallback(async () => {
+    setFormsState("loading");
+    try {
+      const res = (await adminFetchJson<ApiResponse<AdminFormsListData | AdminFormListItem[]>>(
+        "/api/admin/v1/forms",
+        { method: "GET" }
+      )) as ApiResponse<AdminFormsListData | AdminFormListItem[]>;
+      if (!res.ok) {
+        setFormsState("error");
+        setTraceId(res.traceId ?? null);
+        setErrorMessage(res.error?.message || "Failed to load forms.");
+        return;
+      }
+      const list = extractForms(res.data);
+      setForms(list);
+      setFormsState("idle");
+    } catch (e) {
+      setFormsState("error");
+      setErrorMessage(e instanceof Error ? e.message : "Failed to load forms.");
+    }
+  }, []);
+
+  const buildListQuery = useCallback(
+    (cursor?: string | null) => {
+      const params = new URLSearchParams();
+      params.set("limit", String(limit));
+      if (cursor) params.set("cursor", cursor);
+      if (formId) params.set("formId", formId);
+      if (eventId) params.set("eventId", eventId);
+      if (includeDeleted) params.set("includeDeleted", "true");
+
+      const fromIso = toIsoFromDateInput(fromDate, false);
+      const toIso = toIsoFromDateInput(toDate, true);
+      if (fromIso) params.set("from", fromIso);
+      if (toIso) params.set("to", toIso);
+
+      return `/api/admin/v1/leads?${params.toString()}`;
+    },
+    [formId, eventId, includeDeleted, fromDate, toDate, limit]
+  );
+
+  const loadLeadsFirstPage = useCallback(async () => {
+    const seq = ++listReqSeq.current;
+
+    setListState("loading");
+    setErrorMessage("");
+    setTraceId(null);
+    setItems([]);
+    setNextCursor(null);
+
+    try {
+      const url = buildListQuery(null);
+      const res = (await adminFetchJson<ApiResponse<AdminLeadsListData>>(
+        url,
+        { method: "GET" }
+      )) as ApiResponse<AdminLeadsListData>;
+
+      if (seq !== listReqSeq.current) return;
+
+      if (!res.ok) {
+        setListState("error");
+        setTraceId(res.traceId ?? null);
+        setErrorMessage(res.error?.message || "Failed to load leads.");
+        return;
+      }
+
+      const { items: listItems, nextCursor: nc } = extractLeadsList(res.data);
+      setItems(listItems);
+      setNextCursor(nc);
+      setListState("idle");
+    } catch (e) {
+      if (seq !== listReqSeq.current) return;
+      setListState("error");
+      setErrorMessage(e instanceof Error ? e.message : "Failed to load leads.");
+    }
+  }, [buildListQuery]);
+
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || loadingMore) return;
+
+    setLoadingMore(true);
+    setErrorMessage("");
+    setTraceId(null);
+
+    try {
+      const url = buildListQuery(nextCursor);
+      const res = (await adminFetchJson<ApiResponse<AdminLeadsListData>>(
+        url,
+        { method: "GET" }
+      )) as ApiResponse<AdminLeadsListData>;
+
+      if (!res.ok) {
+        setTraceId(res.traceId ?? null);
+        setErrorMessage(res.error?.message || "Failed to load more leads.");
+        setLoadingMore(false);
+        return;
+      }
+
+      const { items: moreItems, nextCursor: nc } = extractLeadsList(res.data);
+      setItems((prev) => mergeUniqueById(prev, moreItems));
+      setNextCursor(nc);
+      setLoadingMore(false);
+    } catch (e) {
+      setErrorMessage(e instanceof Error ? e.message : "Failed to load more leads.");
+      setLoadingMore(false);
+    }
+  }, [buildListQuery, loadingMore, nextCursor]);
+
+  const refresh = useCallback(async () => {
+    await loadLeadsFirstPage();
+  }, [loadLeadsFirstPage]);
+
+  // initial
+  useEffect(() => {
+    const t = setTimeout(() => {
+      void loadEvents();
+      void loadForms();
+    }, 0);
+    return () => clearTimeout(t);
+  }, [loadEvents, loadForms]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      void loadLeadsFirstPage();
+    }, 0);
+    return () => clearTimeout(t);
+  }, [loadLeadsFirstPage]);
+
+  const onFiltersChanged = useCallback(() => {
+    void loadLeadsFirstPage();
+  }, [loadLeadsFirstPage]);
+
+  // refresh list after a mutation (delete/restore)
+  const onLeadMutated = useCallback(
+    async (leadId: string) => {
+      await loadLeadsFirstPage();
+      setSelectedLeadId((prev) => (prev === leadId ? leadId : prev));
+    },
+    [loadLeadsFirstPage]
+  );
+
+  const headerRight = (
+    <div className="flex items-center gap-2">
+      <button type="button" className="rounded-md border px-3 py-2 text-sm hover:bg-black/5" onClick={refresh}>
+        Refresh
+      </button>
+    </div>
+  );
+
+  const activeEventLabel = eventId ? eventsById.get(eventId)?.name ?? "Unknown event" : "All events";
+
   return (
-    <div className="mx-auto w-full max-w-6xl px-6 py-8">
-      <div className="mb-6">
-        <h1 className="text-xl font-semibold tracking-tight">Leads</h1>
-        <p className="mt-1 text-sm text-neutral-600">
-          Lead Inbox (MVP). Filter nach Form und Event. Event kommt automatisch vom Device (activeEventId), wenn Event status=ACTIVE.
-        </p>
+    <div className="mx-auto w-full max-w-7xl px-4 py-6">
+      <div className="mb-5 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Leads</h1>
+          <p className="mt-1 text-sm text-black/60">
+            Browse captured leads, open details, and soft-delete (restore optional).{" "}
+            <span className="text-black/50">Filter: {activeEventLabel}</span>
+          </p>
+        </div>
+        {headerRight}
+      </div>
 
-        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-6">
-          <div className="md:col-span-2">
-            <label className="mb-1 block text-xs font-medium text-neutral-700">Form</label>
-            <select
-              className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
-              value={formId}
-              onChange={(e) => setFormId(e.target.value)}
-              disabled={loading}
-            >
-              <option value="">All forms</option>
-              {forms.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name} — {String(f.status || "").toUpperCase()}
-                </option>
-              ))}
-            </select>
-          </div>
+      {/* Filters */}
+      <div className="mb-4 rounded-xl border bg-white p-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div className="grid w-full grid-cols-1 gap-3 md:grid-cols-5">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-black/60">Event</label>
+              <select
+                className="h-10 rounded-md border bg-white px-3 text-sm"
+                value={eventId}
+                onChange={(e) => {
+                  setEventId(e.target.value);
+                  setTimeout(onFiltersChanged, 0);
+                }}
+                disabled={eventsState === "loading"}
+              >
+                <option value="">All events</option>
+                {events.map((ev) => (
+                  <option key={ev.id} value={ev.id}>
+                    {ev.name}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          <div className="md:col-span-2">
-            <label className="mb-1 block text-xs font-medium text-neutral-700">Event</label>
-            <select
-              className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
-              value={eventId}
-              onChange={(e) => setEventId(e.target.value)}
-              disabled={loading}
-            >
-              <option value="">All</option>
-              <option value="none">— no event —</option>
-              {events.map((ev) => (
-                <option key={ev.id} value={ev.id}>
-                  {ev.name} — {String(ev.status || "").toUpperCase()}
-                </option>
-              ))}
-            </select>
-            <div className="mt-1 text-xs text-neutral-600">
-              Tipp: Events verwalten unter <span className="font-mono">/admin/settings/events</span>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-black/60">Form</label>
+              <select
+                className="h-10 rounded-md border bg-white px-3 text-sm"
+                value={formId}
+                onChange={(e) => {
+                  setFormId(e.target.value);
+                  setTimeout(onFiltersChanged, 0);
+                }}
+                disabled={formsState === "loading"}
+              >
+                <option value="">All forms</option>
+                {forms.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-black/60">Date from</label>
+              <input
+                type="date"
+                className="h-10 rounded-md border bg-white px-3 text-sm"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                onBlur={onFiltersChanged}
+              />
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-black/60">Date to</label>
+              <input
+                type="date"
+                className="h-10 rounded-md border bg-white px-3 text-sm"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                onBlur={onFiltersChanged}
+              />
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-black/60">Page size</label>
+              <select
+                className="h-10 rounded-md border bg-white px-3 text-sm"
+                value={String(limit)}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setLimit(v);
+                  setTimeout(onFiltersChanged, 0);
+                }}
+              >
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+              </select>
             </div>
           </div>
 
-          <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-700">From (local)</label>
-            <input
-              type="datetime-local"
-              className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm"
-              value={from}
-              onChange={(e) => setFrom(e.target.value)}
-              disabled={loading}
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-700">To (local)</label>
-            <input
-              type="datetime-local"
-              className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm"
-              value={to}
-              onChange={(e) => setTo(e.target.value)}
-              disabled={loading}
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs font-medium text-neutral-700">Limit</label>
-            <input
-              type="number"
-              min={1}
-              max={200}
-              className="w-full rounded-xl border border-neutral-200 px-3 py-2 text-sm"
-              value={limit}
-              onChange={(e) => setLimit(Number(e.target.value))}
-              disabled={loading}
-            />
-            <label className="mt-2 flex items-center gap-2 text-xs text-neutral-700">
+          <div className="flex w-full items-center justify-between gap-3 md:w-auto md:justify-end">
+            <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
-                className="h-4 w-4 rounded border-neutral-300"
                 checked={includeDeleted}
-                onChange={(e) => setIncludeDeleted(e.target.checked)}
-                disabled={loading}
+                onChange={(e) => {
+                  setIncludeDeleted(e.target.checked);
+                  setTimeout(onFiltersChanged, 0);
+                }}
               />
-              Include deleted
+              <span>Show deleted</span>
             </label>
+
+            <button
+              type="button"
+              className="rounded-md border px-3 py-2 text-sm hover:bg-black/5"
+              onClick={() => {
+                setEventId("");
+                setFormId("");
+                setIncludeDeleted(false);
+                setFromDate("");
+                setToDate("");
+                setLimit(50);
+                setTimeout(onFiltersChanged, 0);
+              }}
+            >
+              Reset
+            </button>
           </div>
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void loadPage(null, "replace")}
-            className="rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-60"
-            disabled={loading}
-          >
-            {loading ? "Loading…" : "Apply filters"}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setFormId("");
-              setEventId("");
-              setFrom("");
-              setTo("");
-              setIncludeDeleted(false);
-              setLimit(50);
-              setTimeout(() => void loadPage(null, "replace"), 0);
-            }}
-            className="rounded-xl border border-neutral-200 px-3 py-2 text-sm text-neutral-800 hover:bg-neutral-50"
-            disabled={loading}
-          >
-            Reset
-          </button>
-
-          <a
-            href="/admin/settings/events"
-            className="rounded-xl border border-neutral-200 px-3 py-2 text-sm text-neutral-800 hover:bg-neutral-50"
-          >
-            Events
-          </a>
-          <a
-            href="/admin/settings/mobile"
-            className="rounded-xl border border-neutral-200 px-3 py-2 text-sm text-neutral-800 hover:bg-neutral-50"
-          >
-            Mobile Ops
-          </a>
-        </div>
+        {(eventsState === "error" || formsState === "error") && (
+          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm">
+            <div className="font-medium text-red-800">Could not load filter lists.</div>
+            <div className="mt-1 text-red-800/80">Event/Form dropdown may be incomplete.</div>
+            <div className="mt-2 flex items-center gap-2">
+              <button type="button" className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm hover:bg-white/60" onClick={() => void loadEvents()}>
+                Retry events
+              </button>
+              <button type="button" className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm hover:bg-white/60" onClick={() => void loadForms()}>
+                Retry forms
+              </button>
+              {traceId && <span className="text-xs text-red-800/70">traceId: {traceId}</span>}
+            </div>
+          </div>
+        )}
       </div>
 
-      {error ? <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</div> : null}
+      {/* States */}
+      {listState === "loading" && <LoadingSkeleton />}
 
-      <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-neutral-50 text-xs text-neutral-600">
-            <tr>
-              <th className="px-4 py-3">Captured</th>
-              <th className="px-4 py-3">Form</th>
-              <th className="px-4 py-3">Event</th>
-              <th className="px-4 py-3">Preview</th>
-              <th className="px-4 py-3">Lead ID</th>
-              <th className="px-4 py-3 text-right">Actions</th>
-            </tr>
-          </thead>
+      {listState === "error" && (
+        <ErrorPanel
+          title="Could not load leads."
+          message={errorMessage || "Something went wrong while fetching leads."}
+          traceId={traceId}
+          onRetry={() => void loadLeadsFirstPage()}
+        />
+      )}
 
-          <tbody>
-            {items.length === 0 && loading ? (
-              <tr>
-                <td className="px-4 py-4 text-neutral-600" colSpan={6}>
-                  Loading…
-                </td>
-              </tr>
-            ) : items.length === 0 ? (
-              <tr>
-                <td className="px-4 py-4 text-neutral-600" colSpan={6}>
-                  No leads.
-                </td>
-              </tr>
-            ) : (
-              items.map((l) => {
-                const f = formsById.get(l.formId);
-                const ev = l.eventId ? eventsById.get(l.eventId) : null;
+      {listState === "idle" && items.length === 0 && <EmptyPanel />}
 
-                const eventBadge = !l.eventId
-                  ? { label: "no event", cls: chipClasses("none") }
-                  : ev
-                    ? {
-                        label: ev.name,
-                        cls:
-                          String(ev.status || "").toUpperCase() === "ACTIVE"
-                            ? chipClasses("active")
-                            : String(ev.status || "").toUpperCase() === "DRAFT"
-                              ? chipClasses("draft")
-                              : chipClasses("archived"),
-                      }
-                    : { label: `event:${l.eventId.slice(0, 6)}…`, cls: chipClasses("event") };
+      {listState === "idle" && items.length > 0 && (
+        <>
+          <div className="mb-2 flex items-center justify-between text-sm text-black/60">
+            <div>
+              Showing <span className="font-medium text-black/80">{items.length}</span> lead(s)
+            </div>
+            <div className="hidden md:block">Captured times are shown in your local timezone.</div>
+          </div>
 
-                return (
-                  <tr key={l.id} className="border-t border-neutral-100">
-                    <td className="px-4 py-3 font-mono text-xs">{isoShort(l.capturedAt)}</td>
+          <LeadsTable
+            rows={items}
+            formsById={formsById}
+            formatCapturedAt={formatDateTime}
+            getPreview={(row) => (row.preview && row.preview.trim() ? row.preview : safePreviewFromValues(row.values))}
+            onOpen={(id) => setSelectedLeadId(id)}
+            hasMore={Boolean(nextCursor)}
+            loadingMore={loadingMore}
+            onLoadMore={() => void loadMore()}
+          />
+        </>
+      )}
 
-                    <td className="px-4 py-3">
-                      <div className="text-sm text-neutral-900">{f?.name ?? `form:${l.formId.slice(0, 6)}…`}</div>
-                      <div className="mt-1 text-xs text-neutral-600">{(f?.status ?? "").toUpperCase() || "—"}</div>
-                    </td>
+      <LeadDetailDrawer
+        open={Boolean(selectedLeadId)}
+        leadId={selectedLeadId}
+        onClose={() => setSelectedLeadId(null)}
+        formsById={formsById}
+        formatCapturedAt={formatDateTime}
+        onMutated={(id) => void onLeadMutated(id)}
+      />
 
-                    <td className="px-4 py-3">
-                      <span className={eventBadge.cls}>{eventBadge.label}</span>
-                      {ev?.location ? <div className="mt-1 text-xs text-neutral-600">{ev.location}</div> : null}
-                    </td>
-
-                    <td className="px-4 py-3 text-neutral-900">{leadPreview(l.values || {})}</td>
-
-                    <td className="px-4 py-3 font-mono text-xs">{l.id}</td>
-
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        className="rounded-xl border border-neutral-200 px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-50"
-                        onClick={async () => {
-                          const ok = await copyToClipboard(l.id);
-                          if (!ok) setError("Copy failed (clipboard blocked).");
-                        }}
-                      >
-                        Copy ID
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
+      <div className="mt-6 text-sm text-black/60">
+        Need a form first?{" "}
+        <Link href="/admin/forms" className="font-medium text-black underline underline-offset-4">
+          Go to Forms
+        </Link>
+        .
       </div>
+    </div>
+  );
+}
 
-      <div className="mt-4 flex items-center justify-between">
-        <div className="text-xs text-neutral-600">
-          Items: <span className="font-mono">{items.length}</span>
-        </div>
+function LoadingSkeleton() {
+  return (
+    <div className="rounded-xl border bg-white p-4">
+      <div className="mb-4 h-4 w-40 animate-pulse rounded bg-black/10" />
+      <div className="space-y-3">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div key={i} className="grid grid-cols-12 gap-3">
+            <div className="col-span-3 h-9 animate-pulse rounded bg-black/10" />
+            <div className="col-span-3 h-9 animate-pulse rounded bg-black/10" />
+            <div className="col-span-4 h-9 animate-pulse rounded bg-black/10" />
+            <div className="col-span-2 h-9 animate-pulse rounded bg-black/10" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void loadPage(null, "replace")}
-            className="rounded-xl border border-neutral-200 px-3 py-2 text-sm text-neutral-800 hover:bg-neutral-50 disabled:opacity-60"
-            disabled={loading}
-          >
-            Refresh
-          </button>
+function EmptyPanel() {
+  return (
+    <div className="rounded-xl border bg-white p-10 text-center">
+      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full border bg-black/5">
+        <span className="text-xl">◎</span>
+      </div>
+      <h2 className="text-lg font-semibold">No leads yet</h2>
+      <p className="mt-2 text-sm text-black/60">
+        Create a form, activate it, and start capturing leads in the app. When the first lead arrives, it will show up
+        here.
+      </p>
+      <div className="mt-5 flex items-center justify-center gap-2">
+        <Link href="/admin/forms" className="rounded-md border px-4 py-2 text-sm font-medium hover:bg-black/5">
+          Create / Manage forms
+        </Link>
+      </div>
+    </div>
+  );
+}
 
-          <button
-            type="button"
-            onClick={() => void loadPage(nextCursor, "append")}
-            className="rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-60"
-            disabled={loading || !nextCursor}
-          >
-            Load more
-          </button>
-        </div>
+function ErrorPanel(props: { title: string; message: string; traceId?: string | null; onRetry: () => void }) {
+  const { title, message, traceId, onRetry } = props;
+
+  return (
+    <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+      <div className="font-semibold text-red-800">{title}</div>
+      <div className="mt-1 text-sm text-red-800/80">{message}</div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button type="button" className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm hover:bg-white/60" onClick={onRetry}>
+          Retry
+        </button>
+
+        {traceId && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-red-800/70">traceId: {traceId}</span>
+            <button
+              type="button"
+              className="rounded-md border border-red-200 bg-white px-2 py-1 text-xs hover:bg-white/60"
+              onClick={() => void navigator.clipboard.writeText(traceId)}
+            >
+              Copy
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

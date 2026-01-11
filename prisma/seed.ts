@@ -212,9 +212,49 @@ async function upsertDemoForm(prisma: PrismaClient, tenantId: string) {
   return form;
 }
 
+async function upsertDemoEvent(prisma: PrismaClient, tenantId: string) {
+  const name = env("SEED_EVENT_NAME", "Demo Messe");
+  const locationRaw = env("SEED_EVENT_LOCATION", ""); // optional
+  const location = locationRaw.trim() ? locationRaw.trim() : null;
+
+  const now = new Date();
+  const startsAt = now;
+  const endsAt = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
+
+  const existing = await prisma.event.findFirst({
+    where: { tenantId, name },
+    select: { id: true },
+  });
+
+  const event = existing
+    ? await prisma.event.update({
+        where: { id: existing.id },
+        data: {
+          status: "ACTIVE",
+          location: location ?? undefined,
+          startsAt,
+          endsAt,
+        },
+        select: { id: true, name: true, status: true },
+      })
+    : await prisma.event.create({
+        data: {
+          tenantId,
+          name,
+          status: "ACTIVE",
+          location: location ?? undefined,
+          startsAt,
+          endsAt,
+        },
+        select: { id: true, name: true, status: true },
+      });
+
+  return event;
+}
+
 async function recreateDemoMobileKeyAndDevice(
   prisma: PrismaClient,
-  opts: { tenantId: string; ownerUserId: string; formId: string }
+  opts: { tenantId: string; ownerUserId: string; formId: string; activeEventId?: string }
 ) {
   const secret = env("MOBILE_API_KEY_SECRET", "");
   if (!hasStrongSecret(secret)) {
@@ -263,8 +303,9 @@ async function recreateDemoMobileKeyAndDevice(
       name: deviceName,
       apiKeyId: apiKey.id,
       status: "ACTIVE",
+      ...(opts.activeEventId ? { activeEventId: opts.activeEventId } : {}),
     },
-    select: { id: true, name: true, status: true },
+    select: { id: true, name: true, status: true, activeEventId: true },
   });
 
   await prisma.mobileDeviceForm.create({
@@ -279,6 +320,7 @@ async function recreateDemoMobileKeyAndDevice(
   console.log("        token:", token);
   console.log("        prefix:", apiKey.prefix);
   console.log("        device:", device.name, device.id);
+  if (device.activeEventId) console.log("        device.activeEventId:", device.activeEventId);
 }
 
 async function main() {
@@ -287,15 +329,18 @@ async function main() {
     const tenant = await upsertTenant(db.prisma);
     const owner = await upsertOwnerUser(db.prisma, tenant.id);
     const form = await upsertDemoForm(db.prisma, tenant.id);
+    const event = await upsertDemoEvent(db.prisma, tenant.id);
 
     console.log("[seed] Tenant:", tenant.slug, tenant.id);
     console.log("[seed] Owner:", owner.email, owner.id, `(role=${owner.role})`);
     console.log("[seed] Form:", form.name, form.id, `(status=${form.status})`);
+    console.log("[seed] Event:", event.name, event.id, `(status=${event.status})`);
 
     await recreateDemoMobileKeyAndDevice(db.prisma, {
       tenantId: tenant.id,
       ownerUserId: owner.id,
       formId: form.id,
+      activeEventId: event.id,
     });
 
     console.log("[seed] Done.");
