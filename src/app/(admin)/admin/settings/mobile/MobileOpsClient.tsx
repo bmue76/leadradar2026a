@@ -25,6 +25,8 @@ type DeviceRow = {
   apiKeyPrefix?: string;
   apiKey?: { prefix?: string; lastUsedAt?: string | null } | null;
   assignedForms?: Array<{ id: string; name: string; status: string }>;
+  activeEventId?: string | null;
+  activeEvent?: { id: string; name: string; status: string } | null;
 };
 
 type ProvisionRow = {
@@ -38,6 +40,15 @@ type ProvisionRow = {
 };
 
 type FormListItem = { id: string; name: string; status: string; description?: string | null };
+
+type EventListItem = {
+  id: string;
+  name: string;
+  status: "DRAFT" | "ACTIVE" | "ARCHIVED" | string;
+  location?: string | null;
+  startsAt?: string | null;
+  endsAt?: string | null;
+};
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -94,7 +105,8 @@ function chipClasses(status: string): string {
   if (s === "ACTIVE") return `${base} bg-emerald-50 text-emerald-900 border-emerald-200`;
   if (s === "USED") return `${base} bg-indigo-50 text-indigo-900 border-indigo-200`;
   if (s === "EXPIRED") return `${base} bg-amber-50 text-amber-900 border-amber-200`;
-  if (s === "REVOKED" || s === "DISABLED") return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
+  if (s === "REVOKED" || s === "DISABLED" || s === "ARCHIVED") return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
+  if (s === "DRAFT") return `${base} bg-sky-50 text-sky-900 border-sky-200`;
   return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
 }
 
@@ -135,6 +147,15 @@ function effectiveProvisionStatus(row: ProvisionRow): string {
     if (!Number.isNaN(ex) && ex <= Date.now()) return "EXPIRED";
   }
   return s;
+}
+
+function eventLabel(e: EventListItem): string {
+  const base = e.name || "—";
+  const status = (e.status || "—").toUpperCase();
+  const when = e.startsAt ? isoShort(e.startsAt) : "";
+  const loc = e.location ? String(e.location) : "";
+  const extra = [status !== "ACTIVE" ? status : "", when ? when : "", loc ? loc : ""].filter(Boolean).join(" · ");
+  return extra ? `${base} — ${extra}` : base;
 }
 
 export default function MobileOpsClient() {
@@ -188,6 +209,11 @@ export default function MobileOpsClient() {
   const [manageApiKeyPrefix, setManageApiKeyPrefix] = React.useState<string>("—");
   const [manageLastSeenAt, setManageLastSeenAt] = React.useState<string | null>(null);
   const [manageLastUsedAt, setManageLastUsedAt] = React.useState<string | null>(null);
+
+  // NEW: Events for device binding
+  const [eventsLoading, setEventsLoading] = React.useState(false);
+  const [events, setEvents] = React.useState<EventListItem[]>([]);
+  const [manageActiveEventId, setManageActiveEventId] = React.useState<string>("");
 
   const [formsLoading, setFormsLoading] = React.useState(false);
   const [forms, setForms] = React.useState<FormListItem[]>([]);
@@ -244,6 +270,24 @@ export default function MobileOpsClient() {
     const parsed: DeviceRow[] = rows.map((r) => (isRecord(r) ? (r as DeviceRow) : null)).filter(Boolean) as DeviceRow[];
     setDevices(parsed);
     setDevicesLoading(false);
+  }
+
+  async function loadEventsForDeviceBinding() {
+    setEventsLoading(true);
+    const res = await adminFetchJson<unknown>("/api/admin/v1/events?limit=200", { method: "GET" });
+    if (!res.ok) {
+      setEvents([]);
+      setEventsLoading(false);
+      // Events are optional; we report via manageError when drawer is open
+      if (manageOpen) setManageError(fmtErr(res));
+      return;
+    }
+    const rows = pickArray(res.data) as unknown[];
+    const parsed: EventListItem[] = rows
+      .map((r) => (isRecord(r) ? (r as EventListItem) : null))
+      .filter(Boolean) as EventListItem[];
+    setEvents(parsed);
+    setEventsLoading(false);
   }
 
   React.useEffect(() => {
@@ -473,6 +517,10 @@ export default function MobileOpsClient() {
     setManageLastSeenAt(null);
     setManageLastUsedAt(null);
 
+    setEvents([]);
+    setEventsLoading(false);
+    setManageActiveEventId("");
+
     setForms([]);
     setFormsLoading(false);
     setShowNonActiveForms(false);
@@ -480,6 +528,7 @@ export default function MobileOpsClient() {
     setSelectedFormIds(new Set());
 
     void loadManageDevice(id);
+    void loadEventsForDeviceBinding();
   }
 
   async function loadManageDevice(id: string) {
@@ -517,6 +566,10 @@ export default function MobileOpsClient() {
 
     const lastSeenAt = typeof d.lastSeenAt === "string" ? d.lastSeenAt : d.lastSeenAt === null ? null : null;
 
+    // NEW: activeEventId
+    const activeEventId =
+      typeof d.activeEventId === "string" ? d.activeEventId : d.activeEventId === null ? "" : "";
+
     const assigned = (Array.isArray(d.assignedForms) ? d.assignedForms : []) as unknown[];
     const assignedIds = new Set<string>();
     for (const it of assigned) {
@@ -528,6 +581,7 @@ export default function MobileOpsClient() {
     setManageApiKeyPrefix(apiKeyPrefix || "—");
     setManageLastSeenAt(lastSeenAt);
     setManageLastUsedAt(lastUsedAt);
+    setManageActiveEventId(activeEventId);
     setSelectedFormIds(assignedIds);
 
     setManageLoading(false);
@@ -556,13 +610,18 @@ export default function MobileOpsClient() {
       const res = await adminFetchJson<unknown>(`/api/admin/v1/mobile/devices/${manageDeviceId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name, status }),
+        body: JSON.stringify({
+          name,
+          status,
+          activeEventId: manageActiveEventId ? manageActiveEventId : null,
+        }),
       });
       if (!res.ok) {
         setManageError(fmtErr(res));
         return;
       }
       await loadDevices();
+      await loadManageDevice(manageDeviceId);
     } finally {
       setSavingDevice(false);
     }
@@ -610,6 +669,19 @@ export default function MobileOpsClient() {
   });
 
   const provSelectableForms = forms.filter((f) => f.status === "ACTIVE");
+
+  const selectableEvents = events
+    .filter((e) => String(e.status || "").toUpperCase() !== "ARCHIVED")
+    .sort((a, b) => {
+      const sa = a.startsAt ? new Date(a.startsAt).getTime() : 0;
+      const sb = b.startsAt ? new Date(b.startsAt).getTime() : 0;
+      return sb - sa;
+    });
+
+  const activeEventName =
+    manageActiveEventId && selectableEvents.find((e) => e.id === manageActiveEventId)?.name
+      ? selectableEvents.find((e) => e.id === manageActiveEventId)!.name
+      : "—";
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-8">
@@ -1121,7 +1193,8 @@ export default function MobileOpsClient() {
               <div>
                 <div className="text-sm font-medium text-neutral-900">Manage Device</div>
                 <div className="text-xs text-neutral-600">
-                  ApiKey: <span className="font-mono">{manageApiKeyPrefix}</span> · Last seen:{" "}
+                  ApiKey: <span className="font-mono">{manageApiKeyPrefix}</span> · Event:{" "}
+                  <span className="font-mono">{activeEventName}</span> · Last seen:{" "}
                   <span className="font-mono">{isoShort(manageLastSeenAt)}</span> · Last used:{" "}
                   <span className="font-mono">{isoShort(manageLastUsedAt)}</span>
                 </div>
@@ -1163,14 +1236,43 @@ export default function MobileOpsClient() {
                     <option value="DISABLED">DISABLED</option>
                   </select>
 
-                  <button
-                    type="button"
-                    onClick={() => void saveDevice()}
-                    className="rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-60"
-                    disabled={savingDevice}
+                  {/* NEW: Active Event binding */}
+                  <label className="mb-1 block text-xs font-medium text-neutral-700">Active event (optional)</label>
+                  <select
+                    className="mb-3 w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+                    value={manageActiveEventId}
+                    onChange={(e) => setManageActiveEventId(e.target.value)}
+                    disabled={savingDevice || eventsLoading}
                   >
-                    {savingDevice ? "Saving…" : "Save device"}
-                  </button>
+                    <option value="">— no event —</option>
+                    {selectableEvents.map((ev) => (
+                      <option key={ev.id} value={ev.id}>
+                        {eventLabel(ev)}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="mb-3 text-xs text-neutral-600">
+                    Mobile Captures werden automatisch mit diesem Event getaggt (nur wenn Event status=ACTIVE).
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void saveDevice()}
+                      className="rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-60"
+                      disabled={savingDevice}
+                    >
+                      {savingDevice ? "Saving…" : "Save device"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void loadEventsForDeviceBinding()}
+                      className="rounded-xl border border-neutral-200 px-3 py-2 text-sm text-neutral-800 hover:bg-neutral-50 disabled:opacity-60"
+                      disabled={eventsLoading}
+                    >
+                      {eventsLoading ? "Loading events…" : "Refresh events"}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="rounded-2xl border border-neutral-200 p-4">

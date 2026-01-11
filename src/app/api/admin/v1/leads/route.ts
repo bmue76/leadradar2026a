@@ -46,6 +46,7 @@ const LimitSchema = z
 const LeadListQuerySchema = z
   .object({
     formId: z.string().min(1).optional(),
+    eventId: z.string().min(1).optional(), // NEW
     includeDeleted: z.enum(["true", "false"]).optional(),
     from: IsoDateTimeString.optional(),
     to: IsoDateTimeString.optional(),
@@ -61,14 +62,20 @@ const LeadListQuerySchema = z
       }
     }
   })
-  .transform((q) => ({
-    formId: q.formId,
-    includeDeleted: q.includeDeleted === "true",
-    from: q.from ? new Date(q.from) : undefined,
-    to: q.to ? new Date(q.to) : undefined,
-    limit: q.limit,
-    cursor: q.cursor,
-  }));
+  .transform((q) => {
+    const rawEventId = (q.eventId ?? "").trim();
+    const eventId = rawEventId ? (rawEventId.toLowerCase() === "none" ? null : rawEventId) : undefined;
+
+    return {
+      formId: q.formId,
+      eventId, // string | null | undefined
+      includeDeleted: q.includeDeleted === "true",
+      from: q.from ? new Date(q.from) : undefined,
+      to: q.to ? new Date(q.to) : undefined,
+      limit: q.limit,
+      cursor: q.cursor,
+    };
+  });
 
 export async function GET(req: Request) {
   try {
@@ -82,6 +89,15 @@ export async function GET(req: Request) {
         select: { id: true },
       });
       if (!form) return jsonError(req, 404, "NOT_FOUND", "Not found.");
+    }
+
+    // leak-safe: if eventId provided (string), ensure it belongs to tenant else 404
+    if (typeof query.eventId === "string") {
+      const ev = await prisma.event.findFirst({
+        where: { id: query.eventId, tenantId: tenant.tenantId },
+        select: { id: true },
+      });
+      if (!ev) return jsonError(req, 404, "NOT_FOUND", "Not found.");
     }
 
     const cursorParsed = query.cursor ? decodeCursor(query.cursor) : undefined;
@@ -107,6 +123,8 @@ export async function GET(req: Request) {
       tenantId: tenant.tenantId,
       ...(query.includeDeleted ? {} : { isDeleted: false }),
       ...(query.formId ? { formId: query.formId } : {}),
+      ...(query.eventId === null ? { eventId: null } : {}),
+      ...(typeof query.eventId === "string" ? { eventId: query.eventId } : {}),
       ...(capturedAtFilter ? { capturedAt: capturedAtFilter } : {}),
       ...(cursorWhere ? { AND: [cursorWhere] } : {}),
     } as const;
@@ -118,6 +136,7 @@ export async function GET(req: Request) {
       select: {
         id: true,
         formId: true,
+        eventId: true, // NEW
         capturedAt: true,
         isDeleted: true,
         values: true,

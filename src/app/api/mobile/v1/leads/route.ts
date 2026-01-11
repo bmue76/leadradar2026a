@@ -42,6 +42,15 @@ export async function POST(req: Request) {
       return jsonError(req, 404, "NOT_FOUND", "Not found.");
     }
 
+    // NEW: auto-tag with device.activeEventId (only if event is ACTIVE)
+    const device = await prisma.mobileDevice.findFirst({
+      where: { tenantId: auth.tenantId, id: auth.deviceId },
+      select: { activeEventId: true, activeEvent: { select: { status: true } } },
+    });
+
+    const eventId =
+      device?.activeEventId && device.activeEvent?.status === "ACTIVE" ? device.activeEventId : null;
+
     // Idempotency: (tenantId, clientLeadId)
     const existing = await prisma.lead.findFirst({
       where: { tenantId: auth.tenantId, clientLeadId: body.clientLeadId },
@@ -58,6 +67,7 @@ export async function POST(req: Request) {
       source: "mobile",
       mobileDeviceId: auth.deviceId,
       mobileApiKeyPrefix: auth.apiKeyPrefix,
+      ...(eventId ? { eventId } : {}),
     } as unknown) as Prisma.InputJsonValue;
 
     const lead = await prisma.lead.create({
@@ -66,6 +76,7 @@ export async function POST(req: Request) {
         formId: body.formId,
         clientLeadId: body.clientLeadId,
         capturedAt,
+        ...(eventId ? { eventId } : {}),
         values: valuesJson,
         meta: metaJson,
       },
