@@ -3,7 +3,17 @@
 import { useMemo, useState } from "react";
 import type { FormListItem } from "./exports.types";
 
+type EventListItem = {
+  id: string;
+  name: string;
+  status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  startsAt?: string | null;
+  endsAt?: string | null;
+  location?: string | null;
+};
+
 export type ExportCreateValues = {
+  eventId?: string;
   formId?: string;
   includeDeleted: boolean;
   from?: string;
@@ -12,10 +22,12 @@ export type ExportCreateValues = {
 
 export function ExportCreateModal(props: {
   forms: FormListItem[];
+  events: EventListItem[];
   busy?: boolean;
   onClose: () => void;
   onSubmit: (values: ExportCreateValues) => Promise<void>;
 }) {
+  const [eventId, setEventId] = useState<string>("");
   const [formId, setFormId] = useState<string>("");
   const [includeDeleted, setIncludeDeleted] = useState<boolean>(false);
   const [from, setFrom] = useState<string>("");
@@ -26,6 +38,12 @@ export function ExportCreateModal(props: {
     items.sort((a, b) => a.name.localeCompare(b.name));
     return items;
   }, [props.forms]);
+
+  const eventOptions = useMemo(() => {
+    const items = [...props.events];
+    items.sort((a, b) => a.name.localeCompare(b.name));
+    return items;
+  }, [props.events]);
 
   return (
     <div
@@ -66,6 +84,24 @@ export function ExportCreateModal(props: {
           </div>
 
           <div className="mt-6 space-y-4">
+            <div>
+              <label className="block text-sm font-medium">Event (optional)</label>
+              <select
+                className="mt-1 w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+                value={eventId}
+                onChange={(e) => setEventId(e.target.value)}
+                disabled={props.busy}
+              >
+                <option value="">All events</option>
+                {eventOptions.map((ev) => (
+                  <option key={ev.id} value={ev.id}>
+                    {ev.name}
+                  </option>
+                ))}
+              </select>
+              <div className="text-xs text-neutral-500 mt-1">Source: ACTIVE events.</div>
+            </div>
+
             <div>
               <label className="block text-sm font-medium">Form (optional)</label>
               <select
@@ -131,6 +167,7 @@ export function ExportCreateModal(props: {
               disabled={props.busy}
               onClick={async () => {
                 await props.onSubmit({
+                  eventId: eventId || undefined,
                   formId: formId || undefined,
                   includeDeleted,
                   from: from || undefined,

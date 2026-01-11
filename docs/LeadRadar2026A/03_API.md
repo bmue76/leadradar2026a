@@ -43,6 +43,7 @@ Common Header:
 content-type: application/json; charset=utf-8
 
 Error Codes (Guideline)
+
 INVALID_BODY / INVALID_QUERY (400) — Zod Validation
 
 UNAUTHORIZED (401) — fehlender/ungültiger Login (Admin) oder ApiKey (Mobile)
@@ -122,6 +123,7 @@ Semantik:
 404 wenn Form nicht existiert oder nicht assigned (leak-safe)
 
 Fields sortiert (nach sortOrder)
+
 Errors: 401, 404, 429
 
 Response (200):
@@ -148,6 +150,7 @@ Semantik:
 404 wenn formId nicht existiert oder nicht assigned (leak-safe)
 
 Idempotent via (tenantId, clientLeadId) → deduped: true bei Retry
+
 Errors: 400 INVALID_BODY, 401, 404, 429
 
 Request Body:
@@ -225,8 +228,7 @@ Code kopieren
 }
 Mobile Ops (Admin) — TP 2.9 (Ops-ready)
 ApiKeys
-GET /api/admin/v1/mobile/keys (200):
-
+GET /api/admin/v1/mobile/keys (200)
 json
 Code kopieren
 {
@@ -236,8 +238,7 @@ Code kopieren
   ],
   "traceId": "..."
 }
-POST /api/admin/v1/mobile/keys (one-time token):
-
+POST /api/admin/v1/mobile/keys (one-time token)
 json
 Code kopieren
 {
@@ -245,14 +246,12 @@ Code kopieren
   "data": { "id": "...", "prefix": "lrk_8d48c9b3", "apiKey": "lrk_....", "createdAt": "..." },
   "traceId": "..."
 }
-POST /api/admin/v1/mobile/keys/:id/revoke (200):
-
+POST /api/admin/v1/mobile/keys/:id/revoke (200)
 json
 Code kopieren
 { "ok": true, "data": { "id":"...", "status":"REVOKED", "revokedAt":"..." }, "traceId": "..." }
 Devices
-GET /api/admin/v1/mobile/devices (200):
-
+GET /api/admin/v1/mobile/devices (200)
 json
 Code kopieren
 {
@@ -269,20 +268,17 @@ Code kopieren
   ],
   "traceId":"..."
 }
-PATCH /api/admin/v1/mobile/devices/:id (Body):
-
+PATCH /api/admin/v1/mobile/devices/:id (Body)
 json
 Code kopieren
 { "name": "iPad Eingang", "status": "ACTIVE" }
-Assignments (Replace strategy):
-
+Assignments (Replace strategy)
 PUT /api/admin/v1/mobile/devices/:id/assignments (Body { "formIds": ["..."] })
 
 Legacy compatibility: PUT /api/admin/v1/mobile/devices/:id/forms
 
 Admin Provisioning (TP 3.0 / TP 3.1)
-POST /api/admin/v1/mobile/provision-tokens (Body):
-
+POST /api/admin/v1/mobile/provision-tokens (Body)
 json
 Code kopieren
 {
@@ -302,8 +298,7 @@ Code kopieren
   },
   "traceId":"..."
 }
-GET /api/admin/v1/mobile/provision-tokens:
-
+GET /api/admin/v1/mobile/provision-tokens
 status kann API-seitig computed EXPIRED sein (wenn expiresAt <= now und DB-status noch ACTIVE).
 
 Response (200):
@@ -320,8 +315,7 @@ Code kopieren
   },
   "traceId":"..."
 }
-POST /api/admin/v1/mobile/provision-tokens/:id/revoke:
-
+POST /api/admin/v1/mobile/provision-tokens/:id/revoke
 erlaubt nur wenn status == ACTIVE und nicht expired
 
 sonst: 409 INVALID_STATE
@@ -338,3 +332,59 @@ Code kopieren
 Platform (minimal)
 GET /api/platform/v1/health
 Public Health endpoint. Standard Responses + traceId.
+
+Exports (CSV) — TP 1.8 + TP 3.4 (event-aware)
+POST /api/admin/v1/exports/csv
+Erstellt einen CSV Export Job (Scope: Leads) und verarbeitet ihn best-effort inline (MVP).
+
+Leak-safe:
+
+Wenn eventId oder formId angegeben und nicht im Tenant existiert → 404 NOT_FOUND.
+
+Request Body:
+
+json
+Code kopieren
+{
+  "eventId": "evt_... (optional)",
+  "formId": "frm_... (optional)",
+  "from": "2026-01-09 (optional, YYYY-MM-DD or ISO)",
+  "to": "2026-01-10 (optional, YYYY-MM-DD or ISO)",
+  "includeDeleted": false,
+  "limit": 10000
+}
+Response (200):
+
+json
+Code kopieren
+{
+  "ok": true,
+  "data": { "job": { "id":"...", "status":"DONE", "params": { "...": "..." } } },
+  "traceId": "..."
+}
+Errors:
+
+404 NOT_FOUND (eventId/formId wrong tenant or not existing)
+
+500 EXPORT_FAILED
+
+CSV Columns (stable, deterministic)
+Delimiter: ; (Excel-friendly, CH)
+
+Header order:
+
+leadId
+
+eventId (leer wenn null)
+
+formId
+
+capturedAt (ISO)
+
+isDeleted
+
+deletedAt (ISO oder leer)
+
+deletedReason (oder leer)
+
+values_json (stringified JSON, quoted/escaped)

@@ -4,10 +4,11 @@ import { csvLine, withUtf8Bom } from "@/lib/csv";
 import { putTextFile } from "@/lib/storage";
 
 export type CsvExportParams = {
+  eventId?: string | null;
   formId?: string | null;
   includeDeleted?: boolean;
   from?: string | null; // ISO or YYYY-MM-DD
-  to?: string | null;   // ISO or YYYY-MM-DD
+  to?: string | null; // ISO or YYYY-MM-DD
   limit?: number | null;
   delimiter?: ";" | ",";
 };
@@ -50,6 +51,7 @@ export async function buildLeadsCsv(opts: {
     tenantId: opts.tenantId,
   };
 
+  if (opts.params.eventId) where.eventId = opts.params.eventId;
   if (opts.params.formId) where.formId = opts.params.formId;
   if (!includeDeleted) where.isDeleted = false;
 
@@ -66,6 +68,7 @@ export async function buildLeadsCsv(opts: {
     take: Math.min(Math.max(limit, 1), 100000),
     select: {
       id: true,
+      eventId: true,
       formId: true,
       capturedAt: true,
       isDeleted: true,
@@ -75,8 +78,9 @@ export async function buildLeadsCsv(opts: {
     },
   });
 
+  // Stable deterministic columns (TP 3.4)
   const header = csvLine(
-    ["leadId", "formId", "capturedAt", "isDeleted", "deletedAt", "deletedReason", "values_json"],
+    ["leadId", "eventId", "formId", "capturedAt", "isDeleted", "deletedAt", "deletedReason", "values_json"],
     delimiter
   );
 
@@ -88,6 +92,7 @@ export async function buildLeadsCsv(opts: {
       csvLine(
         [
           l.id,
+          l.eventId ?? "",
           l.formId,
           l.capturedAt?.toISOString() ?? "",
           l.isDeleted ? "true" : "false",

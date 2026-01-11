@@ -56,19 +56,31 @@ UX Notes:
 
 ---
 
-## Screen: Exports (`/admin/exports`) — TP 1.8 + TP 2.2
+## Screen: Exports (`/admin/exports`) — TP 1.8 + TP 2.2 + TP 3.4
 
 Ziel:
 - Admin kann CSV Export (Leads) starten
 - Jobs sehen (Status + Zeitstempel)
 - Download sobald DONE
 - Fehlerstates zeigen Trace + Retry
+- (TP 3.4) Event-aware: Export optional nach Event filtern
 
 API Wiring:
 - Create: `POST /api/admin/v1/exports/csv`
 - List: `GET /api/admin/v1/exports?type=CSV`
 - Status: `GET /api/admin/v1/exports/:id` (Polling)
 - Download: `GET /api/admin/v1/exports/:id/download`
+- Event list (Dropdown): `GET /api/admin/v1/events?status=ACTIVE`
+
+Export Create Modal (TP 3.4):
+- Event (optional): Dropdown (ACTIVE events)
+- Form (optional): Dropdown (falls vorhanden)
+- Date range (from/to): optional
+- Include deleted: optional
+
+Jobs Table (TP 3.4):
+- Zeigt Filter Summary in Meta-Line, z.B.
+  - `Event: Swissbau 2026 · Form: Demo Lead Capture · Range: 2026-01-09 → 2026-01-10`
 
 UX Notes:
 - Primary CTA: “Create export”

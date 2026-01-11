@@ -11,6 +11,28 @@ import { Table, TableBody, TableCell, TableHead, TableHeadCell, TableHeadRow, Ta
 
 type UiError = { message: string; traceId?: string; code?: string };
 
+type EventListItem = {
+  id: string;
+  name: string;
+  status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  startsAt?: string | null;
+  endsAt?: string | null;
+  location?: string | null;
+};
+
+type ExportParamsLike = {
+  scope?: string;
+  includeDeleted?: boolean;
+  eventId?: string | null;
+  formId?: string | null;
+  from?: string | null;
+  to?: string | null;
+  limit?: number | null;
+  delimiter?: string;
+  columnsVersion?: number;
+  rowCount?: number;
+};
+
 async function apiJson<T>(
   url: string,
   opts: {
@@ -131,8 +153,17 @@ function Notice(props: { err: UiError; onRetry: () => void; onDismiss: () => voi
   );
 }
 
+function getParamsLike(job: ExportJob): ExportParamsLike {
+  // ExportJob.params is Json? -> keep robust in UI
+  const anyJob = job as unknown as { params?: unknown };
+  const p = anyJob.params;
+  if (p && typeof p === "object") return p as ExportParamsLike;
+  return {};
+}
+
 export default function ExportsClient() {
   const [forms, setForms] = useState<FormListItem[]>([]);
+  const [events, setEvents] = useState<EventListItem[]>([]);
   const [jobs, setJobs] = useState<ExportJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyCreate, setBusyCreate] = useState(false);
@@ -147,12 +178,14 @@ export default function ExportsClient() {
     setErr(null);
 
     try {
-      const [formsRes, jobsRes] = await Promise.all([
+      const [formsRes, eventsRes, jobsRes] = await Promise.all([
         apiJson<{ forms: FormListItem[] }>("/api/admin/v1/forms"),
+        apiJson<{ items: EventListItem[] }>("/api/admin/v1/events?status=ACTIVE"),
         apiJson<{ items: ExportJob[] }>("/api/admin/v1/exports?type=CSV&limit=50"),
       ]);
 
       setForms(formsRes.data.forms || []);
+      setEvents(eventsRes.data.items || []);
       setJobs(jobsRes.data.items || []);
     } catch (e) {
       setErr(e as UiError);
@@ -205,6 +238,18 @@ export default function ExportsClient() {
 
   const jobRows = useMemo(() => jobs, [jobs]);
 
+  const formNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const f of forms) m.set(f.id, f.name);
+    return m;
+  }, [forms]);
+
+  const eventNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const ev of events) m.set(ev.id, ev.name);
+    return m;
+  }, [events]);
+
   return (
     <div className="lr-page" style={{ maxWidth: 1100 }}>
       <div className="lr-pageHeader">
@@ -256,64 +301,79 @@ export default function ExportsClient() {
           </TableHead>
 
           <TableBody>
-            {jobRows.map((j) => (
-              <TableRow
-                key={j.id}
-                actions={
-                  <>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => startPolling(j.id)}
-                      disabled={j.status === "DONE" || j.status === "FAILED"}
-                      title="Poll status now"
-                    >
-                      Poll
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      disabled={j.status !== "DONE"}
-                      onClick={async () => {
-                        setErr(null);
-                        try {
-                          const { blob, filename } = await apiDownloadCsv(`/api/admin/v1/exports/${j.id}/download`);
-                          const url = window.URL.createObjectURL(blob);
-                          const a = document.createElement("a");
-                          a.href = url;
-                          a.download = filename;
-                          document.body.appendChild(a);
-                          a.click();
-                          a.remove();
-                          window.URL.revokeObjectURL(url);
-                        } catch (e) {
-                          setErr(e as UiError);
-                        }
-                      }}
-                    >
-                      Download
-                    </Button>
-                  </>
-                }
-              >
-                <TableCell>
-                  <div className="lr-mono" style={{ fontSize: "12px" }}>{j.id}</div>
-                  <div className="lr-meta" style={{ marginTop: 6 }}>type: {j.type}</div>
-                </TableCell>
+            {jobRows.map((j) => {
+              const p = getParamsLike(j);
+              const formLabel = p.formId ? (formNameById.get(p.formId) ?? p.formId) : null;
+              const eventLabel = p.eventId ? (eventNameById.get(p.eventId) ?? p.eventId) : null;
 
-                <TableCell>
-                  <Chip tone={statusTone(j.status as ExportJobStatus)}>{statusLabel(j.status as ExportJobStatus)}</Chip>
-                </TableCell>
+              const filters: string[] = [];
+              if (eventLabel) filters.push(`Event: ${eventLabel}`);
+              if (formLabel) filters.push(`Form: ${formLabel}`);
+              if (p.from || p.to) filters.push(`Range: ${p.from ?? "…"} → ${p.to ?? "…"}`);
+              if (p.includeDeleted) filters.push("Include deleted");
+              const filterSummary = filters.length ? filters.join(" · ") : "All leads";
 
-                <TableCell>
-                  <span className="lr-secondaryText">{formatDateTime(j.queuedAt)}</span>
-                </TableCell>
+              return (
+                <TableRow
+                  key={j.id}
+                  actions={
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => startPolling(j.id)}
+                        disabled={j.status === "DONE" || j.status === "FAILED"}
+                        title="Poll status now"
+                      >
+                        Poll
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={j.status !== "DONE"}
+                        onClick={async () => {
+                          setErr(null);
+                          try {
+                            const { blob, filename } = await apiDownloadCsv(`/api/admin/v1/exports/${j.id}/download`);
+                            const url = window.URL.createObjectURL(blob);
+                            const a = document.createElement("a");
+                            a.href = url;
+                            a.download = filename;
+                            document.body.appendChild(a);
+                            a.click();
+                            a.remove();
+                            window.URL.revokeObjectURL(url);
+                          } catch (e) {
+                            setErr(e as UiError);
+                          }
+                        }}
+                      >
+                        Download
+                      </Button>
+                    </>
+                  }
+                >
+                  <TableCell>
+                    <div className="lr-mono" style={{ fontSize: "12px" }}>{j.id}</div>
+                    <div className="lr-meta" style={{ marginTop: 6 }}>
+                      type: {j.type} · {filterSummary}
+                    </div>
+                  </TableCell>
 
-                <TableCell>
-                  <span className="lr-secondaryText">{formatDateTime(j.finishedAt)}</span>
-                </TableCell>
-              </TableRow>
-            ))}
+                  <TableCell>
+                    <Chip tone={statusTone(j.status as ExportJobStatus)}>{statusLabel(j.status as ExportJobStatus)}</Chip>
+                  </TableCell>
+
+                  <TableCell>
+                    <span className="lr-secondaryText">{formatDateTime(j.queuedAt)}</span>
+                  </TableCell>
+
+                  <TableCell>
+                    <span className="lr-secondaryText">{formatDateTime(j.finishedAt)}</span>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       )}
@@ -321,6 +381,7 @@ export default function ExportsClient() {
       {modalOpen ? (
         <ExportCreateModal
           forms={forms}
+          events={events}
           busy={busyCreate}
           onClose={() => {
             if (!busyCreate) setModalOpen(false);
@@ -332,6 +393,7 @@ export default function ExportsClient() {
               const res = await apiJson<{ job: ExportJob }>("/api/admin/v1/exports/csv", {
                 method: "POST",
                 body: {
+                  eventId: values.eventId,
                   formId: values.formId,
                   includeDeleted: values.includeDeleted,
                   from: values.from,

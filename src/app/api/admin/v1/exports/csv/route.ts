@@ -8,6 +8,7 @@ import { runCsvExport } from "@/lib/exportCsv";
 export const runtime = "nodejs";
 
 const BodySchema = z.object({
+  eventId: z.string().min(1).optional(),
   formId: z.string().min(1).optional(),
   includeDeleted: z.boolean().optional().default(false),
   from: z.string().optional(),
@@ -22,6 +23,23 @@ export async function POST(req: Request) {
     const { tenantId } = await requireAdminAuth(req);
     const body = await validateBody(req, BodySchema);
 
+    // Leak-safe existence checks (tenant-scoped => 404 if wrong tenant/id)
+    if (body.eventId) {
+      const ev = await prisma.event.findFirst({
+        where: { id: body.eventId, tenantId },
+        select: { id: true },
+      });
+      if (!ev) return jsonError(req, 404, "NOT_FOUND", "Not found.");
+    }
+
+    if (body.formId) {
+      const f = await prisma.form.findFirst({
+        where: { id: body.formId, tenantId },
+        select: { id: true },
+      });
+      if (!f) return jsonError(req, 404, "NOT_FOUND", "Not found.");
+    }
+
     // 1) create job QUEUED
     const job = await prisma.exportJob.create({
       data: {
@@ -31,12 +49,13 @@ export async function POST(req: Request) {
         params: {
           scope: "LEADS",
           includeDeleted: body.includeDeleted ?? false,
+          eventId: body.eventId ?? null,
           formId: body.formId ?? null,
           from: body.from ?? null,
           to: body.to ?? null,
           limit: body.limit ?? 10000,
           delimiter: ";",
-          columnsVersion: 1,
+          columnsVersion: 2, // TP 3.4 adds eventId column (stable order)
           traceId,
         },
         queuedAt: new Date(),
@@ -66,6 +85,7 @@ export async function POST(req: Request) {
         tenantId,
         jobId: job.id,
         params: {
+          eventId: body.eventId ?? null,
           formId: body.formId ?? null,
           includeDeleted: body.includeDeleted ?? false,
           from: body.from ?? null,
