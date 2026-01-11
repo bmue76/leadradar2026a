@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 
-import LeadsClient from "./LeadsClient";
+import EventsClient from "./EventsClient";
 
 export default function Page() {
-  return <LeadsClient />;
+  return <EventsClient />;
 }
