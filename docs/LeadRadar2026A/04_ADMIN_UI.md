@@ -1,6 +1,6 @@
 # LeadRadar2026A – Admin UI Screens
 
-Stand: 2026-01-09  
+Stand: 2026-01-11  
 Design: Apple-clean (reduziert, robust, klare States) — Notion-Elemente nur wo nötig.
 
 ---
@@ -42,17 +42,39 @@ UX Notes:
 
 ---
 
-## Screen: Leads (`/admin/leads`) — TP 1.7 + TP 2.2
+## Screen: Leads (`/admin/leads`) — TP 1.7 + TP 2.2 (+ TP 3.5 Attachments)
 
 Ziel:
 - Leads in ruhiger Tabelle anzeigen
 - Row öffnet Detail (Drawer)
 - Pagination über “Load more”
+- Attachments anzeigen + Download (TP 3.5)
 
 UX Notes:
 - Table: Finder-like
 - Status: Chip (Active/Deleted) ruhig
 - Footer: “Load more” Secondary
+
+### Lead Detail Drawer
+
+Sektionen:
+1) Header: capturedAt, Form, Status, LeadId
+2) Actions: Delete / Restore (Restore optional)
+3) Values: Key/Value Grid
+4) **Attachments (TP 3.5)**
+
+#### Attachments Section (TP 3.5)
+
+- Zeigt Liste von Attachments (filename, type, mimeType, size)
+- Für `BUSINESS_CARD_IMAGE` und `image/*`:
+  - Preview/Thumbnail via `?inline=1` Download-Endpoint
+- Pro Attachment: Action “Download”
+- Empty state: “No attachments.”
+
+API Wiring:
+- Download: `GET /api/admin/v1/leads/:id/attachments/:attachmentId/download`
+  - optional `?inline=1` für Preview (nur image/*)
+- Browser nutzt Session Cookie für Auth (weil `<img>` keine custom headers mitsendet)
 
 ---
 

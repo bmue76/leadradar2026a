@@ -1,6 +1,6 @@
 # LeadRadar2026A – API (Admin/Mobile/Platform)
 
-Stand: 2026-01-09  
+Stand: 2026-01-11  
 Prinzipien: tenant-scoped, leak-safe (falscher Tenant/ID => 404), Standard Responses + traceId, Zod-only Validation.
 
 ---
@@ -17,7 +17,8 @@ Versionierung ist Bestandteil des Pfads (`v1`).
 
 ## Standard Responses (verbindlich)
 
-### Success
+### Success (200..299)
+
 Header:
 - `x-trace-id: <uuid>`
 
@@ -43,24 +44,32 @@ Common Header:
 content-type: application/json; charset=utf-8
 
 Error Codes (Guideline)
-
 INVALID_BODY / INVALID_QUERY (400) — Zod Validation
+
+BAD_JSON (400) — invalid JSON parse
 
 UNAUTHORIZED (401) — fehlender/ungültiger Login (Admin) oder ApiKey (Mobile)
 
+TENANT_REQUIRED (401) — fehlender Tenant Context (x-tenant-slug) wo erforderlich
+
 NOT_FOUND (404) — leak-safe bei falschem Tenant/ID oder unassigned Form
 
-INVALID_STATE (409) — Admin: Zustand erlaubt Aktion nicht (z.B. revoke nur ACTIVE)
+INVALID_STATE (409) — Zustand erlaubt Aktion nicht
+
+UNSUPPORTED_MEDIA_TYPE (415) — z.B. Attachment Upload mime nicht erlaubt
+
+BODY_TOO_LARGE (413) — Upload/Body zu groß
 
 RATE_LIMITED (429) — best-effort Rate Limiting (Phase 1)
 
-INTERNAL_ERROR (500)
+INTERNAL (500) — unexpected
 
 Hinweis: Codes sind endpoint-spezifisch, aber Stabilität + keine Leaks sind Pflicht.
 
 Auth
 Admin Auth (Session)
 Admin Endpoints sind session-protected (Login/Logout via /api/auth/*).
+
 Tenant Context ist serverseitig enforced (tenant-scoped Zugriff). Bei falschem Tenant/ID => 404 (leak-safe).
 
 Mobile Auth (ApiKey) — TP 2.5
@@ -169,9 +178,72 @@ Response (200):
 json
 Code kopieren
 { "ok": true, "data": { "leadId": "…", "deduped": false }, "traceId": "..." }
-Mobile Provisioning (TP 3.0 / TP 3.1)
-Ziel: Device-Onboarding ohne manuelles Copy/Paste.
+Mobile API v1 — Lead Attachments (TP 3.5)
+POST /api/mobile/v1/leads/:id/attachments
+Auth: x-api-key erforderlich
+Leak-safe:
 
+404 wenn Lead nicht im Tenant existiert
+
+(keine Infos über existence anderer Tenants)
+
+Content-Type: multipart/form-data
+
+Form Fields:
+
+file (required) — Bilddatei
+
+type (optional) — BUSINESS_CARD_IMAGE | IMAGE | PDF | OTHER
+
+default: BUSINESS_CARD_IMAGE
+
+Limits:
+
+max size: 6MB
+
+mime allowlist (MVP):
+
+image/jpeg
+
+image/png
+
+image/webp
+
+Errors:
+
+401 UNAUTHORIZED
+
+404 NOT_FOUND
+
+413 BODY_TOO_LARGE
+
+415 UNSUPPORTED_MEDIA_TYPE
+
+429 RATE_LIMITED
+
+Response (200):
+
+json
+Code kopieren
+{
+  "ok": true,
+  "data": {
+    "attachment": {
+      "id": "att_...",
+      "type": "BUSINESS_CARD_IMAGE",
+      "filename": "card.jpg",
+      "mimeType": "image/jpeg",
+      "sizeBytes": 123456,
+      "createdAt": "2026-01-11T10:00:00.000Z"
+    }
+  },
+  "traceId": "..."
+}
+Storage (DEV stub):
+
+.tmp_attachments/<tenantId>/<leadId>/<attachmentId>.<ext>
+
+Mobile Provisioning (TP 3.0 / TP 3.1)
 POST /api/mobile/v1/provision/claim
 Auth: kein x-api-key (nur Provision Token)
 Zod: token (trim), deviceName? (trim)
@@ -226,9 +298,46 @@ Code kopieren
   },
   "traceId": "..."
 }
+Admin API v1 — Lead Attachments (TP 3.5)
+GET /api/admin/v1/leads/:id/attachments/:attachmentId/download
+Auth:
+
+Browser UI: Session Cookie (Admin)
+
+Curl/Tools: optional x-tenant-slug (DEV-friendly)
+
+Leak-safe:
+
+404 wenn Lead nicht im Tenant existiert
+
+404 wenn Attachment nicht dem Lead gehört / falscher Tenant
+
+keine Informationen über andere Tenants/IDs
+
+Response (200):
+
+Content-Type: <mimeType>
+
+Content-Disposition: attachment; filename="..."
+
+Cache-Control: private, no-store
+
+Optional:
+
+?inline=1 (nur für image/*) → Content-Disposition: inline für Thumbnail/Preview in Admin UI.
+
+Errors:
+
+401 UNAUTHORIZED (wenn weder tenant context noch session)
+
+404 NOT_FOUND (leak-safe)
+
+500 INTERNAL
+
 Mobile Ops (Admin) — TP 2.9 (Ops-ready)
 ApiKeys
 GET /api/admin/v1/mobile/keys (200)
+
 json
 Code kopieren
 {
@@ -239,6 +348,7 @@ Code kopieren
   "traceId": "..."
 }
 POST /api/admin/v1/mobile/keys (one-time token)
+
 json
 Code kopieren
 {
@@ -247,11 +357,13 @@ Code kopieren
   "traceId": "..."
 }
 POST /api/admin/v1/mobile/keys/:id/revoke (200)
+
 json
 Code kopieren
 { "ok": true, "data": { "id":"...", "status":"REVOKED", "revokedAt":"..." }, "traceId": "..." }
 Devices
 GET /api/admin/v1/mobile/devices (200)
+
 json
 Code kopieren
 {
@@ -269,16 +381,20 @@ Code kopieren
   "traceId":"..."
 }
 PATCH /api/admin/v1/mobile/devices/:id (Body)
+
 json
 Code kopieren
 { "name": "iPad Eingang", "status": "ACTIVE" }
 Assignments (Replace strategy)
 PUT /api/admin/v1/mobile/devices/:id/assignments (Body { "formIds": ["..."] })
 
-Legacy compatibility: PUT /api/admin/v1/mobile/devices/:id/forms
+Legacy compatibility:
+
+PUT /api/admin/v1/mobile/devices/:id/forms
 
 Admin Provisioning (TP 3.0 / TP 3.1)
 POST /api/admin/v1/mobile/provision-tokens (Body)
+
 json
 Code kopieren
 {
@@ -299,7 +415,7 @@ Code kopieren
   "traceId":"..."
 }
 GET /api/admin/v1/mobile/provision-tokens
-status kann API-seitig computed EXPIRED sein (wenn expiresAt <= now und DB-status noch ACTIVE).
+Status kann API-seitig computed EXPIRED sein (wenn expiresAt <= now und DB-status noch ACTIVE).
 
 Response (200):
 
@@ -316,9 +432,7 @@ Code kopieren
   "traceId":"..."
 }
 POST /api/admin/v1/mobile/provision-tokens/:id/revoke
-erlaubt nur wenn status == ACTIVE und nicht expired
-
-sonst: 409 INVALID_STATE
+Erlaubt nur wenn status == ACTIVE und nicht expired, sonst: 409 INVALID_STATE
 
 Response (200):
 
