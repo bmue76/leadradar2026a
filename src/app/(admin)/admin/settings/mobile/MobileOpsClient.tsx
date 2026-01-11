@@ -25,8 +25,6 @@ type DeviceRow = {
   apiKeyPrefix?: string;
   apiKey?: { prefix?: string; lastUsedAt?: string | null } | null;
   assignedForms?: Array<{ id: string; name: string; status: string }>;
-  activeEventId?: string | null;
-  activeEvent?: { id: string; name: string; status: string } | null;
 };
 
 type ProvisionRow = {
@@ -41,14 +39,8 @@ type ProvisionRow = {
 
 type FormListItem = { id: string; name: string; status: string; description?: string | null };
 
-type EventListItem = {
-  id: string;
-  name: string;
-  status: "DRAFT" | "ACTIVE" | "ARCHIVED" | string;
-  location?: string | null;
-  startsAt?: string | null;
-  endsAt?: string | null;
-};
+// TP 3.3 — Events (for dropdown)
+type EventListItem = { id: string; name: string; status: string; startsAt?: string | null; endsAt?: string | null };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -61,6 +53,7 @@ function pickArray(payload: unknown): unknown[] {
   if (Array.isArray(payload.forms)) return payload.forms as unknown[];
   if (Array.isArray(payload.devices)) return payload.devices as unknown[];
   if (Array.isArray(payload.keys)) return payload.keys as unknown[];
+  if (Array.isArray(payload.events)) return payload.events as unknown[];
   return [];
 }
 
@@ -105,8 +98,7 @@ function chipClasses(status: string): string {
   if (s === "ACTIVE") return `${base} bg-emerald-50 text-emerald-900 border-emerald-200`;
   if (s === "USED") return `${base} bg-indigo-50 text-indigo-900 border-indigo-200`;
   if (s === "EXPIRED") return `${base} bg-amber-50 text-amber-900 border-amber-200`;
-  if (s === "REVOKED" || s === "DISABLED" || s === "ARCHIVED") return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
-  if (s === "DRAFT") return `${base} bg-sky-50 text-sky-900 border-sky-200`;
+  if (s === "REVOKED" || s === "DISABLED") return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
   return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
 }
 
@@ -147,15 +139,6 @@ function effectiveProvisionStatus(row: ProvisionRow): string {
     if (!Number.isNaN(ex) && ex <= Date.now()) return "EXPIRED";
   }
   return s;
-}
-
-function eventLabel(e: EventListItem): string {
-  const base = e.name || "—";
-  const status = (e.status || "—").toUpperCase();
-  const when = e.startsAt ? isoShort(e.startsAt) : "";
-  const loc = e.location ? String(e.location) : "";
-  const extra = [status !== "ACTIVE" ? status : "", when ? when : "", loc ? loc : ""].filter(Boolean).join(" · ");
-  return extra ? `${base} — ${extra}` : base;
 }
 
 export default function MobileOpsClient() {
@@ -210,10 +193,10 @@ export default function MobileOpsClient() {
   const [manageLastSeenAt, setManageLastSeenAt] = React.useState<string | null>(null);
   const [manageLastUsedAt, setManageLastUsedAt] = React.useState<string | null>(null);
 
-  // NEW: Events for device binding
+  // TP 3.3 — Active Event binding
   const [eventsLoading, setEventsLoading] = React.useState(false);
-  const [events, setEvents] = React.useState<EventListItem[]>([]);
-  const [manageActiveEventId, setManageActiveEventId] = React.useState<string>("");
+  const [activeEvents, setActiveEvents] = React.useState<EventListItem[]>([]);
+  const [manageActiveEventId, setManageActiveEventId] = React.useState<string>(""); // "" => none
 
   const [formsLoading, setFormsLoading] = React.useState(false);
   const [forms, setForms] = React.useState<FormListItem[]>([]);
@@ -272,21 +255,31 @@ export default function MobileOpsClient() {
     setDevicesLoading(false);
   }
 
-  async function loadEventsForDeviceBinding() {
+  // TP 3.3 — load ACTIVE events for dropdown
+  async function loadActiveEvents() {
     setEventsLoading(true);
-    const res = await adminFetchJson<unknown>("/api/admin/v1/events?limit=200", { method: "GET" });
+    const res = await adminFetchJson<unknown>("/api/admin/v1/events?status=ACTIVE&limit=200", { method: "GET" });
     if (!res.ok) {
-      setEvents([]);
+      setActiveEvents([]);
       setEventsLoading(false);
-      // Events are optional; we report via manageError when drawer is open
-      if (manageOpen) setManageError(fmtErr(res));
       return;
     }
+
     const rows = pickArray(res.data) as unknown[];
     const parsed: EventListItem[] = rows
-      .map((r) => (isRecord(r) ? (r as EventListItem) : null))
+      .map((r) => {
+        if (!isRecord(r)) return null;
+        const id = typeof r.id === "string" ? r.id : "";
+        const name = typeof r.name === "string" ? r.name : "";
+        const status = typeof r.status === "string" ? r.status : "ACTIVE";
+        if (!id || !name) return null;
+        const startsAt = typeof r.startsAt === "string" ? r.startsAt : r.startsAt === null ? null : null;
+        const endsAt = typeof r.endsAt === "string" ? r.endsAt : r.endsAt === null ? null : null;
+        return { id, name, status, startsAt, endsAt };
+      })
       .filter(Boolean) as EventListItem[];
-    setEvents(parsed);
+
+    setActiveEvents(parsed);
     setEventsLoading(false);
   }
 
@@ -517,9 +510,9 @@ export default function MobileOpsClient() {
     setManageLastSeenAt(null);
     setManageLastUsedAt(null);
 
-    setEvents([]);
-    setEventsLoading(false);
     setManageActiveEventId("");
+    setActiveEvents([]);
+    setEventsLoading(false);
 
     setForms([]);
     setFormsLoading(false);
@@ -527,8 +520,8 @@ export default function MobileOpsClient() {
     setFormQuery("");
     setSelectedFormIds(new Set());
 
+    void loadActiveEvents();
     void loadManageDevice(id);
-    void loadEventsForDeviceBinding();
   }
 
   async function loadManageDevice(id: string) {
@@ -550,29 +543,38 @@ export default function MobileOpsClient() {
 
     const d = res.data as Record<string, unknown>;
 
-    const name = typeof d.name === "string" ? d.name : "";
-    const statusRaw = typeof d.status === "string" ? d.status : "ACTIVE";
+    // Support both shapes:
+    // - flat fields at root
+    // - nested { device: {...}, assignedForms: [...] }
+    const deviceObj = isRecord(d.device) ? (d.device as Record<string, unknown>) : d;
+
+    const name = typeof deviceObj.name === "string" ? deviceObj.name : "";
+    const statusRaw = typeof deviceObj.status === "string" ? deviceObj.status : "ACTIVE";
     const status = statusRaw.toUpperCase() === "DISABLED" ? "DISABLED" : "ACTIVE";
 
-    let apiKeyPrefix = typeof d.apiKeyPrefix === "string" ? d.apiKeyPrefix : "";
+    let apiKeyPrefix = typeof deviceObj.apiKeyPrefix === "string" ? deviceObj.apiKeyPrefix : "";
     let lastUsedAt: string | null = null;
 
-    if (isRecord(d.apiKey)) {
-      const ak = d.apiKey as Record<string, unknown>;
+    const apiKeyMaybe = deviceObj.apiKey ?? d.apiKey;
+    if (isRecord(apiKeyMaybe)) {
+      const ak = apiKeyMaybe as Record<string, unknown>;
       if (!apiKeyPrefix && typeof ak.prefix === "string") apiKeyPrefix = ak.prefix;
       if (typeof ak.lastUsedAt === "string") lastUsedAt = ak.lastUsedAt;
       if (ak.lastUsedAt === null) lastUsedAt = null;
     }
 
-    const lastSeenAt = typeof d.lastSeenAt === "string" ? d.lastSeenAt : d.lastSeenAt === null ? null : null;
+    const lastSeenAt = typeof deviceObj.lastSeenAt === "string" ? deviceObj.lastSeenAt : deviceObj.lastSeenAt === null ? null : null;
 
-    // NEW: activeEventId
     const activeEventId =
-      typeof d.activeEventId === "string" ? d.activeEventId : d.activeEventId === null ? "" : "";
+      typeof deviceObj.activeEventId === "string"
+        ? deviceObj.activeEventId
+        : deviceObj.activeEventId === null
+          ? ""
+          : "";
 
-    const assigned = (Array.isArray(d.assignedForms) ? d.assignedForms : []) as unknown[];
+    const assignedRaw = (Array.isArray(d.assignedForms) ? d.assignedForms : Array.isArray(deviceObj.assignedForms) ? deviceObj.assignedForms : []) as unknown[];
     const assignedIds = new Set<string>();
-    for (const it of assigned) {
+    for (const it of assignedRaw) {
       if (isRecord(it) && typeof it.id === "string") assignedIds.add(it.id);
     }
 
@@ -669,19 +671,6 @@ export default function MobileOpsClient() {
   });
 
   const provSelectableForms = forms.filter((f) => f.status === "ACTIVE");
-
-  const selectableEvents = events
-    .filter((e) => String(e.status || "").toUpperCase() !== "ARCHIVED")
-    .sort((a, b) => {
-      const sa = a.startsAt ? new Date(a.startsAt).getTime() : 0;
-      const sb = b.startsAt ? new Date(b.startsAt).getTime() : 0;
-      return sb - sa;
-    });
-
-  const activeEventName =
-    manageActiveEventId && selectableEvents.find((e) => e.id === manageActiveEventId)?.name
-      ? selectableEvents.find((e) => e.id === manageActiveEventId)!.name
-      : "—";
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-8">
@@ -1193,8 +1182,7 @@ export default function MobileOpsClient() {
               <div>
                 <div className="text-sm font-medium text-neutral-900">Manage Device</div>
                 <div className="text-xs text-neutral-600">
-                  ApiKey: <span className="font-mono">{manageApiKeyPrefix}</span> · Event:{" "}
-                  <span className="font-mono">{activeEventName}</span> · Last seen:{" "}
+                  ApiKey: <span className="font-mono">{manageApiKeyPrefix}</span> · Last seen:{" "}
                   <span className="font-mono">{isoShort(manageLastSeenAt)}</span> · Last used:{" "}
                   <span className="font-mono">{isoShort(manageLastUsedAt)}</span>
                 </div>
@@ -1236,43 +1224,33 @@ export default function MobileOpsClient() {
                     <option value="DISABLED">DISABLED</option>
                   </select>
 
-                  {/* NEW: Active Event binding */}
-                  <label className="mb-1 block text-xs font-medium text-neutral-700">Active event (optional)</label>
+                  {/* TP 3.3 — Active Event binding */}
+                  <label className="mb-1 block text-xs font-medium text-neutral-700">Active Event</label>
                   <select
                     className="mb-3 w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
                     value={manageActiveEventId}
                     onChange={(e) => setManageActiveEventId(e.target.value)}
                     disabled={savingDevice || eventsLoading}
                   >
-                    <option value="">— no event —</option>
-                    {selectableEvents.map((ev) => (
+                    <option value="">— none (fallback uses first ACTIVE event) —</option>
+                    {activeEvents.map((ev) => (
                       <option key={ev.id} value={ev.id}>
-                        {eventLabel(ev)}
+                        {ev.name}
                       </option>
                     ))}
                   </select>
                   <div className="mb-3 text-xs text-neutral-600">
-                    Mobile Captures werden automatisch mit diesem Event getaggt (nur wenn Event status=ACTIVE).
+                    Active events loaded: <span className="font-mono">{eventsLoading ? "…" : activeEvents.length}</span>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void saveDevice()}
-                      className="rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-60"
-                      disabled={savingDevice}
-                    >
-                      {savingDevice ? "Saving…" : "Save device"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void loadEventsForDeviceBinding()}
-                      className="rounded-xl border border-neutral-200 px-3 py-2 text-sm text-neutral-800 hover:bg-neutral-50 disabled:opacity-60"
-                      disabled={eventsLoading}
-                    >
-                      {eventsLoading ? "Loading events…" : "Refresh events"}
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void saveDevice()}
+                    className="rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-60"
+                    disabled={savingDevice}
+                  >
+                    {savingDevice ? "Saving…" : "Save device"}
+                  </button>
                 </div>
 
                 <div className="rounded-2xl border border-neutral-200 p-4">

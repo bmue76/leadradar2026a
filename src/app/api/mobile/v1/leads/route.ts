@@ -42,15 +42,6 @@ export async function POST(req: Request) {
       return jsonError(req, 404, "NOT_FOUND", "Not found.");
     }
 
-    // NEW: auto-tag with device.activeEventId (only if event is ACTIVE)
-    const device = await prisma.mobileDevice.findFirst({
-      where: { tenantId: auth.tenantId, id: auth.deviceId },
-      select: { activeEventId: true, activeEvent: { select: { status: true } } },
-    });
-
-    const eventId =
-      device?.activeEventId && device.activeEvent?.status === "ACTIVE" ? device.activeEventId : null;
-
     // Idempotency: (tenantId, clientLeadId)
     const existing = await prisma.lead.findFirst({
       where: { tenantId: auth.tenantId, clientLeadId: body.clientLeadId },
@@ -61,13 +52,37 @@ export async function POST(req: Request) {
       return jsonOk(req, { leadId: existing.id, deduped: true });
     }
 
+    // TP 3.3 — Event tagging:
+    // 1) If device.activeEventId set AND event is ACTIVE => use it
+    // 2) Else fallback (as in your current behavior): first ACTIVE event (createdAt asc)
+    let eventId: string | null = null;
+
+    const device = await prisma.mobileDevice.findFirst({
+      where: { id: auth.deviceId, tenantId: auth.tenantId },
+      select: {
+        id: true,
+        activeEventId: true,
+        activeEvent: { select: { id: true, status: true } },
+      },
+    });
+
+    if (device?.activeEventId && device.activeEvent?.status === "ACTIVE") {
+      eventId = device.activeEventId;
+    } else {
+      const firstActive = await prisma.event.findFirst({
+        where: { tenantId: auth.tenantId, status: "ACTIVE" },
+        orderBy: [{ createdAt: "asc" }],
+        select: { id: true },
+      });
+      if (firstActive) eventId = firstActive.id;
+    }
+
     const valuesJson = body.values as unknown as Prisma.InputJsonValue;
     const metaJson = ({
       ...(body.meta ?? {}),
       source: "mobile",
       mobileDeviceId: auth.deviceId,
       mobileApiKeyPrefix: auth.apiKeyPrefix,
-      ...(eventId ? { eventId } : {}),
     } as unknown) as Prisma.InputJsonValue;
 
     const lead = await prisma.lead.create({
@@ -76,9 +91,10 @@ export async function POST(req: Request) {
         formId: body.formId,
         clientLeadId: body.clientLeadId,
         capturedAt,
-        ...(eventId ? { eventId } : {}),
         values: valuesJson,
         meta: metaJson,
+
+        ...(eventId ? { eventId } : {}),
       },
       select: { id: true },
     });

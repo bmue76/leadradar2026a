@@ -13,32 +13,14 @@ const PatchBody = z
   .object({
     name: z.string().trim().min(1).max(80).optional(),
     status: z.enum(["ACTIVE", "DISABLED"]).optional(),
-    activeEventId: z.string().trim().min(1).optional().nullable(), // NEW (null => clear)
+
+    // TP 3.3 — Device Binding
+    // null => clear binding
+    activeEventId: z.string().min(1).nullable().optional(),
   })
-  .refine((v) => typeof v.name === "string" || typeof v.status === "string" || v.activeEventId !== undefined, {
+  .refine((v) => typeof v.name === "string" || typeof v.status === "string" || "activeEventId" in v, {
     message: "At least one field must be provided.",
   });
-
-function flattenDeviceResponse(res: {
-  device: {
-    id: string;
-    name: string;
-    status: string;
-    lastSeenAt: Date | null;
-    createdAt: Date;
-    activeEventId: string | null;
-    activeEvent: { id: string; name: string; status: string } | null;
-    apiKey: { id: string; prefix: string; status: string; lastUsedAt: Date | null };
-  };
-  assignedForms: Array<{ id: string; name: string; status: string; createdAt: Date; assignedAt: Date }>;
-}) {
-  const d = res.device;
-  return {
-    ...d,
-    apiKeyPrefix: d.apiKey?.prefix ?? null,
-    assignedForms: res.assignedForms,
-  };
-}
 
 async function loadDevice(tenantId: string, deviceId: string) {
   const device = await prisma.mobileDevice.findFirst({
@@ -50,6 +32,7 @@ async function loadDevice(tenantId: string, deviceId: string) {
       lastSeenAt: true,
       createdAt: true,
 
+      // TP 3.3
       activeEventId: true,
       activeEvent: { select: { id: true, name: true, status: true } },
 
@@ -88,7 +71,9 @@ export async function GET(req: NextRequest, ctx: RouteCtx) {
     const res = await loadDevice(tenantId, id);
     if (!res) throw httpError(404, "NOT_FOUND", "Not found.");
 
-    return jsonOk(req, flattenDeviceResponse(res));
+    // Keep response backward-compatible-ish:
+    // root device fields + assignedForms
+    return jsonOk(req, { ...res.device, assignedForms: res.assignedForms });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     return jsonError(req, 500, "INTERNAL", "Unexpected error.");
@@ -109,13 +94,17 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx) {
     });
     if (!exists) throw httpError(404, "NOT_FOUND", "Not found.");
 
-    // If activeEventId is provided as string: verify event belongs to tenant (leak-safe)
-    if (typeof body.activeEventId === "string") {
-      const ev = await prisma.event.findFirst({
-        where: { id: body.activeEventId, tenantId },
-        select: { id: true },
-      });
-      if (!ev) throw httpError(404, "NOT_FOUND", "Not found.");
+    // TP 3.3 — leak-safe validate event binding (if provided)
+    // We allow only ACTIVE events to be bound (ops safe)
+    if ("activeEventId" in body) {
+      const evId = body.activeEventId;
+      if (typeof evId === "string") {
+        const ev = await prisma.event.findFirst({
+          where: { id: evId, tenantId, status: "ACTIVE" },
+          select: { id: true },
+        });
+        if (!ev) throw httpError(404, "NOT_FOUND", "Not found.");
+      }
     }
 
     await prisma.mobileDevice.updateMany({
@@ -123,14 +112,14 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx) {
       data: {
         ...(typeof body.name === "string" ? { name: body.name } : {}),
         ...(typeof body.status === "string" ? { status: body.status } : {}),
-        ...(body.activeEventId !== undefined ? { activeEventId: body.activeEventId } : {}),
+        ...("activeEventId" in body ? { activeEventId: body.activeEventId ?? null } : {}),
       },
     });
 
     const res = await loadDevice(tenantId, id);
     if (!res) throw httpError(404, "NOT_FOUND", "Not found.");
 
-    return jsonOk(req, flattenDeviceResponse(res));
+    return jsonOk(req, { ...res.device, assignedForms: res.assignedForms });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     return jsonError(req, 500, "INTERNAL", "Unexpected error.");
