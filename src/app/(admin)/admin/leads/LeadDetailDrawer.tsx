@@ -50,6 +50,11 @@ function formatValue(v: unknown): string {
   return String(v);
 }
 
+function isBusinessCardType(t?: string | null): boolean {
+  const v = String(t ?? "").toUpperCase();
+  return v === "BUSINESS_CARD_IMAGE" || v === "IMAGE";
+}
+
 export default function LeadDetailDrawer(props: {
   open: boolean;
   leadId: string | null;
@@ -334,29 +339,52 @@ export default function LeadDetailDrawer(props: {
                 </div>
 
                 {lead.attachments && lead.attachments.length > 0 ? (
-                  <div className="space-y-2">
-                    {lead.attachments.map((a) => (
-                      <div key={a.id} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-medium">{a.filename}</div>
-                          <div className="mt-0.5 text-xs text-black/50">
-                            {a.type}
-                            {a.mimeType ? ` · ${a.mimeType}` : ""}
-                            {typeof a.sizeBytes === "number" ? ` · ${formatBytes(a.sizeBytes)}` : ""}
-                          </div>
-                        </div>
+                  <div className="space-y-3">
+                    {lead.attachments.map((a) => {
+                      const downloadUrl = `/api/admin/v1/leads/${leadId}/attachments/${a.id}/download`;
+                      const previewUrl = `${downloadUrl}?inline=1`;
+                      const isImage = String(a.mimeType || "").startsWith("image/") && isBusinessCardType(a.type);
 
-                        <button
-                          type="button"
-                          className="rounded-md border px-3 py-1.5 text-sm opacity-60"
-                          disabled
-                          title="Download coming later"
-                        >
-                          Download
-                        </button>
-                      </div>
-                    ))}
-                    <div className="text-xs text-black/40">Download is coming later (exports/storage step).</div>
+                      return (
+                        <div key={a.id} className="rounded-lg border p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium">{a.filename}</div>
+                              <div className="mt-0.5 text-xs text-black/50">
+                                {a.type}
+                                {a.mimeType ? ` · ${a.mimeType}` : ""}
+                                {typeof a.sizeBytes === "number" ? ` · ${formatBytes(a.sizeBytes)}` : ""}
+                              </div>
+                            </div>
+
+                            <a
+                              className="rounded-md border px-3 py-1.5 text-sm hover:bg-black/5"
+                              href={downloadUrl}
+                              title="Download attachment"
+                            >
+                              Download
+                            </a>
+                          </div>
+
+                          {isImage && (
+                            <div className="mt-3">
+                              <div className="text-xs font-medium text-black/60">Business card preview</div>
+                              <div className="mt-2 overflow-hidden rounded-lg border bg-black/[0.02]">
+                                <img
+                                  src={previewUrl}
+                                  alt={a.filename}
+                                  className="block h-auto w-full object-contain"
+                                  loading="lazy"
+                                />
+                              </div>
+                              <div className="mt-2 text-xs text-black/40">
+                                Preview uses authenticated inline rendering. Download always stays private (tenant-scoped).
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="text-sm text-black/60">No attachments.</div>
