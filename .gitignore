@@ -50,3 +50,13 @@ out/
 .tmp_exports/
 
 
+.tmp_attachments/
+
+# --- Local proof artifacts (never commit) ---
+downloaded-*.*
+inline-*.*
+atlex-export-*.csv
+.tmp_attachments/
+
+# Prisma migration backups (never commit)
+prisma/migrations/**/migration.sql.bak

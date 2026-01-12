@@ -3,34 +3,31 @@
 Datum: 2026-01-12
 
 ## Ziel
-- Mobile kann zu einem Lead eine Visitenkarte als Bild hochladen (MVP: local storage).
-- Admin kann Attachments im Lead-Detail sehen (Thumbnail bei Bildern) und downloaden (inline/attachment).
-- DB erweitert um AttachmentType `BUSINESS_CARD_IMAGE`.
-- Migrations sind reset/shadow-safe.
+- Mobile: Upload von Attachments (MVP: BUSINESS_CARD_IMAGE als WebP/JPG/PNG) zu einem Lead.
+- Admin: Attachments im Lead-Detail anzeigen (Thumbnail inline) + Download (attachment).
+- Leak-safe: tenant-scoped auf Lead + Attachment.
+- Storage (MVP): local `.tmp_attachments` via storageKey.
 
 ## Umsetzung (Highlights)
-- DB:
+- DB
   - Enum `AttachmentType` um `BUSINESS_CARD_IMAGE` erweitert.
-  - LeadAttachment bleibt tenant-scoped und leak-safe.
-- Mobile API:
+  - Migration reset/shadow-safe (kein “unsafe enum use” mehr).
+- Mobile API
   - `POST /api/mobile/v1/leads/:id/attachments` (multipart/form-data)
-  - Validierung: size limit + mime allowlist (jpeg/png/webp) + type mapping
-  - StorageKey: `${tenantId}/${leadId}/${attachmentId}.${ext}` (MVP in .tmp_attachments)
-- Admin API:
-  - `GET /api/admin/v1/leads/:id` liefert attachments im Detail.
-  - `GET /api/admin/v1/leads/:id/attachments/:attachmentId/download`
+  - Allowlist MIME: image/jpeg, image/png, image/webp
+  - Size limit: 6MB
+  - `type` default: BUSINESS_CARD_IMAGE
+- Admin API
+  - Lead-Detail liefert `attachments[]`
+  - Download endpoint:
+    - `GET /api/admin/v1/leads/:id/attachments/:attachmentId/download`
     - `?disposition=inline|attachment`
-    - leak-safe checks: tenant + lead + attachment + storageKey + file exists
-- Admin UI:
-  - Lead Detail zeigt Attachments inkl. Thumbnail (Image) + Download-Link.
+- Admin UI
+  - Lead Detail Drawer zeigt Attachments inkl. Thumbnail + Download.
 
-## Proof (CURLs)
-Siehe Runbook-Snippet im Masterchat:
-- provision/claim -> mobile forms -> create lead -> upload attachment -> admin download
-
-## Quality Gates
-- `npx prisma migrate reset --force` ✅
-- `npm run db:seed` ✅
-- `npm run typecheck` ✅
-- `npm run lint` ✅
-- `npm run build` ✅
+## Proof (E2E)
+- Provision Claim -> x-api-key erhalten
+- Forms -> FORM_ID
+- Lead Create -> LEAD_ID
+- Attachment Upload (Git Bash + cygpath -m + type=image/webp)
+- Admin Download inline/attachment erfolgreich (200)

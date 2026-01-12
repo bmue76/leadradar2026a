@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import { adminFetchJson as _adminFetchJson } from "../_lib/adminFetch";
 import type {
   AdminFormListItem,
@@ -50,9 +51,11 @@ function formatValue(v: unknown): string {
   return String(v);
 }
 
-function isBusinessCardType(t?: string | null): boolean {
-  const v = String(t ?? "").toUpperCase();
-  return v === "BUSINESS_CARD_IMAGE" || v === "IMAGE";
+function isImageAttachment(a: { type?: string; mimeType?: string | null }): boolean {
+  const t = String(a.type || "").toUpperCase();
+  const m = String(a.mimeType || "").toLowerCase();
+  if (m.startsWith("image/")) return true;
+  return t === "BUSINESS_CARD_IMAGE" || t === "IMAGE";
 }
 
 export default function LeadDetailDrawer(props: {
@@ -339,15 +342,34 @@ export default function LeadDetailDrawer(props: {
                 </div>
 
                 {lead.attachments && lead.attachments.length > 0 ? (
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     {lead.attachments.map((a) => {
-                      const downloadUrl = `/api/admin/v1/leads/${leadId}/attachments/${a.id}/download`;
-                      const previewUrl = `${downloadUrl}?inline=1`;
-                      const isImage = String(a.mimeType || "").startsWith("image/") && isBusinessCardType(a.type);
+                      const img = isImageAttachment(a);
+                      const inlineUrl =
+                        leadId ? `/api/admin/v1/leads/${leadId}/attachments/${a.id}/download?disposition=inline` : "#";
+                      const downloadUrl =
+                        leadId ? `/api/admin/v1/leads/${leadId}/attachments/${a.id}/download` : "#";
 
                       return (
-                        <div key={a.id} className="rounded-lg border p-3">
-                          <div className="flex items-start justify-between gap-3">
+                        <div key={a.id} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+                          <div className="flex min-w-0 items-center gap-3">
+                            {img ? (
+                              <div className="h-16 w-16 overflow-hidden rounded-md border bg-black/[0.02]">
+                                <Image
+                                  src={inlineUrl}
+                                  alt={a.filename || "attachment"}
+                                  width={64}
+                                  height={64}
+                                  className="h-16 w-16 object-cover"
+                                  unoptimized
+                                />
+                              </div>
+                            ) : (
+                              <div className="flex h-16 w-16 items-center justify-center rounded-md border bg-black/[0.02] text-sm text-black/50">
+                                FILE
+                              </div>
+                            )}
+
                             <div className="min-w-0">
                               <div className="truncate text-sm font-medium">{a.filename}</div>
                               <div className="mt-0.5 text-xs text-black/50">
@@ -356,35 +378,20 @@ export default function LeadDetailDrawer(props: {
                                 {typeof a.sizeBytes === "number" ? ` · ${formatBytes(a.sizeBytes)}` : ""}
                               </div>
                             </div>
-
-                            <a
-                              className="rounded-md border px-3 py-1.5 text-sm hover:bg-black/5"
-                              href={downloadUrl}
-                              title="Download attachment"
-                            >
-                              Download
-                            </a>
                           </div>
 
-                          {isImage && (
-                            <div className="mt-3">
-                              <div className="text-xs font-medium text-black/60">Business card preview</div>
-                              <div className="mt-2 overflow-hidden rounded-lg border bg-black/[0.02]">
-                                <img
-                                  src={previewUrl}
-                                  alt={a.filename}
-                                  className="block h-auto w-full object-contain"
-                                  loading="lazy"
-                                />
-                              </div>
-                              <div className="mt-2 text-xs text-black/40">
-                                Preview uses authenticated inline rendering. Download always stays private (tenant-scoped).
-                              </div>
-                            </div>
-                          )}
+                          <a
+                            href={downloadUrl}
+                            className="rounded-md border px-3 py-1.5 text-sm hover:bg-black/5"
+                          >
+                            Download
+                          </a>
                         </div>
                       );
                     })}
+                    <div className="text-xs text-black/40">
+                      Thumbnails are served inline. Download uses Content-Disposition: attachment.
+                    </div>
                   </div>
                 ) : (
                   <div className="text-sm text-black/60">No attachments.</div>

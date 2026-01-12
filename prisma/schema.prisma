@@ -32,10 +32,10 @@ enum FieldType {
 }
 
 enum AttachmentType {
+  BUSINESS_CARD_IMAGE
   IMAGE
   PDF
   OTHER
-  BUSINESS_CARD_IMAGE
 }
 
 enum ExportJobStatus {
@@ -265,7 +265,7 @@ model LeadAttachment {
   tenantId String
   leadId   String
 
-  type       AttachmentType @default(BUSINESS_CARD_IMAGE)
+  type       AttachmentType
   filename   String
   mimeType   String
   sizeBytes  Int
