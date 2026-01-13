@@ -136,12 +136,10 @@ export default function EventsClient() {
       return;
     }
 
-    // try to show meaningful notice (best-effort)
     let msg = `Status gesetzt: ${status}`;
     if (isRecord(res.data)) {
       const autoArchivedEventId = typeof res.data.autoArchivedEventId === "string" ? res.data.autoArchivedEventId : null;
-      const devicesUnboundCount =
-        typeof res.data.devicesUnboundCount === "number" ? res.data.devicesUnboundCount : null;
+      const devicesUnboundCount = typeof res.data.devicesUnboundCount === "number" ? res.data.devicesUnboundCount : null;
 
       if (status === "ACTIVE" && autoArchivedEventId) {
         msg = `Event aktiviert · vorheriges ACTIVE archiviert · Devices unbound: ${devicesUnboundCount ?? 0}`;
@@ -151,6 +149,33 @@ export default function EventsClient() {
     }
 
     pushNotice(msg);
+    setBusyEventId(null);
+    await load();
+  }
+
+  async function unbindDevices(eventId: string) {
+    const ok = window.confirm("Devices lösen (activeEventId=null) für dieses Event?");
+    if (!ok) return;
+
+    setError(null);
+    setBusyEventId(eventId);
+
+    const res = (await adminFetchJson<unknown>(`/api/admin/v1/events/${eventId}/unbind-devices`, {
+      method: "POST",
+    })) as ApiResult<unknown>;
+
+    if (!res.ok) {
+      setBusyEventId(null);
+      setError(fmtApiErr(res));
+      return;
+    }
+
+    let count = 0;
+    if (isRecord(res.data) && typeof res.data.unboundDevicesCount === "number") {
+      count = res.data.unboundDevicesCount;
+    }
+
+    pushNotice(`Devices gelöst: ${count}`);
     setBusyEventId(null);
     await load();
   }
@@ -166,7 +191,7 @@ export default function EventsClient() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Events</h1>
           <p className="mt-1 text-sm text-neutral-600">
-            Übersicht deiner Messen/Events. Guardrail (MVP): Nur 1 ACTIVE Event pro Tenant — Aktivieren archiviert das bisher aktive Event (und unbindet Devices).
+            Übersicht deiner Messen/Events. Guardrail (MVP): Nur 1 ACTIVE Event pro Tenant — Aktivieren archiviert das bisher aktive Event (und löst Devices).
           </p>
         </div>
 
@@ -278,6 +303,16 @@ export default function EventsClient() {
                             Archive
                           </button>
                         )}
+
+                        <button
+                          type="button"
+                          onClick={() => void unbindDevices(ev.id)}
+                          disabled={isBusy}
+                          className="rounded-xl border border-red-200 px-3 py-1.5 text-sm text-red-900 hover:bg-red-50 disabled:opacity-50"
+                          title="Danger Zone: setzt activeEventId=null für alle Devices, die auf dieses Event zeigen."
+                        >
+                          Devices lösen
+                        </button>
 
                         <button
                           type="button"

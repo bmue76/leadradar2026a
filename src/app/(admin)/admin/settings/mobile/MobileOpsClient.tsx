@@ -672,6 +672,9 @@ export default function MobileOpsClient() {
 
   const provSelectableForms = forms.filter((f) => f.status === "ACTIVE");
 
+  const currentEventMissing =
+    !!manageActiveEventId && !eventsLoading && activeEvents.every((ev) => ev.id !== manageActiveEventId);
+
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-8">
       <div className="mb-6">
@@ -1224,24 +1227,36 @@ export default function MobileOpsClient() {
                     <option value="DISABLED">DISABLED</option>
                   </select>
 
-                  {/* TP 3.3 — Active Event binding */}
+                  {/* TP 3.7 — Active Event binding */}
                   <label className="mb-1 block text-xs font-medium text-neutral-700">Active Event</label>
                   <select
-                    className="mb-3 w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+                    className="mb-2 w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
                     value={manageActiveEventId}
                     onChange={(e) => setManageActiveEventId(e.target.value)}
                     disabled={savingDevice || eventsLoading}
                   >
-                    <option value="">— none (fallback uses first ACTIVE event) —</option>
+                    <option value="">Kein Event</option>
+                    {currentEventMissing ? (
+                      <option value={manageActiveEventId}>
+                        ⚠︎ bound to non-ACTIVE event ({shortId(manageActiveEventId)})
+                      </option>
+                    ) : null}
                     {activeEvents.map((ev) => (
                       <option key={ev.id} value={ev.id}>
                         {ev.name}
                       </option>
                     ))}
                   </select>
-                  <div className="mb-3 text-xs text-neutral-600">
-                    Active events loaded: <span className="font-mono">{eventsLoading ? "…" : activeEvents.length}</span>
-                  </div>
+
+                  {!eventsLoading && activeEvents.length === 0 ? (
+                    <div className="mb-3 text-xs text-amber-900/80">
+                      Kein aktives Event – Leads werden ohne Event gespeichert.
+                    </div>
+                  ) : (
+                    <div className="mb-3 text-xs text-neutral-600">
+                      Active events loaded: <span className="font-mono">{eventsLoading ? "…" : activeEvents.length}</span>
+                    </div>
+                  )}
 
                   <button
                     type="button"

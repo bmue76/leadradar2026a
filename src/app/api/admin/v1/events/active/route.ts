@@ -1,35 +1,35 @@
 import { jsonError, jsonOk } from "@/lib/api";
 import { isHttpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
-import { requireAdminAuth } from "@/lib/auth";
 import { requireTenantContext } from "@/lib/tenantContext";
+import { NextRequest } from "next/server";
 
 export const runtime = "nodejs";
 
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
   try {
-    const admin = await requireAdminAuth(req);
-    await requireTenantContext(req); // leak-safe header/session mismatch check
+    const { tenantId } = await requireTenantContext(req);
 
-    const items = await prisma.event.findMany({
-      where: { tenantId: admin.tenantId, status: "ACTIVE" },
-      orderBy: [{ startsAt: "desc" }, { updatedAt: "desc" }],
-      take: 500,
+    // Defensive: should be max 1, but if inconsistent, take most recently updated.
+    const item = await prisma.event.findFirst({
+      where: { tenantId, status: "ACTIVE" },
+      orderBy: [{ updatedAt: "desc" }],
       select: {
         id: true,
+        tenantId: true,
         name: true,
         location: true,
         startsAt: true,
         endsAt: true,
         status: true,
+        createdAt: true,
         updatedAt: true,
       },
     });
 
-    return jsonOk(req, { items });
+    return jsonOk(req, { item: item ?? null });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
-    console.error(e);
-    return jsonError(req, 500, "INTERNAL_SERVER_ERROR", "Unexpected server error.");
+    return jsonError(req, 500, "INTERNAL", "Unexpected error.");
   }
 }
