@@ -12,7 +12,8 @@
     "postinstall": "prisma generate",
     "pretypecheck": "prisma generate",
     "prebuild": "prisma generate",
-    "db:seed": "prisma db seed"
+    "db:seed": "prisma db seed",
+    "auth:smoke": "node scripts/auth-smoke.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
