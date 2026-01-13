@@ -1,6 +1,6 @@
 # LeadRadar2026A – Admin UI Screens
 
-Stand: 2026-01-11  
+Stand: 2026-01-13  
 Design: Apple-clean (reduziert, robust, klare States) — Notion-Elemente nur wo nötig.
 
 ---
@@ -114,24 +114,26 @@ UX Notes:
 
 ---
 
-## Screen: Events (`/admin/events`) — TP 3.3 + TP 3.6
+## Screen: Events (`/admin/events`) — TP 3.3 + TP 3.7
 
 Ziel:
 - Events auflisten, Status setzen (ACTIVE/ARCHIVED)
 - Guardrail sichtbar machen: **nur 1 ACTIVE Event pro Tenant (MVP)**
 
-TP 3.6 Guardrails (UX):
+TP 3.7 Guardrails (UX):
 - Hinweistext: “Nur ein aktives Event pro Tenant. Aktivieren archiviert das bisher aktive Event (und unbindet Devices).”
 - Actions (minimal): pro Event “Activate” oder “Archive”
+- Optional Ops Action: “Devices lösen” (setzt device.activeEventId=null)
 - Nach Statuswechsel kurze Notice (best-effort)
 
 API Wiring:
 - List: `GET /api/admin/v1/events?limit=200&status=...`
-- Status Change: `PATCH /api/admin/v1/events/:id/status` (TP 3.6: Auto-archive + Auto-unbind)
+- Status Change: `PATCH /api/admin/v1/events/:id/status` (TP 3.7: Auto-archive + Auto-unbind)
+- Optional Ops: `POST /api/admin/v1/events/:id/unbind-devices`
 
 ---
 
-## Screen: Mobile Ops (`/admin/settings/mobile`) — TP 2.9 + TP 3.0 + TP 3.1 (+ TP 3.6)
+## Screen: Mobile Ops (`/admin/settings/mobile`) — TP 2.9 + TP 3.0 + TP 3.1 (+ TP 3.7)
 
 Ziel:
 - Mobile API Betrieb produktfähig machen:
@@ -141,67 +143,8 @@ Ziel:
   - Provisioning: Token + Claim Flow (single-use hardened, best-effort RL)
   - Demo Capture Key UX (DEV)
 
-### UI Struktur (MVP)
-
-#### 1) Section “Provisioning”
-- CTA: “Create token”
-- Create Modal:
-  - Requested DeviceName (optional)
-  - Expires (Minutes, clamp 5…240, default 30)
-  - Initial Assignments (ACTIVE forms checklist, optional)
-- Success:
-  - One-time Token Anzeige + Copy
-  - QR (DEV): Link zu `/admin/demo/provision?token=...`
-- Table:
-  - Prefix | Status (ACTIVE/USED/REVOKED/EXPIRED) | Expires | Used | Device | Created | Actions
-  - Actions: “Revoke” **nur** wenn Status ACTIVE (sonst disabled)
-
-Hinweis:
-- `EXPIRED` wird API-seitig computed angezeigt, obwohl DB-status weiterhin `ACTIVE` sein kann.
-- Revoke ist nur erlaubt, wenn der Token effektiv ACTIVE und nicht expired ist (sonst 409 INVALID_STATE).
-
-#### 2) Section “ApiKeys”
-- Table: Prefix | Name | Status | Last used | Created | Actions (Revoke)
-- CTA: “Create key”
-- Create Success: One-time token Anzeige + Copy + “Use for Demo Capture” (setzt localStorage und navigiert)
-
-#### 3) Section “Devices”
-- Table: Name | Status | Last seen | Last used | Assigned | ApiKey prefix | Actions (Manage)
-- Manage Drawer:
-  - Rename + Status
-  - Assignments: Checklist (default ACTIVE), optional Toggle “Show drafts/archived”
-  - Save Assignments (Replace)
-
-TP 3.6 Guardrails (UX):
+TP 3.7 Guardrails (UX):
 - **Active Event Dropdown zeigt nur ACTIVE Events (+ “Kein Event”).**
 - Wenn kein ACTIVE Event existiert: Hinweis “Kein aktives Event – Leads werden ohne Event gespeichert.”
-- Wenn versucht wird, ein nicht-ACTIVE Event zu binden: API liefert 409 EVENT_NOT_ACTIVE.
+- Wenn versucht wird, ein nicht-ACTIVE Event zu binden: API liefert 409 `EVENT_NOT_ACTIVE`.
 
-#### 4) Demo Shortcuts (DEV)
-- Links:
-  - “Open Demo Capture” (`/admin/demo/capture`)
-  - “Open Demo Provision” (`/admin/demo/provision`)
-
----
-
-## Screen: Demo Provision (`/admin/demo/provision`) — DEV-only
-
-Ziel:
-- Provision Token claimen, ohne Mobile-App
-- Nach Claim wird `leadradar.devMobileApiKey` (und legacy key) in localStorage geschrieben
-- Redirect zu `/admin/demo/capture`
-
-UX Notes:
-- Token Input (oder `?token=...`)
-- Button “Claim token”
-- Error: ruhige Meldung + traceId
-
----
-
-## Screen: /login (Apple-clean)
-
-- Minimal: Wordmark/Logo + Email + Password + Primary CTA “Sign in”
-- Keine Cards, keine Schatten
-- Error: ruhig (kleiner Text)
-- Nach Login: Redirect `/admin`
-- Topbar rechts: User Menu + Logout

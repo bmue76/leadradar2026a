@@ -1,7 +1,9 @@
-import { jsonError, jsonOk } from "@/lib/api";
-import { httpError, isHttpError, validateBody } from "@/lib/http";
+import { jsonOk } from "@/lib/api";
+import { httpError, validateBody } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { requireTenantContext } from "@/lib/tenantContext";
+import { handleRoute } from "@/lib/route";
+import { assertEventIsBindable } from "@/server/events/eventGuardrails";
 import { NextRequest } from "next/server";
 import { z } from "zod";
 
@@ -64,7 +66,7 @@ async function loadDevice(tenantId: string, deviceId: string) {
 }
 
 export async function GET(req: NextRequest, ctx: RouteCtx) {
-  try {
+  return handleRoute(req, async () => {
     const { tenantId } = await requireTenantContext(req);
     const { id } = await ctx.params;
 
@@ -74,14 +76,11 @@ export async function GET(req: NextRequest, ctx: RouteCtx) {
     // Keep response backward-compatible-ish:
     // root device fields + assignedForms
     return jsonOk(req, { ...res.device, assignedForms: res.assignedForms });
-  } catch (e) {
-    if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
-    return jsonError(req, 500, "INTERNAL", "Unexpected error.");
-  }
+  });
 }
 
 export async function PATCH(req: NextRequest, ctx: RouteCtx) {
-  try {
+  return handleRoute(req, async () => {
     const { tenantId } = await requireTenantContext(req);
     const { id } = await ctx.params;
 
@@ -94,18 +93,13 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx) {
     });
     if (!exists) throw httpError(404, "NOT_FOUND", "Not found.");
 
-    // TP 3.6 — Guardrail: Device.activeEventId may only point to ACTIVE events
+    // Guardrail: Device.activeEventId may only point to ACTIVE events
     // - foreign/unknown eventId (wrong tenant) => 404 NOT_FOUND (leak-safe)
     // - known but not ACTIVE => 409 EVENT_NOT_ACTIVE
     if (body.activeEventId !== undefined) {
       const evId = body.activeEventId;
       if (typeof evId === "string") {
-        const ev = await prisma.event.findFirst({
-          where: { id: evId, tenantId },
-          select: { id: true, status: true },
-        });
-        if (!ev) throw httpError(404, "NOT_FOUND", "Not found.");
-        if (ev.status !== "ACTIVE") throw httpError(409, "EVENT_NOT_ACTIVE", "Event is not ACTIVE.");
+        await assertEventIsBindable({ tenantId, eventId: evId });
       }
     }
 
@@ -122,8 +116,5 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx) {
     if (!res) throw httpError(404, "NOT_FOUND", "Not found.");
 
     return jsonOk(req, { ...res.device, assignedForms: res.assignedForms });
-  } catch (e) {
-    if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
-    return jsonError(req, 500, "INTERNAL", "Unexpected error.");
-  }
+  });
 }

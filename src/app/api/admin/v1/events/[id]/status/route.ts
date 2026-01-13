@@ -1,100 +1,48 @@
-import { z } from "zod";
-
 import { jsonError, jsonOk } from "@/lib/api";
 import { httpError, isHttpError, validateBody } from "@/lib/http";
-import { prisma } from "@/lib/prisma";
-import { requireAdminAuth } from "@/lib/auth";
 import { requireTenantContext } from "@/lib/tenantContext";
+import { setEventStatusWithGuards } from "@/lib/eventsGuardrails";
+import { NextRequest } from "next/server";
+import { z } from "zod";
 
 export const runtime = "nodejs";
 
 type RouteCtx = { params: Promise<{ id: string }> };
 
-const BodySchema = z.object({
+const PatchBody = z.object({
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]),
 });
 
-export async function PATCH(req: Request, ctx: RouteCtx) {
+export async function PATCH(req: NextRequest, ctx: RouteCtx) {
   try {
-    const admin = await requireAdminAuth(req);
-    await requireTenantContext(req); // leak-safe header/session mismatch check
+    const { tenantId } = await requireTenantContext(req);
     const { id } = await ctx.params;
 
-    const body = await validateBody(req, BodySchema);
-    const tenantId = admin.tenantId;
+    const body = await validateBody(req, PatchBody);
 
-    const result = await prisma.$transaction(async (tx) => {
-      // Leak-safe existence check (tenant-scoped)
-      const current = await tx.event.findFirst({
-        where: { id, tenantId },
-        select: { id: true, status: true },
-      });
-      if (!current) throw httpError(404, "NOT_FOUND", "Not found.");
-
-      let autoArchivedEventId: string | null = null;
-      let devicesUnboundCount = 0;
-
-      if (body.status === "ACTIVE") {
-        // Guardrail 1 (MVP): at most 1 ACTIVE per tenant
-        // -> auto-archive any other ACTIVE event (tenant-scoped)
-        const otherActive = await tx.event.findFirst({
-          where: { tenantId, status: "ACTIVE", NOT: { id } },
-          select: { id: true },
-          orderBy: { updatedAt: "desc" },
-        });
-
-        if (otherActive) {
-          autoArchivedEventId = otherActive.id;
-
-          await tx.event.update({
-            where: { id: otherActive.id },
-            data: { status: "ARCHIVED" },
-          });
-
-          const unbind = await tx.mobileDevice.updateMany({
-            where: { tenantId, activeEventId: otherActive.id },
-            data: { activeEventId: null },
-          });
-          devicesUnboundCount += unbind.count;
-        }
-
-        // activate target event
-        await tx.event.update({
-          where: { id },
-          data: { status: "ACTIVE" },
-        });
-      } else {
-        // If event becomes non-ACTIVE (DRAFT/ARCHIVED), unbind devices from it
-        await tx.event.update({
-          where: { id },
-          data: { status: body.status },
-        });
-
-        const unbind = await tx.mobileDevice.updateMany({
-          where: { tenantId, activeEventId: id },
-          data: { activeEventId: null },
-        });
-        devicesUnboundCount += unbind.count;
-      }
-
-      const item = await tx.event.findFirst({
-        where: { id, tenantId },
-        select: {
-          id: true,
-          name: true,
-          status: true,
-          updatedAt: true,
-        },
-      });
-      if (!item) throw httpError(404, "NOT_FOUND", "Not found.");
-
-      return { item, autoArchivedEventId, devicesUnboundCount };
+    const res = await setEventStatusWithGuards({
+      tenantId,
+      eventId: id,
+      newStatus: body.status,
     });
 
-    return jsonOk(req, result);
+    // API contract (TP 3.7)
+    // - item
+    // - autoArchivedEventId? (when activating)
+    // - devicesUnboundCount? (when unbinding happened)
+    return jsonOk(req, {
+      item: res.item,
+      autoArchivedEventId: res.autoArchivedEventId,
+      devicesUnboundCount: res.devicesUnboundCount,
+    });
   } catch (e) {
+    // leak-safe
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
-    console.error(e);
-    return jsonError(req, 500, "INTERNAL_SERVER_ERROR", "Unexpected server error.");
+    return jsonError(req, 500, "INTERNAL", "Unexpected error.");
   }
+}
+
+// Optional: if someone calls GET by mistake
+export async function GET(req: NextRequest) {
+  return jsonError(req, 405, "METHOD_NOT_ALLOWED", "Method not allowed.");
 }

@@ -1,6 +1,6 @@
 # LeadRadar2026A – API (Admin/Mobile/Platform)
 
-Stand: 2026-01-11  
+Stand: 2026-01-13  
 Prinzipien: tenant-scoped, leak-safe (falscher Tenant/ID => 404), Standard Responses + traceId, Zod-only Validation.
 
 ---
@@ -39,10 +39,6 @@ Code kopieren
   "error": { "code": "SOME_CODE", "message": "Human readable", "details": {} },
   "traceId": "..."
 }
-Common Header:
-
-content-type: application/json; charset=utf-8
-
 Error Codes (Guideline)
 INVALID_BODY / INVALID_QUERY (400) — Zod Validation
 
@@ -56,7 +52,7 @@ NOT_FOUND (404) — leak-safe bei falschem Tenant/ID oder unassigned Form
 
 INVALID_STATE (409) — Zustand erlaubt Aktion nicht
 
-EVENT_NOT_ACTIVE (409) — Device Binding darf nur auf ACTIVE Event zeigen (TP 3.6)
+EVENT_NOT_ACTIVE (409) — Device Binding darf nur auf ACTIVE Event zeigen (TP 3.7)
 
 UNSUPPORTED_MEDIA_TYPE (415) — z.B. Attachment Upload mime nicht erlaubt
 
@@ -71,7 +67,6 @@ Hinweis: Codes sind endpoint-spezifisch, aber Stabilität + keine Leaks sind Pfl
 Auth
 Admin Auth (Session)
 Admin Endpoints sind session-protected (Login/Logout via /api/auth/*).
-
 Tenant Context ist serverseitig enforced (tenant-scoped Zugriff). Bei falschem Tenant/ID => 404 (leak-safe).
 
 Mobile Auth (ApiKey) — TP 2.5
@@ -116,20 +111,8 @@ Auth: x-api-key erforderlich
 Semantik: liefert nur assigned + ACTIVE Forms für das Device
 Errors: 401, 429
 
-Response (200) — data ist eine Liste:
-
-json
-Code kopieren
-{
-  "ok": true,
-  "data": [
-    { "id": "form_demo_1", "name": "Demo Lead Capture", "description": "…", "status": "ACTIVE" }
-  ],
-  "traceId": "..."
-}
 GET /api/mobile/v1/forms/:id
 Auth: x-api-key erforderlich
-
 Semantik:
 
 404 wenn Form nicht existiert oder nicht assigned (leak-safe)
@@ -138,26 +121,8 @@ Fields sortiert (nach sortOrder)
 
 Errors: 401, 404, 429
 
-Response (200):
-
-json
-Code kopieren
-{
-  "ok": true,
-  "data": {
-    "id": "form_demo_1",
-    "name": "Demo Lead Capture",
-    "description": "…",
-    "status": "ACTIVE",
-    "fields": [
-      { "id": "…", "key": "firstName", "label": "First name", "type": "TEXT", "required": true, "sortOrder": 10 }
-    ]
-  },
-  "traceId": "..."
-}
 POST /api/mobile/v1/leads
 Auth: x-api-key erforderlich
-
 Semantik:
 
 404 wenn formId nicht existiert oder nicht assigned (leak-safe)
@@ -166,84 +131,28 @@ Idempotent via (tenantId, clientLeadId) → deduped: true bei Retry
 
 Errors: 400 INVALID_BODY, 401, 404, 429
 
-Request Body:
-
-json
-Code kopieren
-{
-  "formId": "form_demo_1",
-  "clientLeadId": "unique-per-device-or-app",
-  "capturedAt": "2026-01-09T10:00:00.000Z",
-  "values": { "firstName": "Test", "lastName": "User", "email": "t@example.com" },
-  "meta": { "source": "mobile" }
-}
-Response (200):
-
-json
-Code kopieren
-{ "ok": true, "data": { "leadId": "…", "deduped": false }, "traceId": "..." }
 Mobile API v1 — Lead Attachments (TP 3.5)
 POST /api/mobile/v1/leads/:id/attachments
 Auth: x-api-key erforderlich
-
 Leak-safe:
 
 404 wenn Lead nicht im Tenant existiert
 
-(keine Infos über existence anderer Tenants)
-
 Content-Type: multipart/form-data
-
 Form Fields:
 
-file (required) — Bilddatei
+file (required)
 
-type (optional) — BUSINESS_CARD_IMAGE | IMAGE | PDF | OTHER
-
-default: BUSINESS_CARD_IMAGE
+type (optional) — BUSINESS_CARD_IMAGE | IMAGE | PDF | OTHER (default BUSINESS_CARD_IMAGE)
 
 Limits:
 
 max size: 6MB
 
-mime allowlist (MVP):
+mime allowlist (MVP): image/jpeg, image/png, image/webp
 
-image/jpeg
+Errors: 401, 404, 413, 415, 429
 
-image/png
-
-image/webp
-
-Errors:
-
-401 UNAUTHORIZED
-
-404 NOT_FOUND
-
-413 BODY_TOO_LARGE
-
-415 UNSUPPORTED_MEDIA_TYPE
-
-429 RATE_LIMITED
-
-Response (200):
-
-json
-Code kopieren
-{
-  "ok": true,
-  "data": {
-    "attachment": {
-      "id": "att_...",
-      "type": "BUSINESS_CARD_IMAGE",
-      "filename": "card.jpg",
-      "mimeType": "image/jpeg",
-      "sizeBytes": 123456,
-      "createdAt": "2026-01-11T10:00:00.000Z"
-    }
-  },
-  "traceId": "..."
-}
 Storage (DEV stub):
 
 .tmp_attachments/<tenantId>/<leadId>/<attachmentId>.<ext>
@@ -255,7 +164,7 @@ Zod: token (trim), deviceName? (trim)
 
 Semantik:
 
-Single-use garantiert (race-safe): genau 1 erfolgreicher Claim pro Token.
+Single-use garantiert (race-safe): genau 1 erfolgreicher Claim pro Token
 
 invalid / expired / used / revoked => 401 INVALID_PROVISION_TOKEN (strict, leak-safe)
 
@@ -263,57 +172,21 @@ rate limited => 429 RATE_LIMITED
 
 success => erstellt MobileApiKey + MobileDevice + optional Assignments, markiert Token atomar als USED.
 
-Request:
-
-json
-Code kopieren
-{ "token": "prov_....", "deviceName": "iPad Eingang (optional)" }
-Response (200):
-
-json
-Code kopieren
-{
-  "ok": true,
-  "data": {
-    "device": { "id": "...", "name": "...", "status": "ACTIVE" },
-    "apiKey": { "id": "...", "prefix": "...", "status": "ACTIVE" },
-    "token": "lrk_....",
-    "assignedFormIds": ["..."]
-  },
-  "traceId": "..."
-}
 Admin API v1 (tenant-scoped)
 Forms
 GET /api/admin/v1/forms
+Query: status=DRAFT|ACTIVE|ARCHIVED (optional), q (optional)
 
-Query:
-
-status: DRAFT|ACTIVE|ARCHIVED (optional)
-
-q: search in name (optional)
-
-Response (200) – backward compatible:
-
-json
-Code kopieren
-{
-  "ok": true,
-  "data": {
-    "forms": [ { "id":"...", "name":"...", "status":"ACTIVE", "fieldsCount": 4 } ],
-    "items": [ { "id":"...", "name":"...", "status":"ACTIVE", "fieldsCount": 4 } ]
-  },
-  "traceId": "..."
-}
-Admin API v1 — Events (TP 3.3 + TP 3.6 Guardrails)
+Admin API v1 — Events (TP 3.3 + TP 3.7 Guardrails)
 PATCH /api/admin/v1/events/:id/status
 Body:
 
 json
 Code kopieren
 { "status": "DRAFT" | "ACTIVE" | "ARCHIVED" }
-Guardrails (TP 3.6):
+Guardrails (TP 3.7):
 
-Max. 1 ACTIVE Event pro Tenant (MVP): Wenn ein Event auf ACTIVE gesetzt wird, wird ein anderes ACTIVE Event im selben Tenant automatisch auf ARCHIVED gesetzt.
+Max. 1 ACTIVE Event pro Tenant (MVP): Wenn ein Event auf ACTIVE gesetzt wird, werden alle anderen ACTIVE Events im selben Tenant automatisch auf ARCHIVED gesetzt.
 
 Auto-unbind: Wenn ein Event von ACTIVE weg wechselt (DRAFT/ARCHIVED) oder automatisch archiviert wird, werden alle Devices mit activeEventId=<eventId> automatisch auf null gesetzt.
 
@@ -333,224 +206,63 @@ Code kopieren
   "ok": true,
   "data": {
     "item": { "id":"...", "name":"...", "status":"ACTIVE", "updatedAt":"..." },
-    "autoArchivedEventId": "..." ,
+    "autoArchivedEventId": "evt_..." ,
     "devicesUnboundCount": 2
   },
   "traceId": "..."
 }
 autoArchivedEventId ist null, wenn kein anderes ACTIVE Event existierte.
+devicesUnboundCount ist immer eine Zahl (0..n).
 
-Admin API v1 — Lead Attachments (TP 3.5)
-GET /api/admin/v1/leads/:id/attachments/:attachmentId/download
+POST /api/admin/v1/events/:id/unbind-devices (Ops Action, optional)
+Semantik:
 
-Auth:
+Setzt mobileDevice.activeEventId für dieses Event auf null.
 
-Browser UI: Session Cookie (Admin)
-
-Curl/Tools: optional x-tenant-slug (DEV-friendly)
-
-Leak-safe:
-
-404 wenn Lead nicht im Tenant existiert
-
-404 wenn Attachment nicht dem Lead gehört / falscher Tenant
-
-keine Informationen über andere Tenants/IDs
-
-Response (200):
-
-Content-Type: <mimeType>
-
-Content-Disposition: attachment; filename="..."
-
-Cache-Control: private, no-store
-
-Optional:
-
-?inline=1 (nur für image/*) → Content-Disposition: inline für Thumbnail/Preview in Admin UI.
+Liefert devicesUnboundCount.
 
 Errors:
 
-401 UNAUTHORIZED (wenn weder tenant context noch session)
+401 UNAUTHORIZED
 
 404 NOT_FOUND (leak-safe)
 
-500 INTERNAL
-
-Mobile Ops (Admin) — TP 2.9 (Ops-ready)
-ApiKeys
-GET /api/admin/v1/mobile/keys (200)
+Response (200):
 
 json
 Code kopieren
 {
   "ok": true,
-  "data": [
-    { "id":"...", "name":"...", "prefix":"...", "status":"ACTIVE", "createdAt":"...", "lastUsedAt":"..." }
-  ],
+  "data": { "eventId": "evt_...", "devicesUnboundCount": 3 },
   "traceId": "..."
 }
-POST /api/admin/v1/mobile/keys (one-time token)
-
-json
-Code kopieren
-{
-  "ok": true,
-  "data": { "id": "...", "prefix": "lrk_8d48c9b3", "apiKey": "lrk_....", "createdAt": "..." },
-  "traceId": "..."
-}
-POST /api/admin/v1/mobile/keys/:id/revoke (200)
-
-json
-Code kopieren
-{ "ok": true, "data": { "id":"...", "status":"REVOKED", "revokedAt":"..." }, "traceId": "..." }
+Admin API v1 — Mobile Ops (TP 2.9 + TP 3.7)
 Devices
-GET /api/admin/v1/mobile/devices (200)
-
-json
-Code kopieren
-{
-  "ok": true,
-  "data": [
-    {
-      "id":"...",
-      "name":"...",
-      "status":"ACTIVE",
-      "lastSeenAt":"...",
-      "apiKeyPrefix":"lrk_8d48c9b3",
-      "assignedForms":[ { "id":"...", "name":"...", "status":"ACTIVE" } ]
-    }
-  ],
-  "traceId":"..."
-}
-PATCH /api/admin/v1/mobile/devices/:id (Body)
+PATCH /api/admin/v1/mobile/devices/:id
+Body:
 
 json
 Code kopieren
 { "name": "iPad Eingang", "status": "ACTIVE", "activeEventId": "evt_..." }
-TP 3.6 Guardrail:
+Guardrail:
 
 activeEventId darf nur auf ein ACTIVE Event im Tenant zeigen.
 
-Falscher Tenant/ID ⇒ 404 NOT_FOUND (leak-safe)
+falscher Tenant/ID ⇒ 404 NOT_FOUND (leak-safe)
 
 Event existiert aber nicht ACTIVE ⇒ 409 EVENT_NOT_ACTIVE
 
-Assignments (Replace strategy)
-PUT /api/admin/v1/mobile/devices/:id/assignments (Body { "formIds": ["..."] })
+Admin API v1 — Lead Attachments (TP 3.5)
+GET /api/admin/v1/leads/:id/attachments/:attachmentId/download
 
-Legacy compatibility:
+leak-safe 404 bei falschem Tenant/Lead/Attachment
 
-PUT /api/admin/v1/mobile/devices/:id/forms
-
-Admin Provisioning (TP 3.0 / TP 3.1)
-POST /api/admin/v1/mobile/provision-tokens (Body)
-
-json
-Code kopieren
-{
-  "deviceName": "Messe iPad (optional)",
-  "formIds": ["..."],
-  "expiresInMinutes": 30
-}
-Response (200):
-
-json
-Code kopieren
-{
-  "ok": true,
-  "data": {
-    "provision": { "id":"...", "prefix":"...", "status":"ACTIVE", "expiresAt":"...", "createdAt":"..." },
-    "token": "prov_...."
-  },
-  "traceId":"..."
-}
-GET /api/admin/v1/mobile/provision-tokens
-Status kann API-seitig computed EXPIRED sein (wenn expiresAt <= now und DB-status noch ACTIVE).
-
-Response (200):
-
-json
-Code kopieren
-{
-  "ok": true,
-  "data": {
-    "items": [
-      { "id":"...", "prefix":"...", "status":"ACTIVE", "expiresAt":"...", "createdAt":"...", "usedAt":null, "usedByDeviceId": null }
-    ],
-    "nextCursor": null
-  },
-  "traceId":"..."
-}
-POST /api/admin/v1/mobile/provision-tokens/:id/revoke
-Erlaubt nur wenn status == ACTIVE und nicht expired, sonst: 409 INVALID_STATE
-
-Response (200):
-
-json
-Code kopieren
-{
-  "ok": true,
-  "data": { "provision": { "id":"...", "status":"REVOKED" } },
-  "traceId":"..."
-}
-Platform (minimal)
-GET /api/platform/v1/health
-Public Health endpoint. Standard Responses + traceId.
+optional ?inline=1 für image preview
 
 Exports (CSV) — TP 1.8 + TP 3.4 (event-aware)
 POST /api/admin/v1/exports/csv
-Erstellt einen CSV Export Job (Scope: Leads) und verarbeitet ihn best-effort inline (MVP).
 
-Leak-safe:
+optional eventId, formId, date range
 
-Wenn eventId oder formId angegeben und nicht im Tenant existiert → 404 NOT_FOUND.
+falscher Tenant/ID => 404 NOT_FOUND (leak-safe)
 
-Request Body:
-
-json
-Code kopieren
-{
-  "eventId": "evt_... (optional)",
-  "formId": "frm_... (optional)",
-  "from": "2026-01-09 (optional, YYYY-MM-DD or ISO)",
-  "to": "2026-01-10 (optional, YYYY-MM-DD or ISO)",
-  "includeDeleted": false,
-  "limit": 10000
-}
-Response (200):
-
-json
-Code kopieren
-{
-  "ok": true,
-  "data": { "job": { "id":"...", "status":"DONE", "params": { "...": "..." } } },
-  "traceId": "..."
-}
-Errors:
-
-404 NOT_FOUND (eventId/formId wrong tenant or not existing)
-
-500 EXPORT_FAILED
-
-CSV Columns (stable, deterministic)
-
-Delimiter: ; (Excel-friendly, CH)
-
-Header order:
-
-leadId
-
-eventId (leer wenn null)
-
-formId
-
-capturedAt (ISO)
-
-isDeleted
-
-deletedAt (ISO oder leer)
-
-deletedReason (oder leer)
-
-values_json (stringified JSON, quoted/escaped)
