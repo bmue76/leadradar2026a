@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { jsonError, jsonOk } from "@/lib/api";
-import { isHttpError, validateBody, validateQuery, httpError } from "@/lib/http";
+import { validateBody, validateQuery, httpError, isHttpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { requireAdminAuth } from "@/lib/auth";
 
@@ -16,16 +16,26 @@ const LimitSchema = z
   .string()
   .optional()
   .transform((v) => (v === undefined ? 200 : Number.parseInt(v, 10)))
-  .refine((n) => Number.isInteger(n) && n >= 1 && n <= 500, "limit must be an integer between 1 and 500.");
+  .refine(
+    (n) => Number.isInteger(n) && n >= 1 && n <= 500,
+    "limit must be an integer between 1 and 500."
+  );
+
+const BoolQuerySchema = z
+  .string()
+  .optional()
+  .transform((v) => v === "1" || v === "true");
 
 const ListQuerySchema = z
   .object({
     status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional(),
     limit: LimitSchema,
+    includeCounts: BoolQuerySchema,
   })
   .transform((q) => ({
     status: q.status,
     limit: q.limit,
+    includeCounts: q.includeCounts ?? false,
   }));
 
 const CreateBodySchema = z
@@ -41,7 +51,10 @@ const CreateBodySchema = z
       const s = new Date(b.startsAt);
       const e = new Date(b.endsAt);
       if (s.getTime() > e.getTime()) {
-        ctx.addIssue({ code: "custom", message: "`startsAt` must be <= `endsAt`." });
+        ctx.addIssue({
+          code: "custom",
+          message: "`startsAt` must be <= `endsAt`.",
+        });
       }
     }
   });
@@ -70,7 +83,35 @@ export async function GET(req: Request) {
       },
     });
 
-    return jsonOk(req, { items });
+    if (!query.includeCounts) {
+      return jsonOk(req, { items });
+    }
+
+    const ids = items.map((i) => i.id);
+    const countsByEventId: Record<string, number> = {};
+
+    if (ids.length > 0) {
+      const rows = await prisma.mobileDevice.groupBy({
+        by: ["activeEventId"],
+        where: {
+          tenantId: auth.tenantId,
+          activeEventId: { in: ids },
+        },
+        _count: { _all: true },
+      });
+
+      for (const r of rows) {
+        if (!r.activeEventId) continue;
+        countsByEventId[r.activeEventId] = r._count._all;
+      }
+    }
+
+    const itemsWithCounts = items.map((ev) => ({
+      ...ev,
+      boundDevicesCount: countsByEventId[ev.id] ?? 0,
+    }));
+
+    return jsonOk(req, { items: itemsWithCounts });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     console.error(e);
@@ -86,8 +127,12 @@ export async function POST(req: Request) {
     const startsAt = body.startsAt ? new Date(body.startsAt) : undefined;
     const endsAt = body.endsAt ? new Date(body.endsAt) : undefined;
 
-    if (startsAt && Number.isNaN(startsAt.getTime())) throw httpError(400, "INVALID_BODY", "Invalid request body.");
-    if (endsAt && Number.isNaN(endsAt.getTime())) throw httpError(400, "INVALID_BODY", "Invalid request body.");
+    if (startsAt && Number.isNaN(startsAt.getTime())) {
+      throw httpError(400, "INVALID_BODY", "Invalid request body.");
+    }
+    if (endsAt && Number.isNaN(endsAt.getTime())) {
+      throw httpError(400, "INVALID_BODY", "Invalid request body.");
+    }
 
     const ev = await prisma.event.create({
       data: {

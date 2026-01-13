@@ -61,7 +61,7 @@ Sektionen:
 1) Header: capturedAt, Form, Status, LeadId
 2) Actions: Delete / Restore (Restore optional)
 3) Values: Key/Value Grid
-4) **Attachments (TP 3.5)**
+4) Attachments (TP 3.5)
 
 #### Attachments Section (TP 3.5)
 
@@ -114,20 +114,26 @@ UX Notes:
 
 ---
 
-## Screen: Events (`/admin/events`) — TP 3.3 + TP 3.7
+## Screen: Events (`/admin/events`) — TP 3.3 + TP 3.7 + TP 3.8
 
 Ziel:
 - Events auflisten, Status setzen (ACTIVE/ARCHIVED)
-- Guardrail sichtbar machen: **nur 1 ACTIVE Event pro Tenant (MVP)**
+- Guardrail sichtbar machen: nur 1 ACTIVE Event pro Tenant (MVP)
+- Ops-Transparenz: zeigt Anzahl gebundener Devices pro Event
 
 TP 3.7 Guardrails (UX):
 - Hinweistext: “Nur ein aktives Event pro Tenant. Aktivieren archiviert das bisher aktive Event (und unbindet Devices).”
 - Actions (minimal): pro Event “Activate” oder “Archive”
-- Optional Ops Action: “Devices lösen” (setzt device.activeEventId=null)
+- Optional Ops Action: “Devices lösen” (setzt `device.activeEventId=null`)
 - Nach Statuswechsel kurze Notice (best-effort)
 
+TP 3.8 Ops Polish:
+- Tabelle zeigt eine zusätzliche Spalte “Devices”:
+  - `boundDevicesCount` (Count von `MobileDevice.activeEventId == eventId`)
+  - Nur Count (kein heavy Join)
+
 API Wiring:
-- List: `GET /api/admin/v1/events?limit=200&status=...`
+- List: `GET /api/admin/v1/events?limit=200&status=...&includeCounts=true`
 - Status Change: `PATCH /api/admin/v1/events/:id/status` (TP 3.7: Auto-archive + Auto-unbind)
 - Optional Ops: `POST /api/admin/v1/events/:id/unbind-devices`
 
@@ -144,7 +150,6 @@ Ziel:
   - Demo Capture Key UX (DEV)
 
 TP 3.7 Guardrails (UX):
-- **Active Event Dropdown zeigt nur ACTIVE Events (+ “Kein Event”).**
+- Active Event Dropdown zeigt nur ACTIVE Events (+ “Kein Event”).
 - Wenn kein ACTIVE Event existiert: Hinweis “Kein aktives Event – Leads werden ohne Event gespeichert.”
 - Wenn versucht wird, ein nicht-ACTIVE Event zu binden: API liefert 409 `EVENT_NOT_ACTIVE`.
-

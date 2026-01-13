@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { httpError } from "@/lib/http";
-import type { Event, EventStatus } from "@prisma/client";
+import { Prisma, type Event, type EventStatus } from "@prisma/client";
 
 export type SetEventStatusWithGuardsResult = {
   event: Event;
@@ -8,6 +8,16 @@ export type SetEventStatusWithGuardsResult = {
   devicesUnboundCount: number;
 };
 
+/**
+ * TP 3.7/3.8 — Event Guardrails (ONLINE-only, MVP)
+ * Single Source of Truth:
+ * - setEventStatusWithGuards: ACTIVE invariant + auto-unbind
+ * - assertEventIsBindable: only ACTIVE bindable
+ *
+ * Notes:
+ * - tenant-scoped + leak-safe (id+tenantId lookup => else 404)
+ * - best-effort Serializable TX + retry on P2034 (write-conflict)
+ */
 export async function setEventStatusWithGuards(args: {
   tenantId: string;
   eventId: string;
@@ -15,68 +25,87 @@ export async function setEventStatusWithGuards(args: {
 }): Promise<SetEventStatusWithGuardsResult> {
   const { tenantId, eventId, newStatus } = args;
 
-  return prisma.$transaction(async (tx) => {
-    const existing = await tx.event.findFirst({
-      where: { id: eventId, tenantId },
-    });
-    if (!existing) throw httpError(404, "NOT_FOUND", "Not found.");
-
-    let autoArchivedEventId: string | null = null;
-    let devicesUnboundCount = 0;
-
-    // Helper: unbind devices for one event
-    const unbindForEvent = async (evId: string) => {
-      const res = await tx.mobileDevice.updateMany({
-        where: { tenantId, activeEventId: evId },
-        data: { activeEventId: null },
-      });
-      devicesUnboundCount += res.count;
-      return res.count;
-    };
-
-    if (newStatus === "ACTIVE") {
-      // Find all other ACTIVE events (defensive: could be >1 if DB got inconsistent)
-      const others = await tx.event.findMany({
-        where: { tenantId, status: "ACTIVE", NOT: { id: eventId } },
-        select: { id: true },
-        take: 50,
-      });
-      const otherIds = others.map((o) => o.id);
-      autoArchivedEventId = otherIds.length ? otherIds[0] : null;
-
-      if (otherIds.length) {
-        // Archive all other ACTIVE events (defensive)
-        await tx.event.updateMany({
-          where: { tenantId, status: "ACTIVE", id: { in: otherIds } },
-          data: { status: "ARCHIVED" },
+  async function runOnce(): Promise<SetEventStatusWithGuardsResult> {
+    return prisma.$transaction(
+      async (tx) => {
+        const existing = await tx.event.findFirst({
+          where: { id: eventId, tenantId },
+          select: { id: true, status: true },
         });
 
-        // Unbind devices referencing any archived event
-        const res = await tx.mobileDevice.updateMany({
-          where: { tenantId, activeEventId: { in: otherIds } },
-          data: { activeEventId: null },
+        if (!existing) throw httpError(404, "NOT_FOUND", "Not found.");
+
+        let autoArchivedEventId: string | null = null;
+        let devicesUnboundCount = 0;
+
+        if (newStatus === "ACTIVE") {
+          // Defensive: if DB got inconsistent, clean up (>1 ACTIVE) by archiving all other ACTIVE events.
+          const others = await tx.event.findMany({
+            where: { tenantId, status: "ACTIVE", id: { not: eventId } },
+            select: { id: true },
+            take: 50,
+          });
+
+          const otherIds = others.map((o) => o.id);
+          autoArchivedEventId = otherIds.length ? otherIds[0] : null;
+
+          if (otherIds.length > 0) {
+            await tx.event.updateMany({
+              where: { tenantId, id: { in: otherIds } },
+              data: { status: "ARCHIVED" },
+            });
+
+            const unbindRes = await tx.mobileDevice.updateMany({
+              where: { tenantId, activeEventId: { in: otherIds } },
+              data: { activeEventId: null },
+            });
+
+            devicesUnboundCount += unbindRes.count;
+          }
+
+          await tx.event.updateMany({
+            where: { id: eventId, tenantId },
+            data: { status: "ACTIVE" },
+          });
+        } else {
+          // Any non-ACTIVE status => unbind devices pointing to this event (ops-safe, defensive)
+          const unbindRes = await tx.mobileDevice.updateMany({
+            where: { tenantId, activeEventId: eventId },
+            data: { activeEventId: null },
+          });
+          devicesUnboundCount += unbindRes.count;
+
+          await tx.event.updateMany({
+            where: { id: eventId, tenantId },
+            data: { status: newStatus },
+          });
+        }
+
+        const event = await tx.event.findFirst({
+          where: { id: eventId, tenantId },
         });
-        devicesUnboundCount += res.count;
-      }
 
-      const updated = await tx.event.update({
-        where: { id: eventId },
-        data: { status: "ACTIVE" },
-      });
+        if (!event) throw httpError(404, "NOT_FOUND", "Not found.");
 
-      return { event: updated, autoArchivedEventId, devicesUnboundCount };
+        return { event, autoArchivedEventId, devicesUnboundCount };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+    );
+  }
+
+  // best-effort retry on write conflict / deadlock
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await runOnce();
+    } catch (e) {
+      const retryable =
+        e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2034";
+      if (retryable && attempt === 0) continue;
+      throw e;
     }
+  }
 
-    // ARCHIVED or DRAFT -> set status + unbind devices bound to this event
-    const updated = await tx.event.update({
-      where: { id: eventId },
-      data: { status: newStatus },
-    });
-
-    await unbindForEvent(eventId);
-
-    return { event: updated, autoArchivedEventId: null, devicesUnboundCount };
-  });
+  throw httpError(500, "INTERNAL", "Unexpected error.");
 }
 
 /**
@@ -84,7 +113,10 @@ export async function setEventStatusWithGuards(args: {
  * - event must exist in tenant (else 404 leak-safe)
  * - event must be ACTIVE (else 409 EVENT_NOT_ACTIVE)
  */
-export async function assertEventIsBindable(args: { tenantId: string; eventId: string }): Promise<{ id: string; status: string }> {
+export async function assertEventIsBindable(args: {
+  tenantId: string;
+  eventId: string;
+}): Promise<{ id: string; status: EventStatus }> {
   const { tenantId, eventId } = args;
 
   const ev = await prisma.event.findFirst({
@@ -93,7 +125,12 @@ export async function assertEventIsBindable(args: { tenantId: string; eventId: s
   });
 
   if (!ev) throw httpError(404, "NOT_FOUND", "Not found.");
-  if (ev.status !== "ACTIVE") throw httpError(409, "EVENT_NOT_ACTIVE", "Event is not ACTIVE.", { eventId, status: ev.status });
+  if (ev.status !== "ACTIVE") {
+    throw httpError(409, "EVENT_NOT_ACTIVE", "Event is not ACTIVE.", {
+      eventId,
+      status: ev.status,
+    });
+  }
 
   return ev;
 }

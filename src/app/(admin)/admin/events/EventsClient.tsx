@@ -10,6 +10,7 @@ type EventListItem = {
   status: string;
   startsAt: string | null;
   endsAt: string | null;
+  boundDevicesCount?: number;
   createdAt?: string;
 };
 
@@ -43,10 +44,14 @@ function isoShort(d?: string | null): string {
 
 function chip(status: string): string {
   const s = (status || "").toUpperCase();
-  const base = "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border";
-  if (s === "ACTIVE") return `${base} bg-emerald-50 text-emerald-900 border-emerald-200`;
-  if (s === "DRAFT") return `${base} bg-neutral-50 text-neutral-800 border-neutral-200`;
-  if (s === "ARCHIVED") return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
+  const base =
+    "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border";
+  if (s === "ACTIVE")
+    return `${base} bg-emerald-50 text-emerald-900 border-emerald-200`;
+  if (s === "DRAFT")
+    return `${base} bg-neutral-50 text-neutral-800 border-neutral-200`;
+  if (s === "ARCHIVED")
+    return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
   return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
 }
 
@@ -85,6 +90,7 @@ export default function EventsClient() {
 
     const qs = new URLSearchParams();
     qs.set("limit", "200");
+    qs.set("includeCounts", "true");
     if (filterStatus !== "ALL") qs.set("status", filterStatus);
 
     const res = (await adminFetchJson<unknown>(`/api/admin/v1/events?${qs.toString()}`, {
@@ -107,12 +113,16 @@ export default function EventsClient() {
         const st = typeof x.status === "string" ? x.status : "—";
         if (!id || !name) return null;
 
-        const startsAt = typeof x.startsAt === "string" ? x.startsAt : x.startsAt === null ? null : null;
-        const endsAt = typeof x.endsAt === "string" ? x.endsAt : x.endsAt === null ? null : null;
+        const startsAt =
+          typeof x.startsAt === "string" ? x.startsAt : x.startsAt === null ? null : null;
+        const endsAt =
+          typeof x.endsAt === "string" ? x.endsAt : x.endsAt === null ? null : null;
 
         const createdAt = typeof x.createdAt === "string" ? x.createdAt : undefined;
+        const boundDevicesCount =
+          typeof x.boundDevicesCount === "number" ? x.boundDevicesCount : undefined;
 
-        return { id, name, status: st, startsAt, endsAt, createdAt };
+        return { id, name, status: st, startsAt, endsAt, boundDevicesCount, createdAt };
       })
       .filter(Boolean) as EventListItem[];
 
@@ -138,8 +148,10 @@ export default function EventsClient() {
 
     let msg = `Status gesetzt: ${status}`;
     if (isRecord(res.data)) {
-      const autoArchivedEventId = typeof res.data.autoArchivedEventId === "string" ? res.data.autoArchivedEventId : null;
-      const devicesUnboundCount = typeof res.data.devicesUnboundCount === "number" ? res.data.devicesUnboundCount : null;
+      const autoArchivedEventId =
+        typeof res.data.autoArchivedEventId === "string" ? res.data.autoArchivedEventId : null;
+      const devicesUnboundCount =
+        typeof res.data.devicesUnboundCount === "number" ? res.data.devicesUnboundCount : null;
 
       if (status === "ACTIVE" && autoArchivedEventId) {
         msg = `Event aktiviert · vorheriges ACTIVE archiviert · Devices unbound: ${devicesUnboundCount ?? 0}`;
@@ -191,7 +203,8 @@ export default function EventsClient() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Events</h1>
           <p className="mt-1 text-sm text-neutral-600">
-            Übersicht deiner Messen/Events. Guardrail (MVP): Nur 1 ACTIVE Event pro Tenant — Aktivieren archiviert das bisher aktive Event (und löst Devices).
+            Übersicht deiner Messen/Events. Guardrail (MVP): Nur 1 ACTIVE Event pro Tenant — Aktivieren archiviert das
+            bisher aktive Event (und löst Devices).
           </p>
         </div>
 
@@ -248,6 +261,7 @@ export default function EventsClient() {
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Starts</th>
               <th className="px-4 py-3">Ends</th>
+              <th className="px-4 py-3">Devices</th>
               <th className="px-4 py-3">Event ID</th>
               <th className="px-4 py-3 text-right">Actions</th>
             </tr>
@@ -256,13 +270,13 @@ export default function EventsClient() {
           <tbody>
             {loading ? (
               <tr>
-                <td className="px-4 py-4 text-neutral-600" colSpan={6}>
+                <td className="px-4 py-4 text-neutral-600" colSpan={7}>
                   Loading…
                 </td>
               </tr>
             ) : items.length === 0 ? (
               <tr>
-                <td className="px-4 py-4 text-neutral-600" colSpan={6}>
+                <td className="px-4 py-4 text-neutral-600" colSpan={7}>
                   No events found.
                 </td>
               </tr>
@@ -270,6 +284,9 @@ export default function EventsClient() {
               items.map((ev) => {
                 const st = (ev.status || "").toUpperCase();
                 const isBusy = busyEventId === ev.id;
+
+                const countLabel =
+                  typeof ev.boundDevicesCount === "number" ? String(ev.boundDevicesCount) : "—";
 
                 return (
                   <tr key={ev.id} className="border-t border-neutral-100">
@@ -279,6 +296,7 @@ export default function EventsClient() {
                     </td>
                     <td className="px-4 py-3">{isoShort(ev.startsAt)}</td>
                     <td className="px-4 py-3">{isoShort(ev.endsAt)}</td>
+                    <td className="px-4 py-3 text-neutral-800">{countLabel}</td>
                     <td className="px-4 py-3 font-mono text-xs">{ev.id}</td>
                     <td className="px-4 py-3 text-right">
                       <div className="inline-flex flex-wrap items-center justify-end gap-2">

@@ -177,7 +177,69 @@ Forms
 GET /api/admin/v1/forms
 Query: status=DRAFT|ACTIVE|ARCHIVED (optional), q (optional)
 
-Admin API v1 — Events (TP 3.3 + TP 3.7 Guardrails)
+Admin API v1 — Events (TP 3.3 + TP 3.7/3.8 Guardrails)
+GET /api/admin/v1/events
+Query:
+
+status (optional): DRAFT|ACTIVE|ARCHIVED
+
+limit (optional, default 200, max 500)
+
+includeCounts (optional): true|1 → erweitert Items um boundDevicesCount
+
+Response (200) ohne Counts:
+
+json
+Code kopieren
+{
+  "ok": true,
+  "data": {
+    "items": [
+      { "id":"...", "name":"Swissbau 2026", "status":"ACTIVE", "startsAt":"...", "endsAt":"...", "createdAt":"...", "updatedAt":"..." }
+    ]
+  },
+  "traceId": "..."
+}
+Response (200) mit Counts (includeCounts=true):
+
+json
+Code kopieren
+{
+  "ok": true,
+  "data": {
+    "items": [
+      {
+        "id":"...",
+        "name":"Swissbau 2026",
+        "status":"ACTIVE",
+        "startsAt":"...",
+        "endsAt":"...",
+        "createdAt":"...",
+        "updatedAt":"...",
+        "boundDevicesCount": 3
+      }
+    ]
+  },
+  "traceId": "..."
+}
+boundDevicesCount = Anzahl MobileDevice mit activeEventId=<eventId> im selben Tenant (nur Count, keine heavy Joins).
+
+GET /api/admin/v1/events/active
+Semantik:
+
+Defensive: sollte max 1 sein, nimmt bei Inkonsistenz das zuletzt aktualisierte ACTIVE Event.
+
+Liefert item oder null.
+
+Response (200):
+
+json
+Code kopieren
+{
+  "ok": true,
+  "data": { "item": { "id":"...", "tenantId":"...", "name":"...", "status":"ACTIVE", "updatedAt":"..." } },
+  "traceId": "..."
+}
 PATCH /api/admin/v1/events/:id/status
 Body:
 
@@ -198,6 +260,8 @@ Errors:
 
 404 NOT_FOUND (leak-safe: falscher Tenant/ID)
 
+409 INVALID_STATE / EVENT_NOT_ACTIVE (kontextabhängig)
+
 Response (200):
 
 json
@@ -206,7 +270,7 @@ Code kopieren
   "ok": true,
   "data": {
     "item": { "id":"...", "name":"...", "status":"ACTIVE", "updatedAt":"..." },
-    "autoArchivedEventId": "evt_..." ,
+    "autoArchivedEventId": "evt_...",
     "devicesUnboundCount": 2
   },
   "traceId": "..."
@@ -254,15 +318,11 @@ Event existiert aber nicht ACTIVE ⇒ 409 EVENT_NOT_ACTIVE
 
 Admin API v1 — Lead Attachments (TP 3.5)
 GET /api/admin/v1/leads/:id/attachments/:attachmentId/download
-
-leak-safe 404 bei falschem Tenant/Lead/Attachment
-
+Leak-safe 404 bei falschem Tenant/Lead/Attachment
 optional ?inline=1 für image preview
 
 Exports (CSV) — TP 1.8 + TP 3.4 (event-aware)
 POST /api/admin/v1/exports/csv
-
 optional eventId, formId, date range
 
 falscher Tenant/ID => 404 NOT_FOUND (leak-safe)
-
