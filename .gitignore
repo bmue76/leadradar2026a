@@ -60,3 +60,7 @@ atlex-export-*.csv
 
 # Prisma migration backups (never commit)
 prisma/migrations/**/migration.sql.bak
+
+# --- LeadRadar DEV tooling (tracked) ---
+!scripts/
+!scripts/auth-smoke.mjs
