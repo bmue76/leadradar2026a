@@ -36,7 +36,7 @@ cookies.txt
 leadradar2026a@0.1.0
 eslint/
 prisma/migrations__bak_*/
-scripts/
+scripts/*
 
 # Next / build
 .next/
@@ -62,5 +62,4 @@ atlex-export-*.csv
 prisma/migrations/**/migration.sql.bak
 
 # --- LeadRadar DEV tooling (tracked) ---
-!scripts/
 !scripts/auth-smoke.mjs
