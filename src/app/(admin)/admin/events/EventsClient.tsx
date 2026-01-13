@@ -13,6 +13,10 @@ type EventListItem = {
   createdAt?: string;
 };
 
+type ApiResult<T> =
+  | { ok: true; data: T; traceId?: string }
+  | { ok: false; code: string; message: string; traceId?: string };
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -55,12 +59,25 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
+function fmtApiErr(res: ApiResult<unknown>): string {
+  if (res.ok) return "";
+  return `${res.code}: ${res.message}${res.traceId ? ` · trace ${res.traceId}` : ""}`;
+}
+
 export default function EventsClient() {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [notice, setNotice] = React.useState<string | null>(null);
+
   const [items, setItems] = React.useState<EventListItem[]>([]);
-  const [status, setStatus] = React.useState<string>("ALL");
+  const [filterStatus, setFilterStatus] = React.useState<string>("ALL");
   const [copiedId, setCopiedId] = React.useState<string | null>(null);
+  const [busyEventId, setBusyEventId] = React.useState<string | null>(null);
+
+  function pushNotice(msg: string) {
+    setNotice(msg);
+    window.setTimeout(() => setNotice(null), 2500);
+  }
 
   async function load() {
     setLoading(true);
@@ -68,13 +85,15 @@ export default function EventsClient() {
 
     const qs = new URLSearchParams();
     qs.set("limit", "200");
-    if (status !== "ALL") qs.set("status", status);
+    if (filterStatus !== "ALL") qs.set("status", filterStatus);
 
-    const res = await adminFetchJson<unknown>(`/api/admin/v1/events?${qs.toString()}`, { method: "GET" });
+    const res = (await adminFetchJson<unknown>(`/api/admin/v1/events?${qs.toString()}`, {
+      method: "GET",
+    })) as ApiResult<unknown>;
 
     if (!res.ok) {
       setItems([]);
-      setError(`${res.code}: ${res.message}${res.traceId ? ` · trace ${res.traceId}` : ""}`);
+      setError(fmtApiErr(res));
       setLoading(false);
       return;
     }
@@ -88,13 +107,10 @@ export default function EventsClient() {
         const st = typeof x.status === "string" ? x.status : "—";
         if (!id || !name) return null;
 
-        const startsAt =
-          typeof x.startsAt === "string" ? x.startsAt : x.startsAt === null ? null : null;
-        const endsAt =
-          typeof x.endsAt === "string" ? x.endsAt : x.endsAt === null ? null : null;
+        const startsAt = typeof x.startsAt === "string" ? x.startsAt : x.startsAt === null ? null : null;
+        const endsAt = typeof x.endsAt === "string" ? x.endsAt : x.endsAt === null ? null : null;
 
-        const createdAt =
-          typeof x.createdAt === "string" ? x.createdAt : undefined;
+        const createdAt = typeof x.createdAt === "string" ? x.createdAt : undefined;
 
         return { id, name, status: st, startsAt, endsAt, createdAt };
       })
@@ -104,10 +120,45 @@ export default function EventsClient() {
     setLoading(false);
   }
 
+  async function setEventStatus(eventId: string, status: "ACTIVE" | "ARCHIVED" | "DRAFT") {
+    setError(null);
+    setBusyEventId(eventId);
+
+    const res = (await adminFetchJson<unknown>(`/api/admin/v1/events/${eventId}/status`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status }),
+    })) as ApiResult<unknown>;
+
+    if (!res.ok) {
+      setBusyEventId(null);
+      setError(fmtApiErr(res));
+      return;
+    }
+
+    // try to show meaningful notice (best-effort)
+    let msg = `Status gesetzt: ${status}`;
+    if (isRecord(res.data)) {
+      const autoArchivedEventId = typeof res.data.autoArchivedEventId === "string" ? res.data.autoArchivedEventId : null;
+      const devicesUnboundCount =
+        typeof res.data.devicesUnboundCount === "number" ? res.data.devicesUnboundCount : null;
+
+      if (status === "ACTIVE" && autoArchivedEventId) {
+        msg = `Event aktiviert · vorheriges ACTIVE archiviert · Devices unbound: ${devicesUnboundCount ?? 0}`;
+      } else if (status !== "ACTIVE") {
+        msg = `Event ${status} · Devices unbound: ${devicesUnboundCount ?? 0}`;
+      }
+    }
+
+    pushNotice(msg);
+    setBusyEventId(null);
+    await load();
+  }
+
   React.useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
+  }, [filterStatus]);
 
   return (
     <div className="mx-auto w-full max-w-6xl px-6 py-8">
@@ -115,15 +166,15 @@ export default function EventsClient() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Events</h1>
           <p className="mt-1 text-sm text-neutral-600">
-            Übersicht deiner Messen/Events. Wichtig für Mobile: Active Event Binding pro Device (Mobile Ops).
+            Übersicht deiner Messen/Events. Guardrail (MVP): Nur 1 ACTIVE Event pro Tenant — Aktivieren archiviert das bisher aktive Event (und unbindet Devices).
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <select
             className="rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
             disabled={loading}
           >
             <option value="ALL">All</option>
@@ -148,6 +199,12 @@ export default function EventsClient() {
           </Link>
         </div>
       </div>
+
+      {notice ? (
+        <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+          {notice}
+        </div>
+      ) : null}
 
       {error ? (
         <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
@@ -185,32 +242,61 @@ export default function EventsClient() {
                 </td>
               </tr>
             ) : (
-              items.map((ev) => (
-                <tr key={ev.id} className="border-t border-neutral-100">
-                  <td className="px-4 py-3">{ev.name}</td>
-                  <td className="px-4 py-3">
-                    <span className={chip(ev.status)}>{ev.status}</span>
-                  </td>
-                  <td className="px-4 py-3">{isoShort(ev.startsAt)}</td>
-                  <td className="px-4 py-3">{isoShort(ev.endsAt)}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{ev.id}</td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        const ok = await copyToClipboard(ev.id);
-                        if (ok) {
-                          setCopiedId(ev.id);
-                          setTimeout(() => setCopiedId(null), 1200);
-                        }
-                      }}
-                      className="rounded-xl border border-neutral-200 px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-50"
-                    >
-                      {copiedId === ev.id ? "Copied" : "Copy ID"}
-                    </button>
-                  </td>
-                </tr>
-              ))
+              items.map((ev) => {
+                const st = (ev.status || "").toUpperCase();
+                const isBusy = busyEventId === ev.id;
+
+                return (
+                  <tr key={ev.id} className="border-t border-neutral-100">
+                    <td className="px-4 py-3">{ev.name}</td>
+                    <td className="px-4 py-3">
+                      <span className={chip(ev.status)}>{ev.status}</span>
+                    </td>
+                    <td className="px-4 py-3">{isoShort(ev.startsAt)}</td>
+                    <td className="px-4 py-3">{isoShort(ev.endsAt)}</td>
+                    <td className="px-4 py-3 font-mono text-xs">{ev.id}</td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="inline-flex flex-wrap items-center justify-end gap-2">
+                        {st !== "ACTIVE" ? (
+                          <button
+                            type="button"
+                            onClick={() => void setEventStatus(ev.id, "ACTIVE")}
+                            disabled={isBusy}
+                            className="rounded-xl border border-neutral-200 px-3 py-1.5 text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-50"
+                            title="Setzt dieses Event aktiv. Ein anderes ACTIVE Event wird automatisch archiviert."
+                          >
+                            Activate
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => void setEventStatus(ev.id, "ARCHIVED")}
+                            disabled={isBusy}
+                            className="rounded-xl border border-neutral-200 px-3 py-1.5 text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-50"
+                            title="Archiviert dieses Event und unbindet Devices."
+                          >
+                            Archive
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const ok = await copyToClipboard(ev.id);
+                            if (ok) {
+                              setCopiedId(ev.id);
+                              setTimeout(() => setCopiedId(null), 1200);
+                            }
+                          }}
+                          className="rounded-xl border border-neutral-200 px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-50"
+                        >
+                          {copiedId === ev.id ? "Copied" : "Copy ID"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

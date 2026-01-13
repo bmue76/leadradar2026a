@@ -18,7 +18,7 @@ const PatchBody = z
     // null => clear binding
     activeEventId: z.string().min(1).nullable().optional(),
   })
-  .refine((v) => typeof v.name === "string" || typeof v.status === "string" || "activeEventId" in v, {
+  .refine((v) => typeof v.name === "string" || typeof v.status === "string" || v.activeEventId !== undefined, {
     message: "At least one field must be provided.",
   });
 
@@ -94,16 +94,18 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx) {
     });
     if (!exists) throw httpError(404, "NOT_FOUND", "Not found.");
 
-    // TP 3.3 — leak-safe validate event binding (if provided)
-    // We allow only ACTIVE events to be bound (ops safe)
-    if ("activeEventId" in body) {
+    // TP 3.6 — Guardrail: Device.activeEventId may only point to ACTIVE events
+    // - foreign/unknown eventId (wrong tenant) => 404 NOT_FOUND (leak-safe)
+    // - known but not ACTIVE => 409 EVENT_NOT_ACTIVE
+    if (body.activeEventId !== undefined) {
       const evId = body.activeEventId;
       if (typeof evId === "string") {
         const ev = await prisma.event.findFirst({
-          where: { id: evId, tenantId, status: "ACTIVE" },
-          select: { id: true },
+          where: { id: evId, tenantId },
+          select: { id: true, status: true },
         });
         if (!ev) throw httpError(404, "NOT_FOUND", "Not found.");
+        if (ev.status !== "ACTIVE") throw httpError(409, "EVENT_NOT_ACTIVE", "Event is not ACTIVE.");
       }
     }
 
@@ -112,7 +114,7 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx) {
       data: {
         ...(typeof body.name === "string" ? { name: body.name } : {}),
         ...(typeof body.status === "string" ? { status: body.status } : {}),
-        ...("activeEventId" in body ? { activeEventId: body.activeEventId ?? null } : {}),
+        ...(body.activeEventId !== undefined ? { activeEventId: body.activeEventId ?? null } : {}),
       },
     });
 

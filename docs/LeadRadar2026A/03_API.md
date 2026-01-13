@@ -25,7 +25,7 @@ Header:
 Body:
 ```json
 { "ok": true, "data": { "...": "..." }, "traceId": "..." }
-Error
+Error (4xx/5xx)
 Header:
 
 x-trace-id: <uuid>
@@ -55,6 +55,8 @@ TENANT_REQUIRED (401) — fehlender Tenant Context (x-tenant-slug) wo erforderli
 NOT_FOUND (404) — leak-safe bei falschem Tenant/ID oder unassigned Form
 
 INVALID_STATE (409) — Zustand erlaubt Aktion nicht
+
+EVENT_NOT_ACTIVE (409) — Device Binding darf nur auf ACTIVE Event zeigen (TP 3.6)
 
 UNSUPPORTED_MEDIA_TYPE (415) — z.B. Attachment Upload mime nicht erlaubt
 
@@ -127,6 +129,7 @@ Code kopieren
 }
 GET /api/mobile/v1/forms/:id
 Auth: x-api-key erforderlich
+
 Semantik:
 
 404 wenn Form nicht existiert oder nicht assigned (leak-safe)
@@ -154,6 +157,7 @@ Code kopieren
 }
 POST /api/mobile/v1/leads
 Auth: x-api-key erforderlich
+
 Semantik:
 
 404 wenn formId nicht existiert oder nicht assigned (leak-safe)
@@ -181,6 +185,7 @@ Code kopieren
 Mobile API v1 — Lead Attachments (TP 3.5)
 POST /api/mobile/v1/leads/:id/attachments
 Auth: x-api-key erforderlich
+
 Leak-safe:
 
 404 wenn Lead nicht im Tenant existiert
@@ -280,6 +285,7 @@ Code kopieren
 Admin API v1 (tenant-scoped)
 Forms
 GET /api/admin/v1/forms
+
 Query:
 
 status: DRAFT|ACTIVE|ARCHIVED (optional)
@@ -298,8 +304,45 @@ Code kopieren
   },
   "traceId": "..."
 }
+Admin API v1 — Events (TP 3.3 + TP 3.6 Guardrails)
+PATCH /api/admin/v1/events/:id/status
+Body:
+
+json
+Code kopieren
+{ "status": "DRAFT" | "ACTIVE" | "ARCHIVED" }
+Guardrails (TP 3.6):
+
+Max. 1 ACTIVE Event pro Tenant (MVP): Wenn ein Event auf ACTIVE gesetzt wird, wird ein anderes ACTIVE Event im selben Tenant automatisch auf ARCHIVED gesetzt.
+
+Auto-unbind: Wenn ein Event von ACTIVE weg wechselt (DRAFT/ARCHIVED) oder automatisch archiviert wird, werden alle Devices mit activeEventId=<eventId> automatisch auf null gesetzt.
+
+Leads bleiben historisch korrekt mit lead.eventId getaggt.
+
+Errors:
+
+401 UNAUTHORIZED (Admin Session)
+
+404 NOT_FOUND (leak-safe: falscher Tenant/ID)
+
+Response (200):
+
+json
+Code kopieren
+{
+  "ok": true,
+  "data": {
+    "item": { "id":"...", "name":"...", "status":"ACTIVE", "updatedAt":"..." },
+    "autoArchivedEventId": "..." ,
+    "devicesUnboundCount": 2
+  },
+  "traceId": "..."
+}
+autoArchivedEventId ist null, wenn kein anderes ACTIVE Event existierte.
+
 Admin API v1 — Lead Attachments (TP 3.5)
 GET /api/admin/v1/leads/:id/attachments/:attachmentId/download
+
 Auth:
 
 Browser UI: Session Cookie (Admin)
@@ -384,7 +427,15 @@ PATCH /api/admin/v1/mobile/devices/:id (Body)
 
 json
 Code kopieren
-{ "name": "iPad Eingang", "status": "ACTIVE" }
+{ "name": "iPad Eingang", "status": "ACTIVE", "activeEventId": "evt_..." }
+TP 3.6 Guardrail:
+
+activeEventId darf nur auf ein ACTIVE Event im Tenant zeigen.
+
+Falscher Tenant/ID ⇒ 404 NOT_FOUND (leak-safe)
+
+Event existiert aber nicht ACTIVE ⇒ 409 EVENT_NOT_ACTIVE
+
 Assignments (Replace strategy)
 PUT /api/admin/v1/mobile/devices/:id/assignments (Body { "formIds": ["..."] })
 
@@ -483,6 +534,7 @@ Errors:
 500 EXPORT_FAILED
 
 CSV Columns (stable, deterministic)
+
 Delimiter: ; (Excel-friendly, CH)
 
 Header order:

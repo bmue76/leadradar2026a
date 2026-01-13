@@ -114,7 +114,24 @@ UX Notes:
 
 ---
 
-## Screen: Mobile Ops (`/admin/settings/mobile`) — TP 2.9 + TP 3.0 + TP 3.1
+## Screen: Events (`/admin/events`) — TP 3.3 + TP 3.6
+
+Ziel:
+- Events auflisten, Status setzen (ACTIVE/ARCHIVED)
+- Guardrail sichtbar machen: **nur 1 ACTIVE Event pro Tenant (MVP)**
+
+TP 3.6 Guardrails (UX):
+- Hinweistext: “Nur ein aktives Event pro Tenant. Aktivieren archiviert das bisher aktive Event (und unbindet Devices).”
+- Actions (minimal): pro Event “Activate” oder “Archive”
+- Nach Statuswechsel kurze Notice (best-effort)
+
+API Wiring:
+- List: `GET /api/admin/v1/events?limit=200&status=...`
+- Status Change: `PATCH /api/admin/v1/events/:id/status` (TP 3.6: Auto-archive + Auto-unbind)
+
+---
+
+## Screen: Mobile Ops (`/admin/settings/mobile`) — TP 2.9 + TP 3.0 + TP 3.1 (+ TP 3.6)
 
 Ziel:
 - Mobile API Betrieb produktfähig machen:
@@ -154,6 +171,11 @@ Hinweis:
   - Rename + Status
   - Assignments: Checklist (default ACTIVE), optional Toggle “Show drafts/archived”
   - Save Assignments (Replace)
+
+TP 3.6 Guardrails (UX):
+- **Active Event Dropdown zeigt nur ACTIVE Events (+ “Kein Event”).**
+- Wenn kein ACTIVE Event existiert: Hinweis “Kein aktives Event – Leads werden ohne Event gespeichert.”
+- Wenn versucht wird, ein nicht-ACTIVE Event zu binden: API liefert 409 EVENT_NOT_ACTIVE.
 
 #### 4) Demo Shortcuts (DEV)
 - Links:
