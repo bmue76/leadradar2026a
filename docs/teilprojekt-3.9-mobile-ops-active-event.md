@@ -1,51 +1,49 @@
-# Schlussrapport — Teilprojekt 3.9: Mobile Ops konsistent auf Events/Active + UX Hint States — ONLINE-only (MVP)
+# Schlussrapport — Teilprojekt 3.9: Mobile Ops konsistent auf Events/Active + UX Hint States — ONLINE-only (MVP) — DONE ✅
 
-Datum: 2026-01-13  
+Datum: 2026-01-14  
 Status: DONE ✅  
-Commit(s): TBD
+Commit(s): 7c609e8
 
 ## Ziel
-
-Mobile Ops (Admin) soll den aktiven Messekontext **konsistent** über `/api/admin/v1/events/active` beziehen (Single Source of Truth) und klare UX States haben:
-
-- Loading
-- Kein aktives Event vorhanden (neutraler Hinweis)
-- API Error (traceId + Retry)
+Mobile Ops (Admin) soll den aktiven Messekontext konsistent über `/api/admin/v1/events/active` beziehen (Single Source of Truth) und klare UX States zeigen:
+- loading
+- kein aktives Event vorhanden (neutraler Hinweis)
+- API error (traceId + Retry)
 
 Device-Binding bleibt unverändert:
 - `activeEventId = null` erlaubt
-- `activeEventId` nur auf ACTIVE Event (Guardrail: 409 `EVENT_NOT_ACTIVE`)
+- Guardrail: `activeEventId` darf nur auf ACTIVE Event zeigen (409 `EVENT_NOT_ACTIVE`)
 
 ## Umsetzung (Highlights)
+- **MobileOpsClient** nutzt für den Event-Kontext nicht mehr `GET /events?status=ACTIVE`, sondern **`GET /events/active`**.
+- UX-State-Machine vereinheitlicht:
+  - Loading State
+  - “Kein aktives Event” (200 mit `item=null` oder 404 wird als “none” behandelt)
+  - Error State mit **traceId** + Retry
+- **Events Status Route** Mini-Polish: Guardrail Service-Call korrekt (`newStatus`) und Next Route Handler Typing kompatibel (`await ctx.params`).
 
-- **UI umgestellt**: Manage Device → Active Event Select nutzt nun **/events/active** statt Events-List/Filter.
-- **Hint States eingeführt**:
-  - Loading: “Loading active event…”
-  - None: Hinweis + Link “Aktives Event in /admin/events festlegen”
-  - Error: Callout inkl. `traceId` und **Retry** (refetch active event)
-- **Ops Edge Case sichtbar**: Device kann auf nicht-aktives Event gebunden sein → Warn-Option bleibt selektierbar (damit der aktuelle Wert nicht “verschwindet”).
-
-## Dateien/Änderungen
-
+## Dateien / Änderungen
 - `src/app/(admin)/admin/settings/mobile/MobileOpsClient.tsx`
-  - Active Event Fetch via `/api/admin/v1/events/active`
-  - konsistente Hint/Empty/Error States inkl. Retry
+  - Active Event Kontext via `/api/admin/v1/events/active`
+  - konsistente Hint/Empty/Error States (traceId + Retry)
+- `src/app/api/admin/v1/events/active/route.ts`
+  - liefert `200 { item: <event>|null }` (defensive: most recently updated ACTIVE)
+- `src/app/api/admin/v1/events/[id]/status/route.ts`
+  - nutzt Guardrail Service `setEventStatusWithGuards({ tenantId, eventId, newStatus })`
+  - Route Handler ctx.params Promise-kompatibel
 - `docs/LeadRadar2026A/03_API.md`
-  - `/events/active` Semantik + UI Nutzung (TP 3.9)
+  - `/events/active` Semantik dokumentiert (Single Source for active context)
 - `docs/LeadRadar2026A/04_ADMIN_UI.md`
-  - Mobile Ops State Machine + Hinweis-Logik (TP 3.9)
-- `docs/teilprojekt-3.9-mobile-ops-active-event.md`
-  - Dieser Schlussrapport
+  - Mobile Ops Active Event State Machine / UX Notes aktualisiert
 
-## Akzeptanzkriterien – Check
+## Akzeptanzkriterien – Check ✅
+- UI nutzt `/api/admin/v1/events/active` (Single Source) ✅
+- Klare States (loading / none / error+traceId+retry) ✅
+- Non-breaking: 404 wird als “kein aktives Event” behandelt ✅
+- Tenant-scope & leak-safe unverändert ✅
+- DoD: typecheck/lint/build grün ✅
 
-- [x] Mobile Ops nutzt `/api/admin/v1/events/active` als Single Source (kein List/Filter Fetch)
-- [x] States: loading / none / error (traceId + Retry)
-- [x] Device-Binding unverändert (null erlaubt; Guardrail bleibt serverseitig)
-- [x] Docs aktualisiert (API + Admin UI)
-
-## Tests/Proof (reproduzierbar)
-
+## Tests / Proof (reproduzierbar)
 ```bash
 cd /d/dev/leadradar2026a
 npm run auth:smoke
@@ -53,20 +51,22 @@ npm run events:smoke
 npm run typecheck
 npm run lint
 npm run build
-Manual UI Proof:
+Manual UI Proof
 
-/admin/events: 1 Event auf ACTIVE setzen (oder keines)
+/admin/events: 1 Event ACTIVE setzen oder keines
 
 /admin/settings/mobile:
 
-zeigt aktives Event (wenn vorhanden) ODER “Kein aktives Event”
+zeigt aktives Event ODER “Kein aktives Event”
 
 Device activeEventId setzen/clearen
 
-Fehlerfall zeigt traceId + Retry
+Fehlerfall: traceId + Retry sichtbar
 
-Offene Punkte/Risiken
-P1: /api/admin/v1/events/active liefert aktuell 200 {item:null} (empfohlen). Falls eine spätere Änderung 404 bei “none” einführt, ist UI bereits non-breaking und behandelt 404 als “none”.
+Offene Punkte / Risiken
+P0: keine
+
+P1: keine (MVP Scope erfüllt)
 
 Next Step
-(Optional) Export Screen könnte perspektivisch ebenfalls auf /events/active umstellen, falls “Default Event” UX benötigt wird (aktuell nicht Teil MVP).
+Nächstes Teilprojekt gemäss Masterplan auswählen (z.B. weitere UX Konsistenz / Mobile Edge Cases / Export-Polish / Audit-Logging light).
