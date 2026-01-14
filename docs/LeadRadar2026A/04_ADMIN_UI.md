@@ -139,7 +139,7 @@ API Wiring:
 
 ---
 
-## Screen: Mobile Ops (`/admin/settings/mobile`) — TP 2.9 + TP 3.0 + TP 3.1 (+ TP 3.7)
+## Screen: Mobile Ops (`/admin/settings/mobile`) — TP 2.9 + TP 3.0 + TP 3.1 (+ TP 3.7 + TP 3.9)
 
 Ziel:
 - Mobile API Betrieb produktfähig machen:
@@ -150,6 +150,18 @@ Ziel:
   - Demo Capture Key UX (DEV)
 
 TP 3.7 Guardrails (UX):
-- Active Event Dropdown zeigt nur ACTIVE Events (+ “Kein Event”).
-- Wenn kein ACTIVE Event existiert: Hinweis “Kein aktives Event – Leads werden ohne Event gespeichert.”
+- Device Binding akzeptiert `activeEventId = null` (Leads ohne Event)
 - Wenn versucht wird, ein nicht-ACTIVE Event zu binden: API liefert 409 `EVENT_NOT_ACTIVE`.
+
+TP 3.9 Konsistenz: Active Event Single Source + Hint States
+- Mobile Ops verwendet **nicht** mehr eine Event-Liste, sondern **/api/admin/v1/events/active** als Single Source.
+- Active Event “Dropdown” ist effektiv 2 Optionen:
+  - “Kein Event” → setzt `activeEventId = null`
+  - “<Aktives Event>” → setzt `activeEventId = <activeEvent.id>`
+- State Machine (im Manage Device Drawer):
+  - loading: “Loading active event…”
+  - none: neutraler Hinweis “Kein aktives Event – Leads werden ohne Event gespeichert.” + Link zu `/admin/events`
+  - error: Callout mit `traceId` + “Retry”
+- Edge Case (Ops Hint):
+  - Wenn ein Device noch auf ein nicht-aktives Event gebunden ist, wird dies als Warn-Option angezeigt:
+    - “⚠︎ bound to non-ACTIVE event (evt_…)”

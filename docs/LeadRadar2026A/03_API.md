@@ -231,6 +231,12 @@ Defensive: sollte max 1 sein, nimmt bei Inkonsistenz das zuletzt aktualisierte A
 
 Liefert item oder null.
 
+TP 3.9 UI Nutzung: Mobile Ops verwendet diesen Endpoint als Single Source of Truth für den aktiven Messekontext.
+
+Wenn kein ACTIVE Event existiert: empfohlen 200 mit data.item = null.
+
+Falls Implementierung 404 NOT_FOUND liefert, behandelt die UI das non-breaking als “kein aktives Event”.
+
 Response (200):
 
 json
@@ -324,5 +330,4 @@ optional ?inline=1 für image preview
 Exports (CSV) — TP 1.8 + TP 3.4 (event-aware)
 POST /api/admin/v1/exports/csv
 optional eventId, formId, date range
-
 falscher Tenant/ID => 404 NOT_FOUND (leak-safe)

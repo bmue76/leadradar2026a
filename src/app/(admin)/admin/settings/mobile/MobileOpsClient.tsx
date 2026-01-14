@@ -39,7 +39,7 @@ type ProvisionRow = {
 
 type FormListItem = { id: string; name: string; status: string; description?: string | null };
 
-// TP 3.3 — Events (for dropdown)
+// TP 3.9 — Active Event (single source: /events/active)
 type EventListItem = { id: string; name: string; status: string; startsAt?: string | null; endsAt?: string | null };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -193,8 +193,9 @@ export default function MobileOpsClient() {
   const [manageLastSeenAt, setManageLastSeenAt] = React.useState<string | null>(null);
   const [manageLastUsedAt, setManageLastUsedAt] = React.useState<string | null>(null);
 
-  // TP 3.3 — Active Event binding
+  // TP 3.9 — Active Event (single source: /events/active)
   const [eventsLoading, setEventsLoading] = React.useState(false);
+  const [eventsError, setEventsError] = React.useState<string | null>(null);
   const [activeEvents, setActiveEvents] = React.useState<EventListItem[]>([]);
   const [manageActiveEventId, setManageActiveEventId] = React.useState<string>(""); // "" => none
 
@@ -255,31 +256,58 @@ export default function MobileOpsClient() {
     setDevicesLoading(false);
   }
 
-  // TP 3.3 — load ACTIVE events for dropdown
+  // TP 3.9 — load ACTIVE event via /events/active (Single Source of Truth)
   async function loadActiveEvents() {
     setEventsLoading(true);
-    const res = await adminFetchJson<unknown>("/api/admin/v1/events?status=ACTIVE&limit=200", { method: "GET" });
+    setEventsError(null);
+
+    const res = await adminFetchJson<unknown>("/api/admin/v1/events/active", { method: "GET" });
+
     if (!res.ok) {
+      // Non-breaking handling: treat 404 as "none"
+      if (res.status === 404) {
+        setActiveEvents([]);
+        setEventsLoading(false);
+        return;
+      }
+      setActiveEvents([]);
+      setEventsError(fmtErr(res));
+      setEventsLoading(false);
+      return;
+    }
+
+    let item: unknown = null;
+    const payload = res.data;
+
+    if (isRecord(payload)) {
+      if ("item" in payload) item = payload.item;
+
+      // defensive compat: if ever nested
+      if (item == null && isRecord(payload.data)) {
+        const inner = payload.data as Record<string, unknown>;
+        if ("item" in inner) item = inner.item;
+      }
+    }
+
+    if (!item || !isRecord(item)) {
       setActiveEvents([]);
       setEventsLoading(false);
       return;
     }
 
-    const rows = pickArray(res.data) as unknown[];
-    const parsed: EventListItem[] = rows
-      .map((r) => {
-        if (!isRecord(r)) return null;
-        const id = typeof r.id === "string" ? r.id : "";
-        const name = typeof r.name === "string" ? r.name : "";
-        const status = typeof r.status === "string" ? r.status : "ACTIVE";
-        if (!id || !name) return null;
-        const startsAt = typeof r.startsAt === "string" ? r.startsAt : r.startsAt === null ? null : null;
-        const endsAt = typeof r.endsAt === "string" ? r.endsAt : r.endsAt === null ? null : null;
-        return { id, name, status, startsAt, endsAt };
-      })
-      .filter(Boolean) as EventListItem[];
+    const id = typeof item.id === "string" ? item.id : "";
+    const name = typeof item.name === "string" ? item.name : "";
+    const status = typeof item.status === "string" ? item.status : "ACTIVE";
+    const startsAt = typeof item.startsAt === "string" ? item.startsAt : item.startsAt === null ? null : null;
+    const endsAt = typeof item.endsAt === "string" ? item.endsAt : item.endsAt === null ? null : null;
 
-    setActiveEvents(parsed);
+    if (!id || !name) {
+      setActiveEvents([]);
+      setEventsLoading(false);
+      return;
+    }
+
+    setActiveEvents([{ id, name, status, startsAt, endsAt }]);
     setEventsLoading(false);
   }
 
@@ -513,6 +541,7 @@ export default function MobileOpsClient() {
     setManageActiveEventId("");
     setActiveEvents([]);
     setEventsLoading(false);
+    setEventsError(null);
 
     setForms([]);
     setFormsLoading(false);
@@ -963,14 +992,7 @@ export default function MobileOpsClient() {
                   <div className="mt-4">
                     <div className="text-xs font-medium text-emerald-900">QR (DEV)</div>
                     <div className="mt-2 inline-block rounded-xl border border-emerald-200 bg-white p-2">
-                      <Image
-                        src={provQrDataUrl}
-                        alt="Provision QR"
-                        width={180}
-                        height={180}
-                        unoptimized
-                        className="h-[180px] w-[180px]"
-                      />
+                      <Image src={provQrDataUrl} alt="Provision QR" width={180} height={180} unoptimized className="h-[180px] w-[180px]" />
                     </div>
                     <div className="mt-1 text-xs text-emerald-900/70">
                       QR enthält Link zu <span className="font-mono">/admin/demo/provision?token=...</span>
@@ -1024,12 +1046,7 @@ export default function MobileOpsClient() {
                           return (
                             <li key={f.id} className="flex items-center justify-between gap-3 px-3 py-2">
                               <label className="flex min-w-0 items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  className="h-4 w-4 rounded border-neutral-300"
-                                  checked={checked}
-                                  onChange={() => toggleProvForm(f.id)}
-                                />
+                                <input type="checkbox" className="h-4 w-4 rounded border-neutral-300" checked={checked} onChange={() => toggleProvForm(f.id)} />
                                 <span className="truncate text-sm text-neutral-900">{f.name}</span>
                               </label>
                               <span className={chipClasses(f.status)}>{f.status}</span>
@@ -1227,7 +1244,7 @@ export default function MobileOpsClient() {
                     <option value="DISABLED">DISABLED</option>
                   </select>
 
-                  {/* TP 3.7 — Active Event binding */}
+                  {/* TP 3.9 — Active Event binding (single source) */}
                   <label className="mb-1 block text-xs font-medium text-neutral-700">Active Event</label>
                   <select
                     className="mb-2 w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
@@ -1248,13 +1265,36 @@ export default function MobileOpsClient() {
                     ))}
                   </select>
 
-                  {!eventsLoading && activeEvents.length === 0 ? (
-                    <div className="mb-3 text-xs text-amber-900/80">
-                      Kein aktives Event – Leads werden ohne Event gespeichert.
+                  {eventsLoading ? (
+                    <div className="mb-3 text-xs text-neutral-600">Loading active event…</div>
+                  ) : eventsError ? (
+                    <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                      <div className="font-medium">Couldn’t load active event.</div>
+                      <div className="mt-1">{eventsError}</div>
+                      <div className="mt-2 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void loadActiveEvents()}
+                          className="rounded-xl border border-red-200 bg-white px-3 py-1.5 text-xs text-red-900 hover:bg-red-50"
+                        >
+                          Retry
+                        </button>
+                        <a className="text-xs text-red-900 underline" href="/admin/events">
+                          Aktives Event in /admin/events festlegen
+                        </a>
+                      </div>
+                    </div>
+                  ) : activeEvents.length === 0 ? (
+                    <div className="mb-3 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-700">
+                      Kein aktives Event – Leads werden ohne Event gespeichert.{" "}
+                      <a className="underline" href="/admin/events">
+                        Aktives Event in /admin/events festlegen
+                      </a>
+                      .
                     </div>
                   ) : (
                     <div className="mb-3 text-xs text-neutral-600">
-                      Active events loaded: <span className="font-mono">{eventsLoading ? "…" : activeEvents.length}</span>
+                      Active event: <span className="font-mono">{shortId(activeEvents[0]?.id ?? null)}</span>
                     </div>
                   )}
 
