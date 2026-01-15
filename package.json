@@ -13,8 +13,13 @@
     "pretypecheck": "prisma generate",
     "prebuild": "prisma generate",
     "db:seed": "prisma db seed",
+
     "auth:smoke": "node scripts/auth-smoke.mjs",
-    "events:smoke": "node scripts/events-guardrails-smoke.mjs"
+    "events:smoke": "node scripts/events-guardrails-smoke.mjs",
+
+    "mobile:smoke": "node tools/smoke/mobile-smoke.mjs",
+    "exports:smoke": "node tools/smoke/exports-smoke.mjs",
+    "smoke:all": "node tools/smoke/smoke-all.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
