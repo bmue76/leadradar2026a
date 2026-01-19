@@ -2,12 +2,8 @@
 
 import React, { useMemo, useState } from "react";
 import { signIn } from "next-auth/react";
-import { useSearchParams } from "next/navigation";
 
-export default function LoginPage() {
-  const sp = useSearchParams();
-  const nextPath = sp.get("next") || "/admin";
-
+export default function SignInPage() {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
@@ -23,9 +19,9 @@ export default function LoginPage() {
 
     setBusy(true);
     try {
-      await signIn("email", {
+      await signIn("nodemailer", {
         email: email.trim().toLowerCase(),
-        callbackUrl: nextPath,
+        callbackUrl: "/admin",
         redirect: true,
       });
       setSent(true);
@@ -35,7 +31,7 @@ export default function LoginPage() {
   }
 
   return (
-    <main style={{ maxWidth: 460, margin: "48px auto", padding: 16 }}>
+    <main style={{ maxWidth: 440, margin: "48px auto", padding: 16 }}>
       <h1 style={{ fontSize: 22, fontWeight: 650, marginBottom: 10 }}>LeadRadar Login</h1>
       <p style={{ opacity: 0.8, marginBottom: 18 }}>
         Passwortlos per Magic Link. E-Mail eingeben → Link öffnen → fertig.
@@ -77,9 +73,6 @@ export default function LoginPage() {
         {sent ? (
           <div style={{ marginTop: 6, padding: 12, borderRadius: 12, background: "rgba(0,0,0,0.04)" }}>
             <b>Mail ist unterwegs.</b> Öffne den Link (am Handy oder PC) – du landest direkt im Admin.
-            <div style={{ marginTop: 8, fontSize: 13, opacity: 0.8 }}>
-              Tipp: Für iPhone-Tests verwende <b>immer</b> die LAN-IP-URL (nicht localhost), damit Host & Cookies passen.
-            </div>
           </div>
         ) : null}
       </form>

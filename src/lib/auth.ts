@@ -1,16 +1,17 @@
 import crypto from "node:crypto";
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma } from "@/server/prisma";
 import { httpError } from "@/lib/http";
 import { hashPasswordScrypt, verifyPasswordScrypt, sha256Hex } from "@/lib/password";
+import { auth as nextAuth } from "@/auth";
 
 export { hashPasswordScrypt, verifyPasswordScrypt, sha256Hex };
 
 export const AUTH_COOKIE_NAME = "lr_session";
 
 type SessionPayload = {
-  sub: string;           // userId
-  tid: string | null;    // tenantId
+  sub: string; // userId
+  tid: string | null; // tenantId
   role: string;
   iat: number;
   exp: number;
@@ -56,7 +57,7 @@ export function createSessionToken(opts: {
     tid: opts.tenantId,
     role: opts.role,
     iat: now,
-    exp: now + ttl
+    exp: now + ttl,
   };
 
   const payloadPart = base64url(JSON.stringify(payload));
@@ -100,7 +101,7 @@ function getCookieFromHeader(cookieHeader: string, name: string): string {
 }
 
 function getCookieValue(req: Request, name: string): string {
-  // NextRequest hat `.cookies`, Request nicht. Wir machen beides möglich.
+  // NextRequest has `.cookies`, Request does not. Support both.
   const anyReq = req as unknown as { cookies?: { get: (n: string) => { value?: string } | undefined } };
   if (anyReq.cookies?.get) {
     return anyReq.cookies.get(name)?.value ?? "";
@@ -116,7 +117,7 @@ export function setAuthCookie(res: NextResponse, token: string): void {
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: 60 * 60 * 24 * 30
+    maxAge: 60 * 60 * 24 * 30,
   });
 }
 
@@ -128,27 +129,129 @@ export function clearAuthCookie(res: NextResponse): void {
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: 0
+    maxAge: 0,
   });
 }
 
-export async function getCurrentUserFromRequest(req: Request) {
-  const token = getCookieValue(req, AUTH_COOKIE_NAME);
-  const payload = verifySessionToken(token);
-  if (!payload) return null;
+function pickDevTenantSlug(): string | null {
+  const candidates = [
+    process.env.DEV_DEFAULT_TENANT_SLUG,
+    process.env.SEED_TENANT_SLUG,
+    process.env.NEXT_PUBLIC_DEFAULT_TENANT_SLUG,
+    process.env.NEXT_PUBLIC_TENANT_SLUG_DEV,
+  ]
+    .map((s) => (s ?? "").trim())
+    .filter(Boolean);
 
+  return candidates[0]?.toLowerCase() ?? null;
+}
+
+function pickDevTenantName(slug: string): string {
+  const n = (process.env.SEED_TENANT_NAME ?? "").trim();
+  return n || `LeadRadar ${slug}`;
+}
+
+function pickDevTenantCountry(): string {
+  const c = (process.env.SEED_TENANT_COUNTRY ?? "CH").trim().toUpperCase();
+  return c.length >= 2 ? c.slice(0, 2) : "CH";
+}
+
+async function loadUser(userId: string) {
   const user = await prisma.user.findUnique({
-    where: { id: payload.sub },
-    include: { tenant: true }
+    where: { id: userId },
+    include: { tenant: true },
   });
-
   if (!user) return null;
   return { user, tenant: user.tenant };
 }
 
+async function ensureDevTenant(): Promise<string | null> {
+  if (process.env.NODE_ENV === "production") return null;
+
+  const slug = pickDevTenantSlug();
+
+  // If we have a preferred slug, ensure it exists (create if missing)
+  if (slug) {
+    const existing = await prisma.tenant.findUnique({ where: { slug }, select: { id: true } });
+    if (existing?.id) return existing.id;
+
+    const created = await prisma.tenant.create({
+      data: {
+        slug,
+        name: pickDevTenantName(slug),
+        country: pickDevTenantCountry(),
+      },
+      select: { id: true },
+    });
+
+    return created.id;
+  }
+
+  // No slug: if exactly one tenant exists, use it
+  const tenants = await prisma.tenant.findMany({ select: { id: true }, take: 2 });
+  if (tenants.length === 1) return tenants[0].id;
+
+  return null;
+}
+
+async function devEnsureTenantAssigned(userId: string) {
+  if (process.env.NODE_ENV === "production") return null;
+
+  const tenantId = await ensureDevTenant();
+  if (!tenantId) return null;
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
+      tenantId,
+      role: "TENANT_OWNER",
+      emailVerified: new Date(),
+    },
+  });
+
+  return await loadUser(userId);
+}
+
+export async function getCurrentUserFromRequest(req: Request) {
+  // 1) Legacy LR session cookie
+  const lrToken = getCookieValue(req, AUTH_COOKIE_NAME);
+  const payload = verifySessionToken(lrToken);
+  if (payload?.sub) {
+    const loaded = await loadUser(payload.sub);
+    if (loaded) return loaded;
+  }
+
+  // 2) DEV-only header override
+  const headerUserId = (req.headers.get("x-user-id") || "").trim();
+  if (headerUserId && process.env.NODE_ENV !== "production") {
+    const loaded = await loadUser(headerUserId);
+    if (loaded) return loaded;
+  }
+
+  // 3) NextAuth (Magic Link) session
+  try {
+    const session = await nextAuth();
+    const sessionUserId = ((session?.user as any)?.id || "").trim();
+    if (sessionUserId) {
+      const loaded = await loadUser(sessionUserId);
+      if (loaded) return loaded;
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
 export async function requireAdminAuth(req: Request) {
-  const current = await getCurrentUserFromRequest(req);
+  let current = await getCurrentUserFromRequest(req);
   if (!current) throw httpError(401, "UNAUTHORIZED", "Nicht eingeloggt.");
+
+  // DEV convenience: if user has no tenant, auto-create/assign default tenant
+  if (!current.user.tenantId && process.env.NODE_ENV !== "production") {
+    const assigned = await devEnsureTenantAssigned(current.user.id);
+    if (assigned) current = assigned;
+  }
 
   const { user } = current;
   if (!user.tenantId) throw httpError(403, "FORBIDDEN", "Kein Tenant zugeordnet.");

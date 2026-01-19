@@ -128,7 +128,7 @@ export async function adminFetchJson<T>(
       ...init,
       headers,
       cache: "no-store",
-      credentials: "same-origin",
+      credentials: "include",
     });
   } catch {
     return {

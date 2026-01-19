@@ -20,13 +20,13 @@ export async function POST(req: NextRequest) {
 
   const user = await prisma.user.findUnique({
     where: { email },
-    select: { id: true, emailVerifiedAt: true },
+    select: { id: true, emailVerified: true },
   });
 
   // Do not leak existence
   if (!user) return NextResponse.json({ ok: true });
 
-  if (user.emailVerifiedAt) return NextResponse.json({ ok: true });
+  if (user.emailVerified) return NextResponse.json({ ok: true });
 
   const rawToken = randomToken();
   const tokenHash = sha256(rawToken);

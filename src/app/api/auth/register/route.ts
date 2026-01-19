@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
       passwordHash,
       firstName,
       lastName,
-      emailVerifiedAt: new Date(), // dev-friendly; später Email-Verify Flow
+      emailVerified: new Date(), // dev-friendly; später Email-Verify Flow
     },
   });
 

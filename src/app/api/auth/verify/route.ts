@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
 
   await prisma.user.update({
     where: { id: record.userId },
-    data: { emailVerifiedAt: new Date() },
+    data: { emailVerified: new Date() },
   });
 
   await prisma.emailVerificationToken.delete({ where: { tokenHash } });

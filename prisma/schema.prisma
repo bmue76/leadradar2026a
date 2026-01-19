@@ -81,6 +81,13 @@ enum EventStatus {
 }
 
 //
+// TP 4.1 — OCR
+//
+enum LeadOcrKind {
+  BUSINESS_CARD
+}
+
+//
 // Core base models
 //
 model Tenant {
@@ -120,30 +127,44 @@ model Tenant {
   // TP 3.0 — Provisioning
   mobileProvisionTokens MobileProvisionToken[]
 
+  // TP 4.1 — OCR
+  leadOcrResults LeadOcrResult[]
+
   @@index([country])
 }
 
 model User {
   id       String  @id @default(cuid())
   tenantId String?
-  email    String  @unique
-  role     String
 
-  // Registration profile (Tenant Owner onboarding)
+  email String @unique
+
+  // Role/tenant context (MVP: owner-only; roles later)
+  role String @default("TENANT_OWNER")
+
+  // NextAuth/Auth.js expects emailVerified
+  emailVerified DateTime?
+
+  // Optional profile
+  name      String?
   firstName String?
-  lastName  String
-  name      String? // legacy/optional display field (nullable)
+  lastName  String?
+  image     String?
 
-  // Auth
-  passwordHash    String?
-  emailVerifiedAt DateTime?
-  lastLoginAt     DateTime?
+  // Optional local auth fields (legacy/future)
+  passwordHash String?
+  lastLoginAt  DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
 
+  // Auth.js relations (PrismaAdapter)
+  accounts Account[]
+  sessions Session[]
+
+  // Legacy/optional flows (can be used later)
   passwordResetTokens     PasswordResetToken[]
   emailVerificationTokens EmailVerificationToken[]
 
@@ -151,7 +172,52 @@ model User {
   createdMobileApiKeys MobileApiKey[]
 
   @@index([tenantId])
-  @@index([emailVerifiedAt])
+  @@index([emailVerified])
+}
+
+//
+// Auth.js / NextAuth PrismaAdapter models
+// See adapter expectations for VerificationToken, Account, Session. :contentReference[oaicite:3]{index=3}
+//
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+
+  refresh_token String?
+  access_token  String?
+  expires_at    Int?
+  token_type    String?
+  scope         String?
+  id_token      String?
+  session_state String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@index([expires])
 }
 
 //
@@ -255,6 +321,9 @@ model Lead {
 
   event Event? @relation("EventLeads", fields: [eventId], references: [id], onDelete: SetNull)
 
+  // TP 4.1 — OCR
+  ocrResults LeadOcrResult[]
+
   @@unique([tenantId, clientLeadId])
   @@index([tenantId, formId, capturedAt])
   @@index([tenantId, eventId, capturedAt])
@@ -277,7 +346,35 @@ model LeadAttachment {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
 
+  // TP 4.1 — OCR
+  ocrResults LeadOcrResult[]
+
   @@index([tenantId, leadId])
+}
+
+//
+// TP 4.1 — OCR Results (idempotent: one result per attachment+kind per tenant)
+//
+model LeadOcrResult {
+  id           String      @id @default(cuid())
+  tenantId     String
+  leadId       String
+  attachmentId String
+
+  kind       LeadOcrKind
+  rawText    String
+  suggestions Json
+  confidence Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant     Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lead       Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  attachment LeadAttachment @relation(fields: [attachmentId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, attachmentId, kind])
+  @@index([tenantId, leadId, createdAt])
 }
 
 model ExportJob {
@@ -420,7 +517,7 @@ model PasswordResetToken {
 }
 
 //
-// Auth — Email Verification Tokens (Registration)
+// Auth — Email Verification Tokens (Registration; optional/legacy)
 //
 model EmailVerificationToken {
   id        String    @id @default(cuid())
