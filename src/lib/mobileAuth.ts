@@ -36,58 +36,103 @@ function getHeader(req: Request, name: string): string {
 }
 
 function safeInvalidKey(): never {
-  // No tenant details, no existence details. Strict.
+  // Strict, leak-safe: no tenant details, no existence details.
   throw httpError(401, "INVALID_API_KEY", "Invalid API key.");
 }
 
 export async function requireMobileAuth(req: Request): Promise<MobileAuthContext> {
-  const tenantSlug = getHeader(req, "x-tenant-slug");
-  if (!tenantSlug) throw httpError(400, "TENANT_REQUIRED", "Missing x-tenant-slug header.");
-
   const apiKeyToken = getHeader(req, "x-api-key") || getHeader(req, "x-mobile-api-key");
   if (!apiKeyToken || apiKeyToken.length < 10) safeInvalidKey();
 
-  const tenant = await prisma.tenant.findUnique({
-    where: { slug: tenantSlug },
-    select: { id: true },
-  });
-  if (!tenant) throw httpError(404, "NOT_FOUND", "Not found.");
-
-  const prefix = apiKeyToken.slice(0, MOBILE_API_KEY_PREFIX_LEN);
   const expectedKeyHash = hmacSha256Hex(getMobileApiKeySecret(), apiKeyToken);
+  const providedTenantSlug = getHeader(req, "x-tenant-slug");
 
-  // Narrow by prefix for index-friendly lookup, then verify exact keyHash in constant time.
-  const candidates = await prisma.mobileApiKey.findMany({
-    where: { tenantId: tenant.id, prefix, status: "ACTIVE" },
-    select: { id: true, tenantId: true, prefix: true, keyHash: true, status: true },
-    take: 50,
-  });
+  let tenantId: string | null = null;
+  let tenantSlug: string | null = null;
 
+  // We keep the existing "fast path" when tenant is provided.
+  if (providedTenantSlug) {
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: providedTenantSlug },
+      select: { id: true, slug: true },
+    });
+    if (!tenant) throw httpError(404, "NOT_FOUND", "Not found.");
+    tenantId = tenant.id;
+    tenantSlug = tenant.slug;
+  }
+
+  // Resolve apiKey row
   let apiKeyRow:
-    | { id: string; tenantId: string; prefix: string; keyHash: string; status: string }
+    | { id: string; tenantId: string; prefix: string; keyHash: string; status: string; tenantSlug?: string }
     | null = null;
 
-  for (const c of candidates) {
-    if (timingSafeEqualHex(c.keyHash, expectedKeyHash)) {
-      apiKeyRow = c;
-      break;
-    }
-  }
+  if (tenantId) {
+    // Existing logic: prefix-narrowed lookup + constant time verify
+    const prefix = apiKeyToken.slice(0, MOBILE_API_KEY_PREFIX_LEN);
 
-  // Fallback (covers legacy data / prefix mismatch / rare collisions)
-  if (!apiKeyRow) {
-    const direct = await prisma.mobileApiKey.findFirst({
-      where: { tenantId: tenant.id, keyHash: expectedKeyHash, status: "ACTIVE" },
+    const candidates = await prisma.mobileApiKey.findMany({
+      where: { tenantId, prefix, status: "ACTIVE" },
       select: { id: true, tenantId: true, prefix: true, keyHash: true, status: true },
+      take: 50,
     });
-    if (direct) apiKeyRow = direct;
+
+    for (const c of candidates) {
+      if (timingSafeEqualHex(c.keyHash, expectedKeyHash)) {
+        apiKeyRow = c;
+        break;
+      }
+    }
+
+    // Fallback (covers legacy data / prefix mismatch / rare collisions)
+    if (!apiKeyRow) {
+      const direct = await prisma.mobileApiKey.findFirst({
+        where: { tenantId, keyHash: expectedKeyHash, status: "ACTIVE" },
+        select: { id: true, tenantId: true, prefix: true, keyHash: true, status: true },
+      });
+      if (direct) apiKeyRow = direct;
+    }
+
+    if (!apiKeyRow) safeInvalidKey();
+  } else {
+    // NEW: tenant-less mode (robust for clients that forgot x-tenant-slug)
+    const direct = await prisma.mobileApiKey.findFirst({
+      where: { keyHash: expectedKeyHash, status: "ACTIVE" },
+      select: {
+        id: true,
+        tenantId: true,
+        prefix: true,
+        keyHash: true,
+        status: true,
+        tenant: { select: { slug: true } },
+      },
+    });
+
+    if (!direct) safeInvalidKey();
+
+    apiKeyRow = {
+      id: direct.id,
+      tenantId: direct.tenantId,
+      prefix: direct.prefix,
+      keyHash: direct.keyHash,
+      status: direct.status,
+      tenantSlug: direct.tenant?.slug,
+    };
+
+    tenantId = direct.tenantId;
+    tenantSlug = direct.tenant?.slug || null;
   }
 
-  if (!apiKeyRow) safeInvalidKey();
+  if (!tenantId) safeInvalidKey();
 
-  // CRITICAL: resolve the device via apiKeyId (NOT via tenant-only heuristics)
+  if (!tenantSlug) {
+    // Should be rare; fill slug to keep context consistent.
+    const t = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
+    tenantSlug = t?.slug || "";
+  }
+
+  // Resolve the device via apiKeyId (NOT via tenant-only heuristics)
   const device = await prisma.mobileDevice.findFirst({
-    where: { tenantId: tenant.id, apiKeyId: apiKeyRow.id },
+    where: { tenantId, apiKeyId: apiKeyRow.id },
     select: { id: true, status: true },
   });
 
@@ -97,7 +142,7 @@ export async function requireMobileAuth(req: Request): Promise<MobileAuthContext
   if (deviceStatus !== "ACTIVE") throw httpError(403, "DEVICE_DISABLED", "Device disabled.");
 
   return {
-    tenantId: tenant.id,
+    tenantId,
     tenantSlug,
     apiKeyId: apiKeyRow.id,
     deviceId: device.id,
