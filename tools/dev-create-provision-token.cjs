@@ -1,3 +1,4 @@
+/* eslint-disable -eslint/no-require-imports */
 /* eslint-disable @typescript-eslint/no-require-imports */
 const crypto = require("node:crypto");
 const { prisma, disconnect } = require("./prisma.cjs");

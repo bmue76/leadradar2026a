@@ -438,8 +438,7 @@ export default function LeadDetailDrawer(props: {
       return () => clearTimeout(t);
     }
 
-    void loadOcr(fallback);
-  }, [open, leadId, lead, businessCardAttachment, loadOcr]);
+    setTimeout(() => { void loadOcr(fallback); }, 0);  }, [open, leadId, lead, businessCardAttachment, loadOcr]);
 
 const doDelete = useCallback(async () => {
     if (!leadId) return;
