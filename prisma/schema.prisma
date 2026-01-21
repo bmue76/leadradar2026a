@@ -88,6 +88,31 @@ enum LeadOcrKind {
 }
 
 //
+// TP 4.3 — OCR (Lifecycle + Engine + Modes) + Lead Contact Source
+//
+enum LeadOcrMode {
+  ON_DEVICE_LATIN
+  SERVER_FALLBACK
+}
+
+enum LeadOcrStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum LeadOcrEngine {
+  MLKIT
+  SERVER_PLACEHOLDER
+}
+
+enum LeadContactSource {
+  MANUAL
+  OCR_MOBILE
+  OCR_ADMIN
+}
+
+//
 // Core base models
 //
 model Tenant {
@@ -127,7 +152,7 @@ model Tenant {
   // TP 3.0 — Provisioning
   mobileProvisionTokens MobileProvisionToken[]
 
-  // TP 4.1 — OCR
+  // TP 4.1/4.3 — OCR
   leadOcrResults LeadOcrResult[]
 
   @@index([country])
@@ -171,16 +196,19 @@ model User {
   // TP 2.5 — MobileApiKey (optional audit)
   createdMobileApiKeys MobileApiKey[]
 
+  // TP 4.3 — OCR corrections (optional audit)
+  correctedLeadOcrResults LeadOcrResult[] @relation("OcrCorrectedBy")
+
   @@index([tenantId])
   @@index([emailVerified])
 }
 
 //
 // Auth.js / NextAuth PrismaAdapter models
-// See adapter expectations for VerificationToken, Account, Session. :contentReference[oaicite:3]{index=3}
+// See adapter expectations for VerificationToken, Account, Session.
 //
 model Account {
-  id                String  @id @default(cuid())
+  id                String @id @default(cuid())
   userId            String
   type              String
   provider          String
@@ -309,6 +337,29 @@ model Lead {
   values     Json
   meta       Json?
 
+  //
+  // TP 4.3 — Lead Contact (stable for CSV export: contact_*)
+  //
+  contactFirstName String?
+  contactLastName  String?
+  contactEmail     String?
+  contactPhone     String?
+  contactMobile    String?
+  contactCompany   String?
+  contactTitle     String?
+  contactWebsite   String?
+  contactStreet    String?
+  contactZip       String?
+  contactCity      String?
+  contactCountry   String?
+
+  contactSource    LeadContactSource?
+  contactUpdatedAt DateTime?
+
+  // OCR result used to apply contact (for ocr_* export meta)
+  contactOcrResultId String?
+  contactOcrResult   LeadOcrResult? @relation("LeadContactOcrResult", fields: [contactOcrResultId], references: [id], onDelete: SetNull)
+
   // Soft-delete prepared
   isDeleted       Boolean   @default(false)
   deletedAt       DateTime?
@@ -321,12 +372,14 @@ model Lead {
 
   event Event? @relation("EventLeads", fields: [eventId], references: [id], onDelete: SetNull)
 
-  // TP 4.1 — OCR
-  ocrResults LeadOcrResult[]
+  // TP 4.1/4.3 — OCR
+  ocrResults LeadOcrResult[] @relation("LeadOcrResults")
 
   @@unique([tenantId, clientLeadId])
   @@index([tenantId, formId, capturedAt])
   @@index([tenantId, eventId, capturedAt])
+  @@index([tenantId, contactEmail])
+  @@index([tenantId, contactCompany])
 }
 
 model LeadAttachment {
@@ -346,35 +399,65 @@ model LeadAttachment {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
 
-  // TP 4.1 — OCR
+  // TP 4.1/4.3 — OCR
   ocrResults LeadOcrResult[]
 
   @@index([tenantId, leadId])
 }
 
 //
-// TP 4.1 — OCR Results (idempotent: one result per attachment+kind per tenant)
+// TP 4.1/4.3 — OCR Results (idempotent: one result per attachment+mode per tenant)
+// - Attachment (BUSINESS_CARD_IMAGE) remains source of truth.
+// - OCR is derived and can be corrected by admin.
+// IMPORTANT: DB column "suggestions" is kept, but exposed as parsedContactJson in Prisma via @map.
 //
 model LeadOcrResult {
-  id           String      @id @default(cuid())
+  id           String @id @default(cuid())
   tenantId     String
   leadId       String
   attachmentId String
 
-  kind       LeadOcrKind
-  rawText    String
-  suggestions Json
-  confidence Float?
+  kind LeadOcrKind
+
+  // TP 4.3 — OCR lifecycle/meta
+  mode          LeadOcrMode   @default(ON_DEVICE_LATIN)
+  status        LeadOcrStatus @default(COMPLETED)
+  engine        LeadOcrEngine @default(MLKIT)
+  engineVersion String?
+  languageHint  String?
+
+  // Raw + structured
+  rawText           String?
+  blocksJson        Json?
+  parsedContactJson Json?   @map("suggestions")
+  confidence        Float?
+
+  // Admin review/corrections
+  correctedContactJson Json?
+  correctedAt          DateTime?
+  correctedByUserId    String?
+  correctedByUser      User?     @relation("OcrCorrectedBy", fields: [correctedByUserId], references: [id], onDelete: SetNull)
+
+  // Idempotency + error
+  resultHash   String?
+  completedAt  DateTime?
+  errorCode    String?
+  errorMessage String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   tenant     Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  lead       Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  lead       Lead           @relation("LeadOcrResults", fields: [leadId], references: [id], onDelete: Cascade)
   attachment LeadAttachment @relation(fields: [attachmentId], references: [id], onDelete: Cascade)
 
-  @@unique([tenantId, attachmentId, kind])
+  // Lead.contactOcrResult back relation (optional; primarily for Prisma relation disambiguation)
+  contactLeads Lead[] @relation("LeadContactOcrResult")
+
+  @@unique([tenantId, attachmentId, mode])
   @@index([tenantId, leadId, createdAt])
+  @@index([tenantId, status, updatedAt])
+  @@index([tenantId, attachmentId, mode])
 }
 
 model ExportJob {
