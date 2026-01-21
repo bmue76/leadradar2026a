@@ -1,5 +1,6 @@
 "use strict";
 
+/* eslint-disable @typescript-eslint/no-require-imports */
 const crypto = require("node:crypto");
 const { prisma, disconnect } = require("./prisma.cjs");
 

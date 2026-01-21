@@ -3,6 +3,28 @@ import Email from "next-auth/providers/email";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "@/server/prisma";
 
+type AnyRecord = Record<string, unknown>;
+
+function isRecord(v: unknown): v is AnyRecord {
+  return typeof v === "object" && v !== null;
+}
+
+function readString(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
+}
+
+function readStringKey(obj: unknown, key: string): string | undefined {
+  if (!isRecord(obj)) return undefined;
+  return readString(obj[key]);
+}
+
+function readNullableStringKey(obj: unknown, key: string): string | null | undefined {
+  if (!isRecord(obj)) return undefined;
+  const v = obj[key];
+  if (v === null) return null;
+  return readString(v);
+}
+
 function mustEnv(key: string): string {
   const v = process.env[key];
   if (!v) throw new Error(`Missing env: ${key}`);
@@ -94,21 +116,30 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
   callbacks: {
     async jwt({ token, user }) {
-      const userId = (user as any)?.id ?? (token as any).uid ?? (token as any).sub ?? null;
+      // token is a mutable object in Auth.js callbacks
+      const t = token as AnyRecord;
+
+      const userIdFromUser = readStringKey(user, "id");
+      const userIdFromToken = readStringKey(t, "uid") ?? readStringKey(t, "sub");
+      const userId = userIdFromUser ?? userIdFromToken ?? null;
+
       if (userId) {
-        (token as any).uid = userId;
-        (token as any).sub = userId;
+        t.uid = userId;
+        t.sub = userId;
       }
 
       // Try to take from user if present
       if (user) {
-        if ((user as any).tenantId !== undefined) (token as any).tenantId = (user as any).tenantId ?? null;
-        if ((user as any).role !== undefined) (token as any).role = (user as any).role ?? null;
+        const tenantId = readNullableStringKey(user, "tenantId");
+        const role = readNullableStringKey(user, "role");
+
+        if (tenantId !== undefined) t.tenantId = tenantId;
+        if (role !== undefined) t.role = role;
       }
 
       // Load from DB if missing
-      const needsTenant = (token as any).tenantId == null;
-      const needsRole = (token as any).role == null;
+      const needsTenant = t.tenantId == null;
+      const needsRole = t.role == null;
 
       if (userId && (needsTenant || needsRole)) {
         const dbUser = await prisma.user.findUnique({
@@ -117,24 +148,24 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         });
 
         if (dbUser) {
-          (token as any).tenantId = dbUser.tenantId ?? null;
-          (token as any).role = dbUser.role ?? null;
+          t.tenantId = dbUser.tenantId ?? null;
+          t.role = dbUser.role ?? null;
         }
 
         // DEV auto-assign if still missing tenant
-        if ((token as any).tenantId == null) {
+        if (t.tenantId == null) {
           try {
             const assigned = await devMaybeAssignTenant(userId);
             if (assigned) {
-              (token as any).tenantId = assigned.tenantId;
-              (token as any).role = assigned.role;
+              t.tenantId = assigned.tenantId;
+              t.role = assigned.role;
             }
           } catch {
             // ignore
           }
         }
 
-        if ((token as any).role == null) (token as any).role = "TENANT_OWNER";
+        if (t.role == null) t.role = "TENANT_OWNER";
       }
 
       return token;
@@ -142,9 +173,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
     async session({ session, token }) {
       if (session.user) {
-        (session.user as any).id = (token as any).uid ?? (token as any).sub;
-        (session.user as any).tenantId = (token as any).tenantId ?? null;
-        (session.user as any).role = (token as any).role ?? "TENANT_OWNER";
+        const u = session.user as unknown as AnyRecord;
+        const t = token as AnyRecord;
+
+        u.id = readStringKey(t, "uid") ?? readStringKey(t, "sub") ?? null;
+        u.tenantId = readNullableStringKey(t, "tenantId") ?? null;
+        u.role = readStringKey(t, "role") ?? "TENANT_OWNER";
       }
       return session;
     },
@@ -153,8 +187,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   events: {
     async signIn({ user }) {
       try {
+        const userId = readStringKey(user, "id");
+        if (!userId) return;
+
         await prisma.user.update({
-          where: { id: (user as any).id },
+          where: { id: userId },
           data: { lastLoginAt: new Date(), emailVerified: new Date() },
         });
       } catch {

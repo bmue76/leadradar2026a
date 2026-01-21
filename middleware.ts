@@ -2,6 +2,25 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
 
+type AnyRecord = Record<string, unknown>;
+
+function isRecord(v: unknown): v is AnyRecord {
+  return typeof v === "object" && v !== null;
+}
+
+function readString(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
+}
+
+function readClaim(token: unknown, keys: string[]): string | undefined {
+  if (!isRecord(token)) return undefined;
+  for (const k of keys) {
+    const v = readString(token[k]);
+    if (v && v.trim()) return v;
+  }
+  return undefined;
+}
+
 function getSecret(): string {
   const s = process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET;
   if (!s) throw new Error("Missing AUTH_SECRET (or NEXTAUTH_SECRET)");
@@ -17,7 +36,11 @@ function uniq(arr: string[]): string[] {
   return Array.from(new Set(arr));
 }
 
-async function getAnyToken(req: NextRequest) {
+async function getAnyToken(req: NextRequest): Promise<{
+  token: unknown | null;
+  cookieNames: string[];
+  cookieNameUsed: string | null;
+}> {
   const secret = getSecret();
 
   const cookieNames = req.cookies.getAll().map((c) => c.name);
@@ -70,13 +93,13 @@ export async function middleware(req: NextRequest) {
     const headers = new Headers(req.headers);
 
     if (token) {
-      const userId = (token as any).uid ?? (token as any).sub;
-      const tenantId = (token as any).tenantId ?? (token as any).tid;
-      const role = (token as any).role ?? "TENANT_OWNER";
+      const userId = readClaim(token, ["uid", "sub"]);
+      const tenantId = readClaim(token, ["tenantId", "tid"]);
+      const role = readClaim(token, ["role"]) ?? "TENANT_OWNER";
 
-      if (userId) headers.set("x-user-id", String(userId));
-      if (tenantId) headers.set("x-tenant-id", String(tenantId));
-      if (role) headers.set("x-user-role", String(role));
+      if (userId) headers.set("x-user-id", userId);
+      if (tenantId) headers.set("x-tenant-id", tenantId);
+      if (role) headers.set("x-user-role", role);
     }
 
     const res = NextResponse.next({ request: { headers } });

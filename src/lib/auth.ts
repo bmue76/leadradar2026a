@@ -17,6 +17,21 @@ type SessionPayload = {
   exp: number;
 };
 
+type AnyRecord = Record<string, unknown>;
+
+function isRecord(v: unknown): v is AnyRecord {
+  return typeof v === "object" && v !== null;
+}
+
+function readString(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
+}
+
+function readStringKey(obj: unknown, key: string): string | undefined {
+  if (!isRecord(obj)) return undefined;
+  return readString(obj[key]);
+}
+
 function base64url(input: Buffer | string): string {
   const buf = typeof input === "string" ? Buffer.from(input, "utf8") : input;
   return buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
@@ -231,9 +246,9 @@ export async function getCurrentUserFromRequest(req: Request) {
   // 3) NextAuth (Magic Link) session
   try {
     const session = await nextAuth();
-    const sessionUserId = ((session?.user as any)?.id || "").trim();
-    if (sessionUserId) {
-      const loaded = await loadUser(sessionUserId);
+    const sessionUserId = readStringKey((session as unknown as AnyRecord | null)?.user, "id") ?? "";
+    if (sessionUserId.trim()) {
+      const loaded = await loadUser(sessionUserId.trim());
       if (loaded) return loaded;
     }
   } catch {
