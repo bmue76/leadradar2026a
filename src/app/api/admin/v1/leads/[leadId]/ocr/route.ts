@@ -1,3 +1,4 @@
+import { Prisma, type Lead, type LeadAttachment, type LeadOcrResult } from "@prisma/client";
 import { z } from "zod";
 
 import { jsonError, jsonOk } from "@/lib/api";
@@ -37,7 +38,23 @@ const CorrectOcrBodySchema = z
     }
   });
 
-function toContactShapeFromLead(lead: any) {
+type LeadContactPick = Pick<
+  Lead,
+  | "contactFirstName"
+  | "contactLastName"
+  | "contactEmail"
+  | "contactPhone"
+  | "contactMobile"
+  | "contactCompany"
+  | "contactTitle"
+  | "contactWebsite"
+  | "contactStreet"
+  | "contactZip"
+  | "contactCity"
+  | "contactCountry"
+>;
+
+function toContactShapeFromLead(lead: LeadContactPick) {
   return {
     firstName: lead.contactFirstName ?? null,
     lastName: lead.contactLastName ?? null,
@@ -54,7 +71,7 @@ function toContactShapeFromLead(lead: any) {
   };
 }
 
-function toOcrApiShape(r: any) {
+function toOcrApiShape(r: LeadOcrResult) {
   return {
     id: r.id,
     leadId: r.leadId,
@@ -79,6 +96,17 @@ function toOcrApiShape(r: any) {
     correctedAt: r.correctedAt ?? null,
     correctedByUserId: r.correctedByUserId ?? null,
   };
+}
+
+function toJsonInput(v: unknown | undefined | null): Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput {
+  if (v === undefined || v === null) return Prisma.DbNull;
+  return v as Prisma.InputJsonValue;
+}
+
+function getAdminUserId(admin: unknown): string | undefined {
+  const a = admin as Record<string, unknown>;
+  const v = a.userId ?? a.id;
+  return typeof v === "string" ? v : undefined;
 }
 
 export async function GET(req: Request, ctx: { params: { leadId: string } }) {
@@ -129,7 +157,7 @@ export async function GET(req: Request, ctx: { params: { leadId: string } }) {
 
     if (!lead) return jsonError(req, 404, "NOT_FOUND", "Not found.");
 
-    const attachmentIds = lead.attachments.map((a) => a.id);
+    const attachmentIds = lead.attachments.map((a: LeadAttachment) => a.id);
 
     const ocrResults =
       attachmentIds.length === 0
@@ -164,12 +192,11 @@ export async function PATCH(req: Request, ctx: { params: { leadId: string } }) {
   try {
     const admin = await requireAdminAuth(req);
     const tenantId = admin.tenantId;
-    const adminUserId: string | undefined = (admin as any).userId ?? (admin as any).id ?? undefined;
+    const adminUserId = getAdminUserId(admin);
 
     const leadId = ctx.params.leadId;
     const body = await validateBody(req, CorrectOcrBodySchema, 256 * 1024);
 
-    // leak-safe lead
     const lead = await prisma.lead.findFirst({
       where: { id: leadId, tenantId },
       select: { id: true },
@@ -190,7 +217,7 @@ export async function PATCH(req: Request, ctx: { params: { leadId: string } }) {
     const updated = await prisma.leadOcrResult.update({
       where: { id: body.ocrResultId },
       data: {
-        correctedContactJson: (body.correctedContact ?? null) as any,
+        correctedContactJson: toJsonInput(body.correctedContact ?? null),
         correctedAt: now,
         correctedByUserId: adminUserId ?? null,
       },

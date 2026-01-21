@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { Prisma, type LeadOcrResult } from "@prisma/client";
 import { z } from "zod";
 
 import { jsonError, jsonOk } from "@/lib/api";
@@ -25,6 +26,11 @@ function stableStringify(value: unknown): string {
 
 function sha256Hex(payload: unknown): string {
   return createHash("sha256").update(stableStringify(payload), "utf8").digest("hex");
+}
+
+function toJsonInput(v: unknown | undefined | null): Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput {
+  if (v === undefined || v === null) return Prisma.DbNull;
+  return v as Prisma.InputJsonValue;
 }
 
 const OcrModeQuerySchema = z
@@ -61,7 +67,7 @@ const PutOcrBodySchema = z.object({
   resultHash: z.string().trim().min(1).optional(),
 });
 
-function toOcrApiShape(r: any) {
+function toOcrApiShape(r: LeadOcrResult) {
   return {
     id: r.id,
     leadId: r.leadId,
@@ -180,7 +186,6 @@ export async function PUT(req: Request, ctx: { params: { attachmentId: string } 
       );
     }
 
-    // True idempotency hit: return existing without writing
     if (existing?.resultHash && existing.resultHash === computedHash) {
       return jsonOk(req, { ocr: toOcrApiShape(existing), idempotency: "HIT" });
     }
@@ -208,8 +213,8 @@ export async function PUT(req: Request, ctx: { params: { attachmentId: string } 
         languageHint: body.languageHint,
 
         rawText: body.rawText,
-        blocksJson: (body.blocksJson ?? null) as any,
-        parsedContactJson: (body.parsedContact ?? null) as any,
+        blocksJson: toJsonInput(body.blocksJson),
+        parsedContactJson: toJsonInput(body.parsedContact ?? null),
         confidence: body.confidence ?? null,
 
         resultHash: computedHash,
@@ -218,15 +223,15 @@ export async function PUT(req: Request, ctx: { params: { attachmentId: string } 
         errorMessage: null,
       },
       update: {
-        // do not overwrite admin corrections (corrected*) on update
+        // IMPORTANT: do not overwrite correctedContactJson/correctedAt/correctedByUserId
         status: "COMPLETED",
         engine: "MLKIT",
         engineVersion: body.engineVersion,
         languageHint: body.languageHint,
 
         rawText: body.rawText,
-        blocksJson: (body.blocksJson ?? null) as any,
-        parsedContactJson: (body.parsedContact ?? null) as any,
+        blocksJson: toJsonInput(body.blocksJson),
+        parsedContactJson: toJsonInput(body.parsedContact ?? null),
         confidence: body.confidence ?? null,
 
         resultHash: computedHash,

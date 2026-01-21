@@ -1,3 +1,4 @@
+import { type Lead } from "@prisma/client";
 import { z } from "zod";
 
 import { jsonError, jsonOk } from "@/lib/api";
@@ -27,10 +28,26 @@ type Contact = {
   country?: string;
 };
 
+type LeadContactRow = Pick<
+  Lead,
+  | "contactFirstName"
+  | "contactLastName"
+  | "contactEmail"
+  | "contactPhone"
+  | "contactMobile"
+  | "contactCompany"
+  | "contactTitle"
+  | "contactWebsite"
+  | "contactStreet"
+  | "contactZip"
+  | "contactCity"
+  | "contactCountry"
+>;
+
 function normalizeContact(v: unknown): Contact | null {
   if (!v || typeof v !== "object") return null;
   const o = v as Record<string, unknown>;
-  const get = (k: keyof Contact) => (typeof o[k] === "string" && o[k]!.trim().length > 0 ? String(o[k]).trim() : undefined);
+  const get = (k: keyof Contact) => (typeof o[k] === "string" && String(o[k]).trim().length > 0 ? String(o[k]).trim() : undefined);
   return {
     firstName: get("firstName"),
     lastName: get("lastName"),
@@ -47,8 +64,8 @@ function normalizeContact(v: unknown): Contact | null {
   };
 }
 
-function contactEquals(a: any, b: any): boolean {
-  const keys = [
+function contactEquals(a: LeadContactRow, b: LeadContactRow): boolean {
+  const keys: (keyof LeadContactRow)[] = [
     "contactFirstName",
     "contactLastName",
     "contactEmail",
@@ -61,7 +78,7 @@ function contactEquals(a: any, b: any): boolean {
     "contactZip",
     "contactCity",
     "contactCountry",
-  ] as const;
+  ];
   return keys.every((k) => (a[k] ?? null) === (b[k] ?? null));
 }
 
@@ -117,7 +134,7 @@ export async function POST(req: Request, ctx: { params: { leadId: string } }) {
       throw httpError(409, "OCR_EMPTY_CONTACT", "OCR result contains no usable contact fields.");
     }
 
-    const next = {
+    const next: LeadContactRow = {
       contactFirstName: chosen.firstName ?? null,
       contactLastName: chosen.lastName ?? null,
       contactEmail: chosen.email ?? null,
@@ -133,7 +150,6 @@ export async function POST(req: Request, ctx: { params: { leadId: string } }) {
     };
 
     const applied = !contactEquals(lead, next);
-
     const now = new Date();
 
     const updated = applied
