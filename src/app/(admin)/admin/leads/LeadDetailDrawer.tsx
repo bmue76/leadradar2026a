@@ -424,21 +424,24 @@ export default function LeadDetailDrawer(props: {
 
   useEffect(() => {
     if (!open) return;
-    // Load OCR when lead is loaded (if we have an attachment that could be OCR’d)
     if (!leadId) return;
     if (!lead) return;
 
     const fallback = businessCardAttachment;
     if (!fallback) {
-      setOcrPanel({ attachment: null, ocr: null });
-      setOcrState("idle");
-      return;
+      const t = setTimeout(() => {
+        setTimeout(() => {
+        setOcrPanel({ attachment: null, ocr: null });
+        setOcrState("idle");
+      }, 0);
+      }, 0);
+      return () => clearTimeout(t);
     }
 
     void loadOcr(fallback);
   }, [open, leadId, lead, businessCardAttachment, loadOcr]);
 
-  const doDelete = useCallback(async () => {
+const doDelete = useCallback(async () => {
     if (!leadId) return;
     const ok = window.confirm("Soft-delete this lead? (You can restore only if restore is enabled.)");
     if (!ok) return;

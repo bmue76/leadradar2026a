@@ -1,4 +1,4 @@
-import { Prisma, type Lead, type LeadAttachment, type LeadOcrResult } from "@prisma/client";
+import { Prisma, type Lead, type LeadOcrResult } from "@prisma/client";
 import { z } from "zod";
 
 import { jsonError, jsonOk } from "@/lib/api";
@@ -157,7 +157,8 @@ export async function GET(req: Request, ctx: { params: { leadId: string } }) {
 
     if (!lead) return jsonError(req, 404, "NOT_FOUND", "Not found.");
 
-    const attachmentIds = lead.attachments.map((a: LeadAttachment) => a.id);
+    // IMPORTANT: lead.attachments is a select shape (not full LeadAttachment model)
+    const attachmentIds = lead.attachments.map((a) => a.id);
 
     const ocrResults =
       attachmentIds.length === 0
