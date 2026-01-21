@@ -423,7 +423,6 @@ async function main() {
 
   for (const c of checks) {
     try {
-      // eslint-disable-next-line no-await-in-loop
       await mainForTenant(c);
     } catch (e) {
       console.error(`❌ [${c.label}] mobile smoke FAILED:`, e?.message || e);

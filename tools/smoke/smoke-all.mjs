@@ -22,7 +22,7 @@ function runOnWindows(scriptName) {
     const child = spawn(comspec, ["/d", "/s", "/c", cmdLine], {
       stdio: "inherit",
       shell: false,
-      windowsHide: true
+      windowsHide: true,
     });
 
     child.on("error", (err) => reject(err));
@@ -34,7 +34,7 @@ function runOnPosix(scriptName) {
   return new Promise((resolve, reject) => {
     const child = spawn("npm", ["run", scriptName], {
       stdio: "inherit",
-      shell: false
+      shell: false,
     });
 
     child.on("error", (err) => reject(err));
@@ -48,12 +48,12 @@ async function runStep(scriptName) {
       return await runOnWindows(scriptName);
     }
     return await runOnPosix(scriptName);
-  } catch (e) {
+  } catch {
     // Last-resort fallback: shell=true
     return await new Promise((resolve) => {
       const child = spawn(`npm run ${scriptName}`, {
         stdio: "inherit",
-        shell: true
+        shell: true,
       });
       child.on("close", (code) => resolve(typeof code === "number" ? code : 1));
     });
