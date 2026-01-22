@@ -82,12 +82,12 @@ function contactEquals(a: LeadContactRow, b: LeadContactRow): boolean {
   return keys.every((k) => (a[k] ?? null) === (b[k] ?? null));
 }
 
-export async function POST(req: Request, ctx: { params: { leadId: string } }) {
+export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const admin = await requireAdminAuth(req);
     const tenantId = admin.tenantId;
 
-    const leadId = ctx.params.leadId;
+    const { id: leadId } = await ctx.params;
     const body = await validateBody(req, ApplyOcrBodySchema, 64 * 1024);
 
     const lead = await prisma.lead.findFirst({

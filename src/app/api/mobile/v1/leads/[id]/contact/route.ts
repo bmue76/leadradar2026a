@@ -45,14 +45,14 @@ async function updateMobileTelemetry(auth: { apiKeyId: string; deviceId: string 
   await prisma.mobileDevice.update({ where: { id: auth.deviceId }, data: { lastSeenAt: now } });
 }
 
-export async function PATCH(req: Request, ctx: { params: { leadId: string } }) {
+export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireMobileAuth(req);
     enforceRateLimit(`mobile:${auth.apiKeyId}:contact_patch`, { limit: 60, windowMs: 60_000 });
 
     await updateMobileTelemetry(auth);
 
-    const leadId = ctx.params.leadId;
+    const { id: leadId } = await ctx.params;
     const body = await validateBody(req, ApplyContactBodySchema, 256 * 1024);
 
     const lead = await prisma.lead.findFirst({

@@ -109,11 +109,11 @@ function getAdminUserId(admin: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
 
-export async function GET(req: Request, ctx: { params: { leadId: string } }) {
+export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const admin = await requireAdminAuth(req);
     const tenantId = admin.tenantId;
-    const leadId = ctx.params.leadId;
+    const { id: leadId } = await ctx.params;
 
     const lead = await prisma.lead.findFirst({
       where: { id: leadId, tenantId },
@@ -189,13 +189,13 @@ export async function GET(req: Request, ctx: { params: { leadId: string } }) {
   }
 }
 
-export async function PATCH(req: Request, ctx: { params: { leadId: string } }) {
+export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const admin = await requireAdminAuth(req);
     const tenantId = admin.tenantId;
     const adminUserId = getAdminUserId(admin);
 
-    const leadId = ctx.params.leadId;
+    const { id: leadId } = await ctx.params;
     const body = await validateBody(req, CorrectOcrBodySchema, 256 * 1024);
 
     const lead = await prisma.lead.findFirst({
