@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Prisma, type LeadOcrResult } from "@prisma/client";
 import { z } from "zod";
+import { NextRequest } from "next/server";
 
 import { jsonError, jsonOk } from "@/lib/api";
 import { enforceRateLimit } from "@/lib/rateLimit";
@@ -99,7 +100,7 @@ async function updateMobileTelemetry(auth: { apiKeyId: string; deviceId: string 
   await prisma.mobileDevice.update({ where: { id: auth.deviceId }, data: { lastSeenAt: now } });
 }
 
-export async function GET(req: Request, ctx: { params: Promise<{ attachmentId: string }> }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ attachmentId: string }> }) {
   try {
     const auth = await requireMobileAuth(req);
     enforceRateLimit(`mobile:${auth.apiKeyId}:ocr_get`, { limit: 120, windowMs: 60_000 });
@@ -135,113 +136,124 @@ export async function GET(req: Request, ctx: { params: Promise<{ attachmentId: s
   }
 }
 
-export async function PUT(req: Request, ctx: { params: Promise<{ attachmentId: string }> }) {
-  try {
-    const auth = await requireMobileAuth(req);
-    enforceRateLimit(`mobile:${auth.apiKeyId}:ocr_put`, { limit: 60, windowMs: 60_000 });
+async function upsertOcr(req: NextRequest, ctx: { params: Promise<{ attachmentId: string }> }, rlKey: "post" | "put") {
+  const auth = await requireMobileAuth(req);
+  enforceRateLimit(`mobile:${auth.apiKeyId}:ocr_${rlKey}`, { limit: 60, windowMs: 60_000 });
 
-    await updateMobileTelemetry(auth);
+  await updateMobileTelemetry(auth);
 
-    const query = await validateQuery(req, OcrModeQuerySchema);
-    const body = await validateBody(req, PutOcrBodySchema, 2 * 1024 * 1024);
-    const attachmentId = (await ctx.params).attachmentId;
+  const query = await validateQuery(req, OcrModeQuerySchema);
+  const body = await validateBody(req, PutOcrBodySchema, 2 * 1024 * 1024);
+  const attachmentId = (await ctx.params).attachmentId;
 
-    const attachment = await prisma.leadAttachment.findFirst({
-      where: { id: attachmentId, tenantId: auth.tenantId },
-      select: { id: true, type: true, leadId: true },
-    });
-    if (!attachment) return jsonError(req, 404, "NOT_FOUND", "Not found.");
-    if (attachment.type !== "BUSINESS_CARD_IMAGE") {
-      return jsonError(req, 409, "INVALID_ATTACHMENT_TYPE", "Attachment is not a business card image.");
-    }
+  const attachment = await prisma.leadAttachment.findFirst({
+    where: { id: attachmentId, tenantId: auth.tenantId },
+    select: { id: true, type: true, leadId: true },
+  });
+  if (!attachment) return jsonError(req, 404, "NOT_FOUND", "Not found.");
+  if (attachment.type !== "BUSINESS_CARD_IMAGE") {
+    return jsonError(req, 409, "INVALID_ATTACHMENT_TYPE", "Attachment is not a business card image.");
+  }
 
-    const computedHash =
-      body.resultHash ??
-      sha256Hex({
-        mode: query.mode,
-        engine: body.engine ?? "MLKIT",
-        engineVersion: body.engineVersion ?? null,
-        languageHint: body.languageHint ?? null,
-        rawText: body.rawText,
-        blocksJson: body.blocksJson ?? null,
-        parsedContact: body.parsedContact ?? null,
-        confidence: body.confidence ?? null,
-      });
-
-    const existing = await prisma.leadOcrResult.findUnique({
-      where: {
-        tenantId_attachmentId_mode: {
-          tenantId: auth.tenantId,
-          attachmentId,
-          mode: query.mode,
-        },
-      },
+  const computedHash =
+    body.resultHash ??
+    sha256Hex({
+      mode: query.mode,
+      engine: body.engine ?? "MLKIT",
+      engineVersion: body.engineVersion ?? null,
+      languageHint: body.languageHint ?? null,
+      rawText: body.rawText,
+      blocksJson: body.blocksJson ?? null,
+      parsedContact: body.parsedContact ?? null,
+      confidence: body.confidence ?? null,
     });
 
-    if (existing?.resultHash && existing.resultHash !== computedHash) {
-      throw httpError(
-        409,
-        "OCR_IDEMPOTENCY_CONFLICT",
-        "OCR result already exists for this attachment/mode with different content."
-      );
-    }
-
-    if (existing?.resultHash && existing.resultHash === computedHash) {
-      return jsonOk(req, { ocr: toOcrApiShape(existing), idempotency: "HIT" });
-    }
-
-    const now = new Date();
-
-    const ocr = await prisma.leadOcrResult.upsert({
-      where: {
-        tenantId_attachmentId_mode: {
-          tenantId: auth.tenantId,
-          attachmentId,
-          mode: query.mode,
-        },
-      },
-      create: {
+  const existing = await prisma.leadOcrResult.findUnique({
+    where: {
+      tenantId_attachmentId_mode: {
         tenantId: auth.tenantId,
-        leadId: attachment.leadId,
         attachmentId,
-        kind: "BUSINESS_CARD",
-
         mode: query.mode,
-        status: "COMPLETED",
-        engine: "MLKIT",
-        engineVersion: body.engineVersion,
-        languageHint: body.languageHint,
-
-        rawText: body.rawText,
-        blocksJson: toJsonInput(body.blocksJson),
-        parsedContactJson: toJsonInput(body.parsedContact ?? null),
-        confidence: body.confidence ?? null,
-
-        resultHash: computedHash,
-        completedAt: now,
-        errorCode: null,
-        errorMessage: null,
       },
-      update: {
-        // IMPORTANT: do not overwrite correctedContactJson/correctedAt/correctedByUserId
-        status: "COMPLETED",
-        engine: "MLKIT",
-        engineVersion: body.engineVersion,
-        languageHint: body.languageHint,
+    },
+  });
 
-        rawText: body.rawText,
-        blocksJson: toJsonInput(body.blocksJson),
-        parsedContactJson: toJsonInput(body.parsedContact ?? null),
-        confidence: body.confidence ?? null,
+  if (existing?.resultHash && existing.resultHash !== computedHash) {
+    throw httpError(409, "OCR_IDEMPOTENCY_CONFLICT", "OCR result already exists for this attachment/mode with different content.");
+  }
 
-        resultHash: computedHash,
-        completedAt: now,
-        errorCode: null,
-        errorMessage: null,
+  if (existing?.resultHash && existing.resultHash === computedHash) {
+    return jsonOk(req, { ocr: toOcrApiShape(existing), idempotency: "HIT" });
+  }
+
+  const now = new Date();
+
+  const ocr = await prisma.leadOcrResult.upsert({
+    where: {
+      tenantId_attachmentId_mode: {
+        tenantId: auth.tenantId,
+        attachmentId,
+        mode: query.mode,
       },
-    });
+    },
+    create: {
+      tenantId: auth.tenantId,
+      leadId: attachment.leadId,
+      attachmentId,
+      kind: "BUSINESS_CARD",
 
-    return jsonOk(req, { ocr: toOcrApiShape(ocr), idempotency: "MISS" });
+      mode: query.mode,
+      status: "COMPLETED",
+      engine: "MLKIT",
+      engineVersion: body.engineVersion,
+      languageHint: body.languageHint,
+
+      rawText: body.rawText,
+      blocksJson: toJsonInput(body.blocksJson),
+      parsedContactJson: toJsonInput(body.parsedContact ?? null),
+      confidence: body.confidence ?? null,
+
+      resultHash: computedHash,
+      completedAt: now,
+      errorCode: null,
+      errorMessage: null,
+    },
+    update: {
+      // IMPORTANT: do not overwrite correctedContactJson/correctedAt/correctedByUserId
+      status: "COMPLETED",
+      engine: "MLKIT",
+      engineVersion: body.engineVersion,
+      languageHint: body.languageHint,
+
+      rawText: body.rawText,
+      blocksJson: toJsonInput(body.blocksJson),
+      parsedContactJson: toJsonInput(body.parsedContact ?? null),
+      confidence: body.confidence ?? null,
+
+      resultHash: computedHash,
+      completedAt: now,
+      errorCode: null,
+      errorMessage: null,
+    },
+  });
+
+  return jsonOk(req, { ocr: toOcrApiShape(ocr), idempotency: "MISS" });
+}
+
+// ✅ App nutzt POST → daher ist POST der “erste” Handler
+export async function POST(req: NextRequest, ctx: { params: Promise<{ attachmentId: string }> }) {
+  try {
+    return await upsertOcr(req, ctx, "post");
+  } catch (e) {
+    if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
+    return jsonError(req, 500, "INTERNAL", "Unexpected error.");
+  }
+}
+
+// 🧩 Backward compat (falls irgendwo noch PUT verwendet wird)
+export async function PUT(req: NextRequest, ctx: { params: Promise<{ attachmentId: string }> }) {
+  try {
+    return await upsertOcr(req, ctx, "put");
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     return jsonError(req, 500, "INTERNAL", "Unexpected error.");
