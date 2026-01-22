@@ -35,11 +35,19 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icon.png",
         "backgroundColor": "#ffffff"
-      }
+      },
+      "permissions": [
+        "CAMERA"
+      ]
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "ch.leadradar.mobile"
+      "bundleIdentifier": "ch.leadradar.mobile",
+      "infoPlist": {
+        "NSCameraUsageDescription": "LeadRadar benötigt die Kamera, um Visitenkarten zu scannen.",
+        "NSPhotoLibraryUsageDescription": "LeadRadar benötigt Zugriff auf Fotos, um eine Visitenkarte auszuwählen.",
+        "NSPhotoLibraryAddUsageDescription": "LeadRadar speichert das Foto temporär, um OCR auszuführen."
+      }
     },
     "web": {
       "favicon": "./assets/images/favicon.png"

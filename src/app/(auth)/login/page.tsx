@@ -1,10 +1,11 @@
+// src/app/(auth)/login/page.tsx
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { Suspense, useMemo, useState } from "react";
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 
-export default function LoginPage() {
+function LoginInner() {
   const sp = useSearchParams();
   const nextPath = sp.get("next") || "/admin";
 
@@ -84,5 +85,13 @@ export default function LoginPage() {
         ) : null}
       </form>
     </main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div />}>
+      <LoginInner />
+    </Suspense>
   );
 }

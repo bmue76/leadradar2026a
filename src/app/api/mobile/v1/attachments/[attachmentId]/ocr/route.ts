@@ -99,7 +99,7 @@ async function updateMobileTelemetry(auth: { apiKeyId: string; deviceId: string 
   await prisma.mobileDevice.update({ where: { id: auth.deviceId }, data: { lastSeenAt: now } });
 }
 
-export async function GET(req: Request, ctx: { params: { attachmentId: string } }) {
+export async function GET(req: Request, ctx: { params: Promise<{ attachmentId: string }> }) {
   try {
     const auth = await requireMobileAuth(req);
     enforceRateLimit(`mobile:${auth.apiKeyId}:ocr_get`, { limit: 120, windowMs: 60_000 });
@@ -107,7 +107,7 @@ export async function GET(req: Request, ctx: { params: { attachmentId: string } 
     await updateMobileTelemetry(auth);
 
     const query = await validateQuery(req, OcrModeQuerySchema);
-    const attachmentId = ctx.params.attachmentId;
+    const attachmentId = (await ctx.params).attachmentId;
 
     const attachment = await prisma.leadAttachment.findFirst({
       where: { id: attachmentId, tenantId: auth.tenantId },
@@ -135,7 +135,7 @@ export async function GET(req: Request, ctx: { params: { attachmentId: string } 
   }
 }
 
-export async function PUT(req: Request, ctx: { params: { attachmentId: string } }) {
+export async function PUT(req: Request, ctx: { params: Promise<{ attachmentId: string }> }) {
   try {
     const auth = await requireMobileAuth(req);
     enforceRateLimit(`mobile:${auth.apiKeyId}:ocr_put`, { limit: 60, windowMs: 60_000 });
@@ -144,7 +144,7 @@ export async function PUT(req: Request, ctx: { params: { attachmentId: string } 
 
     const query = await validateQuery(req, OcrModeQuerySchema);
     const body = await validateBody(req, PutOcrBodySchema, 2 * 1024 * 1024);
-    const attachmentId = ctx.params.attachmentId;
+    const attachmentId = (await ctx.params).attachmentId;
 
     const attachment = await prisma.leadAttachment.findFirst({
       where: { id: attachmentId, tenantId: auth.tenantId },
