@@ -1,10 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
+import { Image } from "expo-image";
+import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
 
-import { apiFetch } from "../../src/lib/api";
+import { apiFetch, createLead, patchLeadContact, storeAttachmentOcrResult, uploadLeadAttachment } from "../../src/lib/api";
 import { clearApiKey, getApiKey } from "../../src/lib/auth";
 import { uuidV4 } from "../../src/lib/uuid";
+
+import { recognizeTextFromBusinessCard } from "../../src/ocr/recognizeText";
+import { parseBusinessCard } from "../../src/ocr/parseBusinessCard";
+import type { ContactSuggestions } from "../../src/ocr/types";
 
 type JsonObject = Record<string, unknown>;
 
@@ -15,7 +22,6 @@ function isObject(v: unknown): v is JsonObject {
 function asString(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
-
 
 function asNumber(v: unknown): number | undefined {
   return typeof v === "number" ? v : undefined;
@@ -55,10 +61,6 @@ function normalizeFieldType(v: unknown): FieldType {
 }
 
 function parseOptions(v: unknown): FieldOption[] {
-  // Accept shapes:
-  // - [{label, value}]
-  // - ["A","B"]
-  // - { items: [...] }
   const raw = isObject(v) && Array.isArray(v.items) ? v.items : v;
 
   if (Array.isArray(raw)) {
@@ -101,11 +103,6 @@ function parseField(v: unknown): FormField | null {
 }
 
 function parseFormDetail(payload: unknown): { form: FormDetail; fields: FormField[] } | null {
-  // Accept shapes:
-  // A) { form: {...}, fields: [...] }
-  // B) { id, name/title, fields: [...] }
-  // C) { data: ... } already handled by apiFetch, but keep defensive
-
   if (!isObject(payload)) return null;
 
   const formObj = isObject(payload.form) ? payload.form : payload;
@@ -157,16 +154,103 @@ function labelForForm(f: FormDetail): string {
   return (f.name || f.title || f.id).toString();
 }
 
+function norm(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function pickFieldKey(fields: FormField[], aliases: string[]): string | null {
+  const aliasNorm = aliases.map(norm);
+
+  for (const f of fields) {
+    const k = norm(f.key);
+    if (aliasNorm.includes(k)) return f.key;
+  }
+  for (const f of fields) {
+    const k = norm(f.key);
+    if (aliasNorm.some((a) => k.includes(a) || a.includes(k))) return f.key;
+  }
+  for (const f of fields) {
+    const l = norm(f.label);
+    if (aliasNorm.some((a) => l.includes(a))) return f.key;
+  }
+  return null;
+}
+
+function applyContactToValues(fields: FormField[], current: ValuesMap, s: ContactSuggestions): ValuesMap {
+  const next: ValuesMap = { ...current };
+
+  const map: Array<[keyof ContactSuggestions, string[]]> = [
+    ["contactFirstName", ["contactfirstname", "firstname", "vorname", "givenname"]],
+    ["contactLastName", ["contactlastname", "lastname", "nachname", "surname", "familyname"]],
+    ["contactCompany", ["contactcompany", "company", "firma", "unternehmen"]],
+    ["contactTitle", ["contacttitle", "title", "funktion", "position", "jobtitle"]],
+    ["contactEmail", ["contactemail", "email", "e-mail", "mail"]],
+    ["contactPhone", ["contactphone", "phone", "telefon", "tel", "fon", "direct"]],
+    ["contactMobile", ["contactmobile", "mobile", "mobil", "handy", "cell"]],
+    ["contactWebsite", ["contactwebsite", "website", "web", "homepage", "url"]],
+    ["contactStreet", ["contactstreet", "street", "strasse", "straße"]],
+    ["contactZip", ["contactzip", "zip", "plz", "postalcode"]],
+    ["contactCity", ["contactcity", "city", "ort", "stadt"]],
+    ["contactCountry", ["contactcountry", "country", "land"]],
+  ];
+
+  for (const [suggestKey, aliases] of map) {
+    const val = s[suggestKey];
+    if (!val || !val.trim()) continue;
+
+    const fieldKey = pickFieldKey(fields, aliases);
+    if (!fieldKey) continue;
+
+    // only write into text-like fields
+    next[fieldKey] = val.trim();
+  }
+
+  return next;
+}
+
+function smallHash(input: string): string {
+  // djb2-ish, deterministic
+  let h = 5381;
+  for (let i = 0; i < input.length; i++) {
+    h = ((h << 5) + h) ^ input.charCodeAt(i);
+  }
+  return `h${(h >>> 0).toString(16)}`;
+}
+
+function confirmAsync(title: string, message: string, confirmLabel: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    Alert.alert(title, message, [
+      { text: "Abbrechen", style: "cancel", onPress: () => resolve(false) },
+      { text: confirmLabel, style: "default", onPress: () => resolve(true) },
+    ]);
+  });
+}
+
 export default function CaptureScreen() {
   const params = useLocalSearchParams<{ id?: string }>();
   const formId = (params?.id ?? "").toString().trim();
 
   const [busy, setBusy] = useState(false);
   const [submitBusy, setSubmitBusy] = useState(false);
+  const [submitStage, setSubmitStage] = useState<string>("");
   const [errorText, setErrorText] = useState<string>("");
+
   const [form, setForm] = useState<FormDetail | null>(null);
   const [fields, setFields] = useState<FormField[]>([]);
   const [values, setValues] = useState<ValuesMap>({});
+
+  // OCR / business card state
+  const [cardUri, setCardUri] = useState<string>("");
+  const [cardMime, setCardMime] = useState<string>("image/jpeg");
+  const [cardName, setCardName] = useState<string>("business-card.jpg");
+
+  const [ocrBusy, setOcrBusy] = useState(false);
+  const [ocrError, setOcrError] = useState<string>("");
+  const [ocrRawText, setOcrRawText] = useState<string>("");
+  const [ocrBlocks, setOcrBlocks] = useState<unknown>(null);
+  const [contactDraft, setContactDraft] = useState<ContactSuggestions>({});
+  const [contactApplied, setContactApplied] = useState(false);
+  const [rawExpanded, setRawExpanded] = useState(false);
 
   const title = useMemo(() => (form ? labelForForm(form) : "Lead erfassen"), [form]);
 
@@ -178,6 +262,15 @@ export default function CaptureScreen() {
       else next[f.key] = "";
     }
     setValues(next);
+
+    // reset OCR state for the next lead
+    setCardUri("");
+    setOcrError("");
+    setOcrRawText("");
+    setOcrBlocks(null);
+    setContactDraft({});
+    setContactApplied(false);
+    setRawExpanded(false);
   }, [fields]);
 
   const requireKeyOrRedirect = useCallback(async (): Promise<string | null> => {
@@ -232,7 +325,6 @@ export default function CaptureScreen() {
       setForm(parsed.form);
       setFields(parsed.fields);
 
-      // init values once fields are known
       const next: ValuesMap = {};
       for (const f of parsed.fields) {
         if (f.type === "CHECKBOX") next[f.key] = false;
@@ -264,6 +356,72 @@ export default function CaptureScreen() {
     });
   }, []);
 
+  const scanBusinessCard = useCallback(async () => {
+    setOcrError("");
+
+    if (Platform.OS === "web") {
+      Alert.alert("Nicht verfügbar", "Visitenkarten-Scan ist auf Web nicht verfügbar.");
+      return;
+    }
+
+    setOcrBusy(true);
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert("Kamera benötigt", "Bitte erlaube den Zugriff auf die Kamera, um Visitenkarten zu scannen.");
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        quality: 1,
+        allowsEditing: false,
+        base64: false,
+      });
+
+      if (result.canceled || !result.assets?.length) return;
+
+      const asset = result.assets[0];
+      const uri = asset.uri;
+      if (!uri) return;
+
+      // resize/compress
+      const manipulated = await ImageManipulator.manipulateAsync(
+        uri,
+        [{ resize: { width: 1600 } }],
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+      );
+
+      const fileUri = manipulated.uri;
+      const fileName = `business-card-${Date.now()}.jpg`;
+
+      const ocr = await recognizeTextFromBusinessCard({ imagePath: fileUri });
+      const parsed = parseBusinessCard({ rawText: ocr.rawText, blocks: ocr.blocks });
+
+      setCardUri(fileUri);
+      setCardMime("image/jpeg");
+      setCardName(fileName);
+
+      setOcrRawText(ocr.rawText || "");
+      setOcrBlocks(ocr.blocks || null);
+
+      setContactDraft(parsed.suggestions || {});
+      setContactApplied(false);
+      setRawExpanded(false);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "OCR fehlgeschlagen.";
+      setOcrError(msg);
+    } finally {
+      setOcrBusy(false);
+    }
+  }, []);
+
+  const applyContact = useCallback(() => {
+    const next = applyContactToValues(fields, values, contactDraft);
+    setValues(next);
+    setContactApplied(true);
+    Alert.alert("Übernommen", "Kontaktvorschläge wurden in das Formular übernommen.");
+  }, [contactDraft, fields, values]);
+
   const onSubmit = useCallback(async () => {
     setErrorText("");
 
@@ -284,11 +442,22 @@ export default function CaptureScreen() {
       return;
     }
 
+    if (cardUri && !contactApplied) {
+      const ok = await confirmAsync(
+        "Kontakt noch nicht übernommen",
+        "Du hast eine Visitenkarte gescannt, aber die Kontaktfelder noch nicht übernommen. Trotzdem senden?",
+        "Trotzdem senden"
+      );
+      if (!ok) return;
+    }
+
     setSubmitBusy(true);
+    setSubmitStage("Lead");
     try {
       const key = await requireKeyOrRedirect();
       if (!key) return;
 
+      // 1) create lead
       const payload = {
         clientLeadId: uuidV4(),
         formId,
@@ -296,27 +465,138 @@ export default function CaptureScreen() {
         values,
       };
 
-      const res = await apiFetch<unknown>({
-        method: "POST",
-        path: "/api/mobile/v1/leads",
-        apiKey: key,
-        body: payload,
-      });
-
-      if (!res.ok) {
-        if (res.status === 401) {
-          await handleUnauthorized(res.traceId);
+      const leadRes = await createLead({ apiKey: key, payload });
+      if (!leadRes.ok) {
+        if (leadRes.status === 401) {
+          await handleUnauthorized(leadRes.traceId);
           return;
         }
-        Alert.alert("Fehler", `Lead konnte nicht gesendet werden.\n${res.message}${res.traceId ? `\ntraceId: ${res.traceId}` : ""}`);
+        Alert.alert("Fehler", `Lead konnte nicht gesendet werden.\n${leadRes.message}${leadRes.traceId ? `\ntraceId: ${leadRes.traceId}` : ""}`);
         return;
       }
 
+      const leadId = leadRes.data.leadId;
+
+      // 2) attachment + OCR + contact patch (only if we have a card)
+      if (cardUri) {
+        setSubmitStage("Attachment");
+
+        const attRes = await uploadLeadAttachment({
+          apiKey: key,
+          leadId,
+          fileUri: cardUri,
+          mimeType: cardMime,
+          fileName: cardName,
+        });
+
+        if (!attRes.ok) {
+          if (attRes.status === 401) {
+            await handleUnauthorized(attRes.traceId);
+            return;
+          }
+          Alert.alert("Fehler", `Attachment Upload fehlgeschlagen.\n${attRes.message}${attRes.traceId ? `\ntraceId: ${attRes.traceId}` : ""}`);
+          return;
+        }
+
+        const attachmentId = attRes.data.attachmentId;
+
+        setSubmitStage("OCR");
+
+        const resultHash = smallHash((ocrRawText || "") + "|" + JSON.stringify(contactDraft || {}));
+
+        const ocrStoreRes = await storeAttachmentOcrResult({
+          apiKey: key,
+          attachmentId,
+          payload: {
+            engine: "MLKIT",
+            engineVersion: "@infinitered/react-native-mlkit-text-recognition@5.x",
+            mode: "PHOTO",
+            resultHash,
+            rawText: ocrRawText || "",
+            blocksJson: ocrBlocks || null,
+            suggestions: contactDraft || {},
+          },
+        });
+
+        if (!ocrStoreRes.ok) {
+          if (ocrStoreRes.status === 401) {
+            await handleUnauthorized(ocrStoreRes.traceId);
+            return;
+          }
+          Alert.alert("Fehler", `OCR speichern fehlgeschlagen.\n${ocrStoreRes.message}${ocrStoreRes.traceId ? `\ntraceId: ${ocrStoreRes.traceId}` : ""}`);
+          return;
+        }
+
+        const ocrResultId = ocrStoreRes.data.ocrResultId;
+
+        setSubmitStage("Kontakt");
+
+        const contactRes = await patchLeadContact({
+          apiKey: key,
+          leadId,
+          payload: {
+            contactSource: "OCR_MOBILE",
+            contactOcrResultId: ocrResultId,
+            ...contactDraft,
+          },
+        });
+
+        if (!contactRes.ok) {
+          if (contactRes.status === 401) {
+            await handleUnauthorized(contactRes.traceId);
+            return;
+          }
+          Alert.alert("Fehler", `Kontakt setzen fehlgeschlagen.\n${contactRes.message}${contactRes.traceId ? `\ntraceId: ${contactRes.traceId}` : ""}`);
+          return;
+        }
+      }
+
       Alert.alert("OK", "Lead gespeichert.");
+      resetValues();
     } finally {
       setSubmitBusy(false);
+      setSubmitStage("");
     }
-  }, [fields, formId, handleUnauthorized, requireKeyOrRedirect, values]);
+  }, [
+    cardMime,
+    cardName,
+    cardUri,
+    contactApplied,
+    contactDraft,
+    fields,
+    formId,
+    handleUnauthorized,
+    ocrBlocks,
+    ocrRawText,
+    requireKeyOrRedirect,
+    resetValues,
+    values,
+  ]);
+
+  const rawPreview = useMemo(() => {
+    const txt = (ocrRawText || "").trim();
+    if (!txt) return "";
+    const lines = txt.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+    if (rawExpanded) return lines.join("\n");
+    return lines.slice(0, 6).join("\n");
+  }, [ocrRawText, rawExpanded]);
+
+  const hasOcr = Boolean((ocrRawText || "").trim());
+
+  const contactInputs: Array<{ key: keyof ContactSuggestions; label: string; placeholder?: string }> = [
+    { key: "contactFirstName", label: "Vorname" },
+    { key: "contactLastName", label: "Nachname" },
+    { key: "contactCompany", label: "Firma" },
+    { key: "contactTitle", label: "Funktion" },
+    { key: "contactEmail", label: "E-Mail", placeholder: "name@firma.ch" },
+    { key: "contactPhone", label: "Telefon", placeholder: "+41 ..." },
+    { key: "contactMobile", label: "Mobile", placeholder: "+41 ..." },
+    { key: "contactWebsite", label: "Website", placeholder: "https://..." },
+    { key: "contactStreet", label: "Strasse" },
+    { key: "contactZip", label: "PLZ" },
+    { key: "contactCity", label: "Ort" },
+    { key: "contactCountry", label: "Land" },
+  ];
 
   return (
     <View style={{ flex: 1 }}>
@@ -348,6 +628,125 @@ export default function CaptureScreen() {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingTop: 0, gap: 12 }}>
+        {/* Business card scan section */}
+        <View style={{ padding: 12, borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", backgroundColor: "white", gap: 10 }}>
+          <Text style={{ fontWeight: "900" }}>Visitenkarte</Text>
+
+          {cardUri ? (
+            <View style={{ flexDirection: "row", gap: 12, alignItems: "center" }}>
+              <Image
+                alt=""
+                source={{ uri: cardUri }}
+                style={{ width: 70, height: 70, borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB" }}
+                contentFit="cover"
+              />
+              <View style={{ flex: 1, gap: 6 }}>
+                <Text style={{ fontWeight: "800" }}>Scan vorhanden</Text>
+                <Text style={{ opacity: 0.7, fontFamily: "monospace" }} numberOfLines={1}>{cardName}</Text>
+
+                <View style={{ flexDirection: "row", gap: 10 }}>
+                  <Pressable
+                    onPress={scanBusinessCard}
+                    disabled={ocrBusy || submitBusy}
+                    style={{ paddingVertical: 9, paddingHorizontal: 12, borderRadius: 12, backgroundColor: (ocrBusy || submitBusy) ? "#9CA3AF" : "#111827" }}
+                  >
+                    <Text style={{ color: "white", fontWeight: "900" }}>{ocrBusy ? "Scanne…" : "Neu scannen"}</Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => {
+                      setCardUri("");
+                      setOcrError("");
+                      setOcrRawText("");
+                      setOcrBlocks(null);
+                      setContactDraft({});
+                      setContactApplied(false);
+                      setRawExpanded(false);
+                    }}
+                    disabled={ocrBusy || submitBusy}
+                    style={{ paddingVertical: 9, paddingHorizontal: 12, borderRadius: 12, backgroundColor: "#F3F4F6" }}
+                  >
+                    <Text style={{ fontWeight: "900" }}>Entfernen</Text>
+                  </Pressable>
+                </View>
+              </View>
+            </View>
+          ) : (
+            <Pressable
+              onPress={scanBusinessCard}
+              disabled={ocrBusy || submitBusy}
+              style={{
+                paddingVertical: 12,
+                borderRadius: 12,
+                backgroundColor: (ocrBusy || submitBusy) ? "#9CA3AF" : "#111827",
+                alignItems: "center",
+              }}
+            >
+              <Text style={{ color: "white", fontWeight: "900" }}>{ocrBusy ? "Scanne…" : "Visitenkarte scannen"}</Text>
+            </Pressable>
+          )}
+
+          {ocrError ? (
+            <View style={{ padding: 10, borderRadius: 12, borderWidth: 1, borderColor: "#FCA5A5", backgroundColor: "#FEF2F2" }}>
+              <Text style={{ fontWeight: "900", color: "#991B1B" }}>OCR Fehler</Text>
+              <Text style={{ color: "#991B1B", marginTop: 6 }}>{ocrError}</Text>
+            </View>
+          ) : null}
+
+          {hasOcr ? (
+            <View style={{ gap: 10 }}>
+              <View style={{ padding: 10, borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", backgroundColor: "#FAFAFA" }}>
+                <Text style={{ fontWeight: "900", marginBottom: 6 }}>OCR Vorschau</Text>
+                <Text style={{ fontFamily: "monospace", opacity: 0.85, lineHeight: 18 }}>{rawPreview || "—"}</Text>
+                <Pressable onPress={() => setRawExpanded((p) => !p)} style={{ marginTop: 8 }}>
+                  <Text style={{ fontWeight: "900" }}>{rawExpanded ? "Weniger" : "Mehr"}</Text>
+                </Pressable>
+              </View>
+
+              <View style={{ gap: 8 }}>
+                <Text style={{ fontWeight: "900" }}>Kontaktvorschlag</Text>
+
+                {contactInputs.map((it) => (
+                  <View key={it.key} style={{ gap: 6 }}>
+                    <Text style={{ fontWeight: "800", opacity: 0.9 }}>{it.label}</Text>
+                    <TextInput
+                      value={(contactDraft[it.key] || "").toString()}
+                      onChangeText={(t) => setContactDraft((prev) => ({ ...prev, [it.key]: t }))}
+                      autoCapitalize={it.key === "contactEmail" || it.key === "contactWebsite" ? "none" : "words"}
+                      autoCorrect={false}
+                      keyboardType={it.key === "contactEmail" ? "email-address" : (it.key === "contactPhone" || it.key === "contactMobile") ? "phone-pad" : "default"}
+                      placeholder={it.placeholder || ""}
+                      style={{
+                        borderWidth: 1,
+                        borderColor: "#E5E7EB",
+                        borderRadius: 12,
+                        paddingHorizontal: 12,
+                        paddingVertical: 10,
+                        backgroundColor: "white",
+                      }}
+                    />
+                  </View>
+                ))}
+
+                <Pressable
+                  onPress={applyContact}
+                  disabled={submitBusy || ocrBusy}
+                  style={{
+                    paddingVertical: 12,
+                    borderRadius: 12,
+                    backgroundColor: (submitBusy || ocrBusy) ? "#9CA3AF" : (contactApplied ? "#111827" : "#111827"),
+                    alignItems: "center",
+                    marginTop: 4,
+                  }}
+                >
+                  <Text style={{ color: "white", fontWeight: "900" }}>{contactApplied ? "Übernommen ✓" : "Übernehmen"}</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+        </View>
+
+        {/* Dynamic form fields */}
         {fields.map((f) => {
           const v = values[f.key] ?? (f.type === "CHECKBOX" ? false : f.type === "MULTI_SELECT" ? [] : "");
 
@@ -473,7 +872,9 @@ export default function CaptureScreen() {
               alignItems: "center",
             }}
           >
-            <Text style={{ color: "white", fontWeight: "900" }}>{submitBusy ? "Sende…" : "Lead senden"}</Text>
+            <Text style={{ color: "white", fontWeight: "900" }}>
+              {submitBusy ? (submitStage ? `${submitStage}…` : "Sende…") : "Lead senden"}
+            </Text>
           </Pressable>
 
           <Pressable
