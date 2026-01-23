@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { NextRequest } from "next/server";
+import { LeadContactSource } from "@prisma/client";
 
 import { jsonError, jsonOk } from "@/lib/api";
 import { enforceRateLimit } from "@/lib/rateLimit";
@@ -12,15 +13,37 @@ export const runtime = "nodejs";
 const OptStr = z.preprocess((v) => {
   if (typeof v !== "string") return v;
   const t = v.trim();
-  return t ? t : undefined; // leere Strings → undefined
+  return t ? t : undefined; // leere Strings -> undefined
 }, z.string().min(1).optional());
+
+function normalizeContactSource(v: unknown): LeadContactSource | undefined {
+  if (typeof v !== "string") return undefined;
+  const t = v.trim();
+  if (!t) return undefined;
+
+  const allowed = new Set(Object.values(LeadContactSource) as string[]);
+  if (allowed.has(t)) return t as LeadContactSource;
+
+  // mobile alias
+  if (t === "QR_VCARD") {
+    // try a few common enum variants safely
+    for (const candidate of ["QR", "VCARD", "QR_CODE", "QRVCARD", "QR_VCARD"]) {
+      if (allowed.has(candidate)) return candidate as LeadContactSource;
+    }
+    // fallback: if MANUAL exists, map to it; otherwise omit field
+    if (allowed.has("MANUAL")) return "MANUAL" as LeadContactSource;
+    return undefined;
+  }
+
+  return undefined;
+}
 
 const ContactPatchBodySchema = z
   .object({
-    // meta
-    contactSource: z.enum(["OCR_MOBILE", "MANUAL", "QR_VCARD"]).optional(),
+    // meta (string, we normalize to prisma enum)
+    contactSource: OptStr,
 
-    // we ACCEPT this, but we do NOT write it to Lead (not a Lead column)
+    // accept but do NOT write to Lead (not a Lead column)
     contactOcrResultId: OptStr,
     ocrResultId: OptStr,
 
@@ -70,8 +93,10 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     const body = await validateBody(req, ContactPatchBodySchema, 128 * 1024);
     const leadId = (await ctx.params).id;
 
+    const contactSource = normalizeContactSource(body.contactSource);
+
     const data = {
-      contactSource: body.contactSource ?? undefined,
+      ...(contactSource ? { contactSource } : {}),
 
       contactFirstName: body.contactFirstName ?? body.firstName ?? undefined,
       contactLastName: body.contactLastName ?? body.lastName ?? undefined,
