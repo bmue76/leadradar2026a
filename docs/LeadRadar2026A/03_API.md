@@ -1,6 +1,6 @@
 # LeadRadar2026A – API (Admin/Mobile/Platform)
 
-Stand: 2026-01-13  
+Stand: 2026-01-23  
 Prinzipien: tenant-scoped, leak-safe (falscher Tenant/ID => 404), Standard Responses + traceId, Zod-only Validation.
 
 ---
@@ -39,6 +39,12 @@ Code kopieren
   "error": { "code": "SOME_CODE", "message": "Human readable", "details": {} },
   "traceId": "..."
 }
+Hinweis:
+
+traceId ist immer im Body enthalten, zusätzlich via Header x-trace-id.
+
+Leak-safety: falscher Tenant/ID => 404 NOT_FOUND (keine Info-Leaks).
+
 Error Codes (Guideline)
 INVALID_BODY / INVALID_QUERY (400) — Zod Validation
 
@@ -52,7 +58,7 @@ NOT_FOUND (404) — leak-safe bei falschem Tenant/ID oder unassigned Form
 
 INVALID_STATE (409) — Zustand erlaubt Aktion nicht
 
-EVENT_NOT_ACTIVE (409) — Device Binding darf nur auf ACTIVE Event zeigen (TP 3.7)
+EVENT_NOT_ACTIVE (409) — Device Binding darf nur auf ACTIVE Event zeigen (Guardrail)
 
 UNSUPPORTED_MEDIA_TYPE (415) — z.B. Attachment Upload mime nicht erlaubt
 
@@ -62,7 +68,7 @@ RATE_LIMITED (429) — best-effort Rate Limiting (Phase 1)
 
 INTERNAL (500) — unexpected
 
-Hinweis: Codes sind endpoint-spezifisch, aber Stabilität + keine Leaks sind Pflicht.
+Codes sind endpoint-spezifisch, aber Stabilität + keine Leaks sind Pflicht.
 
 Auth
 Admin Auth (Session)
@@ -106,11 +112,103 @@ Code kopieren
   "data": { "scope": "mobile", "status": "ok", "now": "2026-01-09T00:00:00.000Z" },
   "traceId": "..."
 }
-GET /api/mobile/v1/forms
+GET /api/mobile/v1/branding
 Auth: x-api-key erforderlich
-Semantik: liefert nur assigned + ACTIVE Forms für das Device
+Semantik:
+
+Liefert Tenant Branding für Mobile (MVP: Logo)
+
+Rückgabe ist bewusst Mobile-friendly: logoDataUrl (data:...;base64,...) damit RN Image stabil rendern kann (ohne Header-Auth/Fetch-Komplexität)
+
+Wenn Logo fehlt oder File im Storage nicht vorhanden: hasLogo=false und logoDataUrl=null
+
 Errors: 401, 429
 
+Response (200):
+
+json
+Code kopieren
+{
+  "ok": true,
+  "data": {
+    "branding": {
+      "hasLogo": true,
+      "logoMime": "image/png",
+      "logoSizeBytes": 12345,
+      "logoUpdatedAt": "2026-01-23T10:11:12.000Z"
+    },
+    "logoDataUrl": "data:image/png;base64,iVBORw0K..."
+  },
+  "traceId": "..."
+}
+Response (200) wenn kein Logo:
+
+json
+Code kopieren
+{
+  "ok": true,
+  "data": {
+    "branding": { "hasLogo": false },
+    "logoDataUrl": null
+  },
+  "traceId": "..."
+}
+GET /api/mobile/v1/events/active
+Auth: x-api-key erforderlich
+Semantik:
+
+Liefert das aktuell aktive Event (im Tenant-Kontext) oder null
+
+Mobile UX: Home Screen zeigt Warn-Card wenn activeEvent=null
+
+Errors: 401, 429
+
+Response (200):
+
+json
+Code kopieren
+{
+  "ok": true,
+  "data": {
+    "activeEvent": {
+      "id": "evt_...",
+      "name": "Swissbau 2026",
+      "startsAt": "2026-01-14T00:00:00.000Z",
+      "endsAt": "2026-01-18T00:00:00.000Z",
+      "location": "Basel"
+    }
+  },
+  "traceId": "..."
+}
+Response (200) wenn kein ACTIVE Event:
+
+json
+Code kopieren
+{
+  "ok": true,
+  "data": { "activeEvent": null },
+  "traceId": "..."
+}
+GET /api/mobile/v1/forms
+Auth: x-api-key erforderlich
+Semantik:
+
+Liefert nur assigned + ACTIVE Forms für das Device
+
+Errors: 401, 429
+
+Response (200):
+
+json
+Code kopieren
+{
+  "ok": true,
+  "data": [
+    { "id": "frm_1", "name": "Visitor Lead", "description": "Basic visitor lead", "status": "ACTIVE" },
+    { "id": "frm_2", "name": "Product Interest", "description": null, "status": "ACTIVE" }
+  ],
+  "traceId": "..."
+}
 GET /api/mobile/v1/forms/:id
 Auth: x-api-key erforderlich
 Semantik:
@@ -121,6 +219,62 @@ Fields sortiert (nach sortOrder)
 
 Errors: 401, 404, 429
 
+Response (200) (Beispiel, gekürzt):
+
+json
+Code kopieren
+{
+  "ok": true,
+  "data": {
+    "id": "frm_1",
+    "name": "Visitor Lead",
+    "fields": [
+      { "id": "fld_1", "type": "text", "key": "company", "label": "Firma", "required": false, "sortOrder": 10 }
+    ]
+  },
+  "traceId": "..."
+}
+GET /api/mobile/v1/stats/me?range=today&tzOffsetMinutes=<int>
+Auth: x-api-key erforderlich
+Semantik (MVP):
+
+range=today ist aktuell vorgesehen (weiteres später möglich)
+
+tzOffsetMinutes optional (z.B. -60), um “Today” sauber im Device-Zeitraum zu berechnen
+
+Default Scope:
+
+Wenn Device eine activeEventId gebunden hat: Stats beziehen sich auf dieses Event
+
+Sonst: tenant-wide “today”
+
+pendingAttachments (MVP Definition):
+
+Anzahl BUSINESS_CARD_IMAGE Attachments “heute”, bei denen OCR/Contact-Apply noch nicht abgeschlossen ist
+
+Stabil & pragmatisch (dokumentiert, kann später verfeinert werden)
+
+todayHourlyBuckets optional (nur wenn günstig/leicht verfügbar)
+
+Errors: 401, 429
+
+Response (200):
+
+json
+Code kopieren
+{
+  "ok": true,
+  "data": {
+    "leadsToday": 7,
+    "avgPerHour": 1.2,
+    "pendingAttachments": 3,
+    "todayHourlyBuckets": [
+      { "hour": 9, "count": 2 },
+      { "hour": 10, "count": 1 }
+    ]
+  },
+  "traceId": "..."
+}
 POST /api/mobile/v1/leads
 Auth: x-api-key erforderlich
 Semantik:
@@ -131,6 +285,18 @@ Idempotent via (tenantId, clientLeadId) → deduped: true bei Retry
 
 Errors: 400 INVALID_BODY, 401, 404, 429
 
+Response (200/201) (Beispiel):
+
+json
+Code kopieren
+{
+  "ok": true,
+  "data": {
+    "lead": { "id": "lead_...", "formId": "frm_1", "createdAt": "2026-01-23T10:15:00.000Z" },
+    "deduped": false
+  },
+  "traceId": "..."
+}
 Mobile API v1 — Lead Attachments (TP 3.5)
 POST /api/mobile/v1/leads/:id/attachments
 Auth: x-api-key erforderlich
@@ -170,12 +336,47 @@ invalid / expired / used / revoked => 401 INVALID_PROVISION_TOKEN (strict, leak-
 
 rate limited => 429 RATE_LIMITED
 
-success => erstellt MobileApiKey + MobileDevice + optional Assignments, markiert Token atomar als USED.
+success => erstellt MobileApiKey + MobileDevice + optional Assignments, markiert Token atomar als USED
 
 Admin API v1 (tenant-scoped)
+Tenants (Current) / Branding
+/api/admin/v1/tenants/current
+Semantik:
+
+Liefert Tenant-Metadaten (owner-only MVP)
+
+/api/admin/v1/tenants/current/logo
+Semantik:
+
+Tenant Logo wird im Branding Storage abgelegt (DEV: .tmp_branding/...)
+
+Kein Cropping/Resizing (MVP: passthrough)
+
+Allowed: PNG/JPG/WebP (Server allowlist)
+
+HEAD /api/admin/v1/tenants/current/logo
+200 wenn Logo vorhanden, 404 wenn nicht
+
+Sets ETag + Content-Type
+
+GET /api/admin/v1/tenants/current/logo
+Streamt das Logo (304 via If-None-Match möglich)
+
+POST /api/admin/v1/tenants/current/logo
+multipart/form-data mit file
+
+Errors: 400 INVALID_FILE_TYPE, 413 BODY_TOO_LARGE, 401, 404 (leak-safe mismatch via header override)
+
+DELETE /api/admin/v1/tenants/current/logo
+entfernt Logo + DB Felder
+
 Forms
 GET /api/admin/v1/forms
-Query: status=DRAFT|ACTIVE|ARCHIVED (optional), q (optional)
+Query:
+
+status=DRAFT|ACTIVE|ARCHIVED (optional)
+
+q (optional)
 
 Admin API v1 — Events (TP 3.3 + TP 3.7/3.8 Guardrails)
 GET /api/admin/v1/events
@@ -195,7 +396,15 @@ Code kopieren
   "ok": true,
   "data": {
     "items": [
-      { "id":"...", "name":"Swissbau 2026", "status":"ACTIVE", "startsAt":"...", "endsAt":"...", "createdAt":"...", "updatedAt":"..." }
+      {
+        "id": "evt_...",
+        "name": "Swissbau 2026",
+        "status": "ACTIVE",
+        "startsAt": "...",
+        "endsAt": "...",
+        "createdAt": "...",
+        "updatedAt": "..."
+      }
     ]
   },
   "traceId": "..."
@@ -209,13 +418,13 @@ Code kopieren
   "data": {
     "items": [
       {
-        "id":"...",
-        "name":"Swissbau 2026",
-        "status":"ACTIVE",
-        "startsAt":"...",
-        "endsAt":"...",
-        "createdAt":"...",
-        "updatedAt":"...",
+        "id": "evt_...",
+        "name": "Swissbau 2026",
+        "status": "ACTIVE",
+        "startsAt": "...",
+        "endsAt": "...",
+        "createdAt": "...",
+        "updatedAt": "...",
         "boundDevicesCount": 3
       }
     ]
@@ -227,15 +436,14 @@ boundDevicesCount = Anzahl MobileDevice mit activeEventId=<eventId> im selben Te
 GET /api/admin/v1/events/active
 Semantik:
 
-Defensive: sollte max 1 sein, nimmt bei Inkonsistenz das zuletzt aktualisierte ACTIVE Event.
+Defensive: sollte max 1 sein, nimmt bei Inkonsistenz das zuletzt aktualisierte ACTIVE Event
 
-Liefert item oder null.
+Liefert item oder null
 
-TP 3.9 UI Nutzung: Mobile Ops verwendet diesen Endpoint als Single Source of Truth für den aktiven Messekontext.
+UI Nutzung: Mobile Ops verwendet diesen Endpoint als Single Source of Truth für den aktiven Messekontext
 
-Wenn kein ACTIVE Event existiert: empfohlen 200 mit data.item = null.
-
-Falls Implementierung 404 NOT_FOUND liefert, behandelt die UI das non-breaking als “kein aktives Event”.
+Wenn kein ACTIVE Event existiert: empfohlen 200 mit data.item=null.
+Falls Implementierung 404 liefert, behandelt die UI das non-breaking als “kein aktives Event”.
 
 Response (200):
 
@@ -243,7 +451,9 @@ json
 Code kopieren
 {
   "ok": true,
-  "data": { "item": { "id":"...", "tenantId":"...", "name":"...", "status":"ACTIVE", "updatedAt":"..." } },
+  "data": {
+    "item": { "id": "evt_...", "tenantId": "...", "name": "...", "status": "ACTIVE", "updatedAt": "..." }
+  },
   "traceId": "..."
 }
 PATCH /api/admin/v1/events/:id/status
@@ -275,7 +485,7 @@ Code kopieren
 {
   "ok": true,
   "data": {
-    "item": { "id":"...", "name":"...", "status":"ACTIVE", "updatedAt":"..." },
+    "item": { "id": "evt_...", "name": "...", "status": "ACTIVE", "updatedAt": "..." },
     "autoArchivedEventId": "evt_...",
     "devicesUnboundCount": 2
   },
@@ -307,7 +517,6 @@ Code kopieren
   "traceId": "..."
 }
 Admin API v1 — Mobile Ops (TP 2.9 + TP 3.7)
-Devices
 PATCH /api/admin/v1/mobile/devices/:id
 Body:
 
@@ -329,5 +538,6 @@ optional ?inline=1 für image preview
 
 Exports (CSV) — TP 1.8 + TP 3.4 (event-aware)
 POST /api/admin/v1/exports/csv
-optional eventId, formId, date range
+Optional: eventId, formId, date range
 falscher Tenant/ID => 404 NOT_FOUND (leak-safe)
+
