@@ -1,22 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { ImageSourcePropType } from "react-native";
-import {
-  Alert,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-  Image,
-} from "react-native";
+import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, Image } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { apiFetch } from "../src/lib/api";
 import { BottomSheetModal } from "../src/ui/BottomSheetModal";
 
-// Fallback wenn Tenant kein Logo hat
 import BRAND_LOGO_FALLBACK from "../assets/images/icon.png";
 
 type ApiErrorShape = {
@@ -109,7 +99,6 @@ export default function HomeScreen() {
   const [forms, setForms] = useState<FormSummary[]>([]);
   const [stats, setStats] = useState<StatsMeResponse | null>(null);
 
-  // Tenant Logo (aus Backend)
   const [tenantLogoDataUrl, setTenantLogoDataUrl] = useState<string | null>(null);
 
   const [sheetOpen, setSheetOpen] = useState<boolean>(false);
@@ -117,31 +106,38 @@ export default function HomeScreen() {
 
   async function load() {
     setError(null);
+
     try {
-      const [evRaw, formsRaw, statsRaw, brandingRaw] = await Promise.all([
+      const [evRaw, formsRaw, statsRaw] = await Promise.all([
         apiFetch({ method: "GET", path: "/api/mobile/v1/events/active" }),
         apiFetch({ method: "GET", path: "/api/mobile/v1/forms" }),
         apiFetch({
           method: "GET",
           path: `/api/mobile/v1/stats/me?range=today&tzOffsetMinutes=${encodeURIComponent(String(tzOffsetMinutes))}`,
         }),
-        apiFetch({ method: "GET", path: "/api/mobile/v1/branding" }),
       ]);
 
       const ev = unwrapOk<EventsActiveResponse>(evRaw).activeEvent;
       const f = unwrapOk<FormSummary[]>(formsRaw);
       const s = unwrapOk<StatsMeResponse>(statsRaw);
-      const b = unwrapOk<BrandingResponse>(brandingRaw);
 
       setActiveEvent(ev ?? null);
       setForms(Array.isArray(f) ? f : []);
       setStats(s ?? null);
-      setTenantLogoDataUrl(b.logoDataUrl ?? null);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Unknown error.";
       setError(msg);
     } finally {
       setLoading(false);
+    }
+
+    // Branding ist “nice to have”: darf Home nicht failen
+    try {
+      const brandingRaw = await apiFetch({ method: "GET", path: "/api/mobile/v1/branding" });
+      const b = unwrapOk<BrandingResponse>(brandingRaw);
+      setTenantLogoDataUrl(b.logoDataUrl ?? null);
+    } catch {
+      setTenantLogoDataUrl(null);
     }
   }
 
@@ -196,12 +192,11 @@ export default function HomeScreen() {
     setSheetOpen(true);
   }
 
-  // Extra breathing room above TabBar + Android system nav
   const contentBottomPad = 32 + Math.max(insets.bottom, 0) + 120;
 
   const headerLogoSource: ImageSourcePropType = tenantLogoDataUrl
     ? { uri: tenantLogoDataUrl }
-    : (BRAND_LOGO_FALLBACK as ImageSourcePropType);
+    : (BRAND_LOGO_FALLBACK as unknown as ImageSourcePropType);
 
   return (
     <>
@@ -209,7 +204,6 @@ export default function HomeScreen() {
         contentContainerStyle={[styles.container, { paddingBottom: contentBottomPad }]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        {/* Header */}
         <View style={styles.headerRow}>
           <View style={styles.brandRow}>
             <Image
@@ -223,7 +217,6 @@ export default function HomeScreen() {
           <Text style={styles.title}>Home</Text>
         </View>
 
-        {/* Active Event Card */}
         <View style={styles.card}>
           <Text style={styles.cardLabel}>Aktives Event</Text>
 
@@ -253,7 +246,6 @@ export default function HomeScreen() {
           )}
         </View>
 
-        {/* Error State */}
         {error ? (
           <View style={[styles.card, styles.cardError]}>
             <Text style={styles.errorTitle}>Fehler</Text>
@@ -264,7 +256,6 @@ export default function HomeScreen() {
           </View>
         ) : null}
 
-        {/* Mini Stats */}
         <Pressable style={styles.card} onPress={() => router.push("/stats")}>
           <View style={styles.cardRow}>
             <Text style={styles.cardLabel}>Statistik heute</Text>
@@ -293,12 +284,10 @@ export default function HomeScreen() {
           <Text style={styles.miniHint}>Weitere Statistiken im „Stats“-Tab</Text>
         </Pressable>
 
-        {/* Primary CTA */}
         <Pressable style={styles.primaryBtn} onPress={handlePrimaryCTA}>
           <Text style={styles.primaryBtnText}>Lead erfassen</Text>
         </Pressable>
 
-        {/* Quick Actions */}
         <View style={styles.quickWrap}>
           <Pressable style={[styles.quickRow, { borderTopWidth: 0 }]} onPress={() => handleQuick("card")}>
             <Text style={styles.quickText}>Visitenkarte scannen</Text>
@@ -311,11 +300,9 @@ export default function HomeScreen() {
           </Pressable>
         </View>
 
-        {/* Footer hint */}
         <Text style={styles.footerHint}>Daten werden online erfasst · Pull to refresh</Text>
       </ScrollView>
 
-      {/* Form select sheet (for >1 forms) */}
       <BottomSheetModal visible={sheetOpen} onClose={() => setSheetOpen(false)}>
         <Text style={styles.sheetTitle}>Form wählen</Text>
         <View style={styles.sheetList}>
@@ -346,29 +333,12 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    paddingTop: 18,
-    paddingHorizontal: 16,
-    gap: 12,
-  },
+  container: { paddingTop: 18, paddingHorizontal: 16, gap: 12 },
 
-  headerRow: {
-    gap: 8,
-    marginBottom: 4,
-  },
-  brandRow: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  brandLogo: {
-    width: 160,
-    height: 32,
-  },
-  title: {
-    fontSize: 30,
-    fontWeight: "700",
-    letterSpacing: -0.2,
-  },
+  headerRow: { gap: 8, marginBottom: 4 },
+  brandRow: { flexDirection: "row", alignItems: "center" },
+  brandLogo: { width: 160, height: 32 },
+  title: { fontSize: 30, fontWeight: "700", letterSpacing: -0.2 },
 
   card: {
     backgroundColor: "#fff",
@@ -377,61 +347,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(0,0,0,0.06)",
   },
-  cardError: {
-    borderColor: "rgba(220,38,38,0.25)",
-  },
-  cardRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
-  },
-  cardLabel: {
-    fontSize: 14,
-    fontWeight: "600",
-    opacity: 0.7,
-  },
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    flex: 1,
-  },
-  cardMeta: {
-    marginTop: 6,
-    opacity: 0.7,
-  },
-  chev: {
-    fontSize: 22,
-    opacity: 0.35,
-  },
+  cardError: { borderColor: "rgba(220,38,38,0.25)" },
+  cardRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
+  cardLabel: { fontSize: 14, fontWeight: "600", opacity: 0.7 },
+  cardTitle: { fontSize: 18, fontWeight: "700", flex: 1 },
+  cardMeta: { marginTop: 6, opacity: 0.7 },
+  chev: { fontSize: 22, opacity: 0.35 },
 
-  warnText: {
-    marginTop: 8,
-    opacity: 0.75,
-  },
+  warnText: { marginTop: 8, opacity: 0.75 },
 
-  errorTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    marginBottom: 6,
-    color: "#b91c1c",
-  },
-  errorText: {
-    opacity: 0.8,
-    marginBottom: 10,
-  },
+  errorTitle: { fontSize: 16, fontWeight: "700", marginBottom: 6, color: "#b91c1c" },
+  errorText: { opacity: 0.8, marginBottom: 10 },
 
-  primaryBtn: {
-    backgroundColor: "#d32f2f",
-    borderRadius: 14,
-    paddingVertical: 16,
-    alignItems: "center",
-  },
-  primaryBtnText: {
-    color: "#fff",
-    fontWeight: "700",
-    fontSize: 16,
-  },
+  primaryBtn: { backgroundColor: "#d32f2f", borderRadius: 14, paddingVertical: 16, alignItems: "center" },
+  primaryBtnText: { color: "#fff", fontWeight: "700", fontSize: 16 },
 
   secondaryBtn: {
     marginTop: 10,
@@ -441,10 +370,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: "rgba(0,0,0,0.06)",
   },
-  secondaryBtnText: {
-    fontWeight: "600",
-    opacity: 0.85,
-  },
+  secondaryBtnText: { fontWeight: "600", opacity: 0.85 },
 
   quickWrap: {
     backgroundColor: "#fff",
@@ -462,84 +388,23 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "rgba(0,0,0,0.06)",
   },
-  quickText: {
-    fontSize: 16,
-    fontWeight: "600",
-  },
+  quickText: { fontSize: 16, fontWeight: "600" },
 
-  statsRow: {
-    flexDirection: "row",
-    gap: 16,
-    marginTop: 10,
-  },
-  stat: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.03)",
-    borderRadius: 12,
-    padding: 10,
-  },
-  statLabel: {
-    fontSize: 12,
-    opacity: 0.65,
-    fontWeight: "600",
-  },
-  statValue: {
-    marginTop: 6,
-    fontSize: 18,
-    fontWeight: "800",
-    letterSpacing: -0.2,
-  },
-  miniHint: {
-    marginTop: 10,
-    opacity: 0.6,
-    fontSize: 12,
-  },
+  statsRow: { flexDirection: "row", gap: 16, marginTop: 10 },
+  stat: { flex: 1, backgroundColor: "rgba(0,0,0,0.03)", borderRadius: 12, padding: 10 },
+  statLabel: { fontSize: 12, opacity: 0.65, fontWeight: "600" },
+  statValue: { marginTop: 6, fontSize: 18, fontWeight: "800", letterSpacing: -0.2 },
+  miniHint: { marginTop: 10, opacity: 0.6, fontSize: 12 },
 
-  footerHint: {
-    marginTop: 2,
-    opacity: 0.55,
-    fontSize: 12,
-    textAlign: "center",
-  },
+  footerHint: { marginTop: 2, opacity: 0.55, fontSize: 12, textAlign: "center" },
 
-  skeletonBlock: {
-    marginTop: 10,
-    height: 18,
-    borderRadius: 8,
-    backgroundColor: "rgba(0,0,0,0.06)",
-  },
-  skeletonRow: {
-    marginTop: 12,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: "rgba(0,0,0,0.06)",
-  },
+  skeletonBlock: { marginTop: 10, height: 18, borderRadius: 8, backgroundColor: "rgba(0,0,0,0.06)" },
+  skeletonRow: { marginTop: 12, height: 44, borderRadius: 12, backgroundColor: "rgba(0,0,0,0.06)" },
 
-  sheetTitle: {
-    fontSize: 16,
-    fontWeight: "800",
-    marginBottom: 10,
-  },
-  sheetList: {
-    gap: 10,
-    paddingBottom: 10,
-  },
-  sheetItem: {
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    backgroundColor: "rgba(0,0,0,0.04)",
-  },
-  sheetItemTitle: {
-    fontSize: 15,
-    fontWeight: "700",
-  },
-  sheetItemMeta: {
-    marginTop: 4,
-    opacity: 0.7,
-    fontSize: 12,
-  },
-  sheetEmpty: {
-    opacity: 0.7,
-  },
+  sheetTitle: { fontSize: 16, fontWeight: "800", marginBottom: 10 },
+  sheetList: { gap: 10, paddingBottom: 10 },
+  sheetItem: { paddingVertical: 12, paddingHorizontal: 12, borderRadius: 12, backgroundColor: "rgba(0,0,0,0.04)" },
+  sheetItemTitle: { fontSize: 15, fontWeight: "700" },
+  sheetItemMeta: { marginTop: 4, opacity: 0.7, fontSize: 12 },
+  sheetEmpty: { opacity: 0.7 },
 });
