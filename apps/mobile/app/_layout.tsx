@@ -1,76 +1,35 @@
 import React from "react";
 import { Tabs } from "expo-router";
-import Ionicons from "@expo/vector-icons/Ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
-const ACCENT = "#D33B3B";
 
 export default function RootLayout() {
   const insets = useSafeAreaInsets();
 
-  const bottomPad = Math.max(insets.bottom, 10);
-  const tabBarHeight = 52 + bottomPad;
+  const baseHeight = 58;
+  const height = baseHeight + Math.max(insets.bottom, 0);
+  const padBottom = Math.max(insets.bottom, 8);
 
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: ACCENT,
-        tabBarInactiveTintColor: "#8A8A8A",
+        tabBarHideOnKeyboard: true,
         tabBarStyle: {
-          borderTopColor: "#EAEAEA",
-          backgroundColor: "#FFFFFF",
-          height: tabBarHeight,
-          paddingBottom: bottomPad,
+          height,
+          paddingBottom: padBottom,
           paddingTop: 6,
         },
-        tabBarLabelStyle: { fontSize: 12 },
+        tabBarLabelStyle: { fontSize: 12, fontWeight: "600" },
       }}
     >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: "Home",
-          tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="forms"
-        options={{
-          title: "Formulare",
-          tabBarIcon: ({ color, size }) => <Ionicons name="documents-outline" color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="leads"
-        options={{
-          title: "Leads",
-          tabBarIcon: ({ color, size }) => <Ionicons name="people-outline" color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="stats"
-        options={{
-          title: "Stats",
-          tabBarIcon: ({ color, size }) => <Ionicons name="stats-chart-outline" color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: "Settings",
-          tabBarIcon: ({ color, size }) => <Ionicons name="settings-outline" color={color} size={size} />,
-        }}
-      />
+      <Tabs.Screen name="index" options={{ title: "Home" }} />
+      <Tabs.Screen name="forms" options={{ title: "Formulare" }} />
+      <Tabs.Screen name="leads" options={{ title: "Leads" }} />
+      <Tabs.Screen name="stats" options={{ title: "Stats" }} />
+      <Tabs.Screen name="settings" options={{ title: "Settings" }} />
 
-      {/* hidden (no tab) */}
-      <Tabs.Screen
-        name="provision"
-        options={{
-          href: null,
-          tabBarStyle: { display: "none" },
-        }}
-      />
+      {/* Hidden routes (must exist as files). Provision is outside Tabs. */}
+      <Tabs.Screen name="provision" options={{ href: null }} />
     </Tabs>
   );
 }

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import type { ImageSourcePropType } from "react-native";
 import {
   Alert,
   Pressable,
@@ -15,7 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { apiFetch } from "../src/lib/api";
 import { BottomSheetModal } from "../src/ui/BottomSheetModal";
 
-// ✅ ESLint: no require() imports
+// Fallback wenn Tenant kein Logo hat
 import BRAND_LOGO_FALLBACK from "../assets/images/icon.png";
 
 type ApiErrorShape = {
@@ -108,7 +109,7 @@ export default function HomeScreen() {
   const [forms, setForms] = useState<FormSummary[]>([]);
   const [stats, setStats] = useState<StatsMeResponse | null>(null);
 
-  // ✅ tenant branding logo from backend (data-url), fallback to local icon
+  // Tenant Logo (aus Backend)
   const [tenantLogoDataUrl, setTenantLogoDataUrl] = useState<string | null>(null);
 
   const [sheetOpen, setSheetOpen] = useState<boolean>(false);
@@ -195,12 +196,12 @@ export default function HomeScreen() {
     setSheetOpen(true);
   }
 
-  // breathing room above TabBar + Android system nav
-  const contentBottomPad = 24 + Math.max(insets.bottom, 0) + 72;
+  // Extra breathing room above TabBar + Android system nav
+  const contentBottomPad = 32 + Math.max(insets.bottom, 0) + 120;
 
-  const headerLogoSource = tenantLogoDataUrl
-    ? ({ uri: tenantLogoDataUrl } as const)
-    : (BRAND_LOGO_FALLBACK as unknown);
+  const headerLogoSource: ImageSourcePropType = tenantLogoDataUrl
+    ? { uri: tenantLogoDataUrl }
+    : (BRAND_LOGO_FALLBACK as ImageSourcePropType);
 
   return (
     <>
@@ -214,7 +215,7 @@ export default function HomeScreen() {
             <Image
               alt="Tenant Logo"
               accessibilityLabel="Tenant Logo"
-              source={headerLogoSource as never}
+              source={headerLogoSource}
               style={styles.brandLogo}
               resizeMode="contain"
             />
@@ -360,8 +361,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   brandLogo: {
-    width: 140,
-    height: 30,
+    width: 160,
+    height: 32,
   },
   title: {
     fontSize: 30,

@@ -38,6 +38,7 @@ async function getTenantLogoDataUrl(tenantId: string): Promise<BrandingOk> {
 
   const absPath = getAbsolutePath({ rootDirName: BRANDING_ROOT_DIR, relativeKey: tenant.logoKey });
   const exists = await fileExists(absPath);
+
   if (!exists) {
     // DB says logo exists, but file missing -> treat as no logo (MVP resilient)
     return { branding: { hasLogo: false }, logoDataUrl: null };
