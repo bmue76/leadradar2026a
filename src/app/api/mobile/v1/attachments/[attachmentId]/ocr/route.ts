@@ -62,9 +62,14 @@ const PutOcrBodySchema = z.object({
 
   rawText: z.string().min(1),
   blocksJson: z.unknown().optional(),
-  parsedContact: ContactSchema.optional(),
-  confidence: z.number().min(0).max(1).optional(),
 
+  // “neues” Feld (server-seitig)
+  parsedContact: ContactSchema.optional(),
+
+  // “altes”/mobile Feld – wir speichern es trotzdem, damit die Admin-UI etwas hat
+  suggestions: z.unknown().optional(),
+
+  confidence: z.number().min(0).max(1).optional(),
   resultHash: z.string().trim().min(1).optional(),
 });
 
@@ -155,6 +160,8 @@ async function upsertOcr(req: NextRequest, ctx: { params: Promise<{ attachmentId
     return jsonError(req, 409, "INVALID_ATTACHMENT_TYPE", "Attachment is not a business card image.");
   }
 
+  const parsedContactLike = body.parsedContact ?? body.suggestions ?? null;
+
   const computedHash =
     body.resultHash ??
     sha256Hex({
@@ -164,7 +171,7 @@ async function upsertOcr(req: NextRequest, ctx: { params: Promise<{ attachmentId
       languageHint: body.languageHint ?? null,
       rawText: body.rawText,
       blocksJson: body.blocksJson ?? null,
-      parsedContact: body.parsedContact ?? null,
+      parsedContact: parsedContactLike,
       confidence: body.confidence ?? null,
     });
 
@@ -183,7 +190,12 @@ async function upsertOcr(req: NextRequest, ctx: { params: Promise<{ attachmentId
   }
 
   if (existing?.resultHash && existing.resultHash === computedHash) {
-    return jsonOk(req, { ocr: toOcrApiShape(existing), idempotency: "HIT" });
+    return jsonOk(req, {
+      ocrResultId: existing.id, // ✅ wichtig für Mobile
+      id: existing.id,          // ✅ zusätzlicher Fallback
+      ocr: toOcrApiShape(existing),
+      idempotency: "HIT",
+    });
   }
 
   const now = new Date();
@@ -210,7 +222,7 @@ async function upsertOcr(req: NextRequest, ctx: { params: Promise<{ attachmentId
 
       rawText: body.rawText,
       blocksJson: toJsonInput(body.blocksJson),
-      parsedContactJson: toJsonInput(body.parsedContact ?? null),
+      parsedContactJson: toJsonInput(parsedContactLike),
       confidence: body.confidence ?? null,
 
       resultHash: computedHash,
@@ -227,7 +239,7 @@ async function upsertOcr(req: NextRequest, ctx: { params: Promise<{ attachmentId
 
       rawText: body.rawText,
       blocksJson: toJsonInput(body.blocksJson),
-      parsedContactJson: toJsonInput(body.parsedContact ?? null),
+      parsedContactJson: toJsonInput(parsedContactLike),
       confidence: body.confidence ?? null,
 
       resultHash: computedHash,
@@ -237,10 +249,14 @@ async function upsertOcr(req: NextRequest, ctx: { params: Promise<{ attachmentId
     },
   });
 
-  return jsonOk(req, { ocr: toOcrApiShape(ocr), idempotency: "MISS" });
+  return jsonOk(req, {
+    ocrResultId: ocr.id, // ✅ wichtig für Mobile
+    id: ocr.id,          // ✅ zusätzlicher Fallback
+    ocr: toOcrApiShape(ocr),
+    idempotency: "MISS",
+  });
 }
 
-// ✅ App nutzt POST → daher ist POST der “erste” Handler
 export async function POST(req: NextRequest, ctx: { params: Promise<{ attachmentId: string }> }) {
   try {
     return await upsertOcr(req, ctx, "post");
@@ -250,7 +266,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ attachment
   }
 }
 
-// 🧩 Backward compat (falls irgendwo noch PUT verwendet wird)
 export async function PUT(req: NextRequest, ctx: { params: Promise<{ attachmentId: string }> }) {
   try {
     return await upsertOcr(req, ctx, "put");
