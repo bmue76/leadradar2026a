@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import * as FileSystem from "expo-file-system";
 
 import { apiFetch } from "../src/lib/api";
 import { BottomSheetModal } from "../src/ui/BottomSheetModal";
@@ -23,12 +24,7 @@ type ApiErrorShape = {
   error: { code: string; message: string; details?: unknown };
   traceId: string;
 };
-
-type ApiOkShape<T> = {
-  ok: true;
-  data: T;
-  traceId: string;
-};
+type ApiOkShape<T> = { ok: true; data: T; traceId: string };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
@@ -76,12 +72,21 @@ type BrandingResponse = {
     logoSizeBytes?: number | null;
     logoUpdatedAt?: string | null;
   };
-  logoDataUrl: string | null;
+  logoBase64Url: string | null;
+};
+
+type LogoBase64Response = {
+  mime: string;
+  base64: string;
 };
 
 type EntryMode = "lead" | "card" | "manual";
 
-function formatEventMeta(startsAt?: string | null, endsAt?: string | null, location?: string | null) {
+function formatEventMeta(
+  startsAt?: string | null,
+  endsAt?: string | null,
+  location?: string | null,
+) {
   const parts: string[] = [];
   if (startsAt || endsAt) {
     const s = startsAt ? new Date(startsAt).toLocaleDateString() : "";
@@ -91,6 +96,85 @@ function formatEventMeta(startsAt?: string | null, endsAt?: string | null, locat
   }
   if (location) parts.push(location);
   return parts.join(" · ");
+}
+
+function safeKey(input: string): string {
+  return input.replace(/[^a-z0-9]+/gi, "_").slice(0, 80);
+}
+
+function extFromMime(mime: string): string {
+  if (mime === "image/png") return "png";
+  if (mime === "image/jpeg" || mime === "image/jpg") return "jpg";
+  if (mime === "image/webp") return "webp";
+  return "img";
+}
+
+async function cacheDirUri(): Promise<string> {
+  // Some toolchains don't expose cacheDirectory/documentDirectory as value exports in TS types.
+  // Runtime still has them. We read them via a safe cast (no `any`).
+  const fs = FileSystem as unknown as {
+    cacheDirectory?: string | null;
+    documentDirectory?: string | null;
+  };
+  return fs.cacheDirectory ?? fs.documentDirectory ?? "file:///";
+}
+
+async function bestEffortCleanupOldLogos(prefix: string, keepFile: string) {
+  try {
+    const dir = await cacheDirUri();
+    const files = await FileSystem.readDirectoryAsync(dir);
+    const toDelete = files.filter((f) => f.startsWith(prefix) && f !== keepFile);
+    await Promise.all(
+      toDelete.map(async (f) => {
+        const uri = `${dir}${f}`;
+        await FileSystem.deleteAsync(uri, { idempotent: true });
+      }),
+    );
+  } catch {
+    // ignore
+  }
+}
+
+async function ensureLogoFile(opts: {
+  tenantId: string;
+  logoUpdatedAt: string | null | undefined;
+  logoBase64Url: string;
+}): Promise<{ uri: string } | null> {
+  const dir = await cacheDirUri();
+  const tag = safeKey(opts.logoUpdatedAt ?? "na");
+  const prefix = `lr-tenant-logo-${opts.tenantId}-`;
+
+  // We don't know ext without fetching mime. Check a few candidates first.
+  const existingCandidates = ["png", "jpg", "webp", "img"].map(
+    (ext) => `${prefix}${tag}.${ext}`,
+  );
+
+  for (const cand of existingCandidates) {
+    try {
+      const info = await FileSystem.getInfoAsync(`${dir}${cand}`);
+      if (info.exists) {
+        await bestEffortCleanupOldLogos(prefix, cand);
+        return { uri: info.uri };
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Fetch base64 JSON via apiFetch (includes x-api-key internally)
+  const raw = await apiFetch({ method: "GET", path: opts.logoBase64Url });
+  const data = unwrapOk<LogoBase64Response>(raw);
+
+  const ext = extFromMime(data.mime);
+  const finalName = `${prefix}${tag}.${ext}`;
+  const finalUri = `${dir}${finalName}`;
+
+  // Avoid FileSystem.EncodingType (value export not typed in your toolchain)
+  await FileSystem.writeAsStringAsync(finalUri, data.base64, { encoding: "base64" });
+
+  await bestEffortCleanupOldLogos(prefix, finalName);
+
+  return { uri: finalUri };
 }
 
 export default function HomeScreen() {
@@ -106,8 +190,11 @@ export default function HomeScreen() {
   const [stats, setStats] = useState<StatsMeResponse | null>(null);
 
   const [tenantName, setTenantName] = useState<string>("—");
-  const [tenantLogoDataUrl, setTenantLogoDataUrl] = useState<string | null>(null);
-  const [logoMode, setLogoMode] = useState<"logo" | "fallback">("fallback");
+  const [tenantSlug, setTenantSlug] = useState<string>("—");
+  const [hasLogo, setHasLogo] = useState<boolean>(false);
+
+  const [logoFileUri, setLogoFileUri] = useState<string | null>(null);
+  const [logoMode, setLogoMode] = useState<"file" | "fallback">("fallback");
 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [entryMode, setEntryMode] = useState<EntryMode>("lead");
@@ -121,7 +208,9 @@ export default function HomeScreen() {
         apiFetch({ method: "GET", path: "/api/mobile/v1/forms" }),
         apiFetch({
           method: "GET",
-          path: `/api/mobile/v1/stats/me?range=today&tzOffsetMinutes=${encodeURIComponent(String(tzOffsetMinutes))}`,
+          path: `/api/mobile/v1/stats/me?range=today&tzOffsetMinutes=${encodeURIComponent(
+            String(tzOffsetMinutes),
+          )}`,
         }),
         apiFetch({ method: "GET", path: "/api/mobile/v1/branding" }),
       ]);
@@ -136,13 +225,42 @@ export default function HomeScreen() {
       setStats(s ?? null);
 
       setTenantName(b.tenant?.name || "—");
-      setTenantLogoDataUrl(b.logoDataUrl ?? null);
-      setLogoMode(b.logoDataUrl ? "logo" : "fallback");
+      setTenantSlug(b.tenant?.slug || "—");
+
+      const logoWanted = Boolean(
+        b.branding?.hasLogo && b.logoBase64Url && b.tenant?.id,
+      );
+      setHasLogo(logoWanted);
+
+      if (logoWanted) {
+        try {
+          const file = await ensureLogoFile({
+            tenantId: b.tenant.id,
+            logoUpdatedAt: b.branding.logoUpdatedAt,
+            logoBase64Url: b.logoBase64Url!,
+          });
+
+          if (file?.uri) {
+            setLogoFileUri(file.uri);
+            setLogoMode("file");
+          } else {
+            setLogoFileUri(null);
+            setLogoMode("fallback");
+          }
+        } catch {
+          setLogoFileUri(null);
+          setLogoMode("fallback");
+        }
+      } else {
+        setLogoFileUri(null);
+        setLogoMode("fallback");
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Unknown error.";
       setError(msg);
-      setTenantLogoDataUrl(null);
+      setLogoFileUri(null);
       setLogoMode("fallback");
+      setHasLogo(false);
     } finally {
       setLoading(false);
     }
@@ -199,11 +317,12 @@ export default function HomeScreen() {
     setSheetOpen(true);
   }
 
+  // Extra padding so content never hides under tab bar / android nav
   const contentBottomPad = 32 + Math.max(insets.bottom, 0) + 120;
 
   const headerLogoSource: ImageSourcePropType =
-    tenantLogoDataUrl && logoMode === "logo"
-      ? { uri: tenantLogoDataUrl }
+    logoFileUri && logoMode === "file"
+      ? { uri: logoFileUri }
       : (BRAND_LOGO_FALLBACK as unknown as ImageSourcePropType);
 
   return (
@@ -216,14 +335,11 @@ export default function HomeScreen() {
           <View style={styles.brandStack}>
             <View style={styles.logoBadge}>
               <Image
+                alt=""
                 accessibilityLabel="Tenant Logo"
                 source={headerLogoSource}
                 style={styles.brandLogo}
                 resizeMode="contain"
-                onError={() => {
-                  // If decode fails, force fallback
-                  setLogoMode("fallback");
-                }}
               />
             </View>
 
@@ -233,7 +349,7 @@ export default function HomeScreen() {
 
             {__DEV__ ? (
               <Text style={styles.devHint}>
-                branding: {tenantLogoDataUrl ? "dataUrl" : "null"} · mode: {logoMode}
+                tenant: {tenantSlug} · hasLogo: {String(hasLogo)} · mode: {logoMode}
               </Text>
             ) : null}
           </View>
@@ -330,21 +446,21 @@ export default function HomeScreen() {
       <BottomSheetModal visible={sheetOpen} onClose={() => setSheetOpen(false)}>
         <Text style={styles.sheetTitle}>Form wählen</Text>
         <View style={styles.sheetList}>
-          {forms.map((f) => (
+          {forms.map((fm) => (
             <Pressable
-              key={f.id}
+              key={fm.id}
               style={styles.sheetItem}
               onPress={() => {
                 setSheetOpen(false);
-                openCaptureForForm(f.id, entryMode);
+                openCaptureForForm(fm.id, entryMode);
               }}
             >
               <Text style={styles.sheetItemTitle} numberOfLines={1}>
-                {f.name}
+                {fm.name}
               </Text>
-              {f.description ? (
+              {fm.description ? (
                 <Text style={styles.sheetItemMeta} numberOfLines={1}>
-                  {f.description}
+                  {fm.description}
                 </Text>
               ) : null}
             </Pressable>
