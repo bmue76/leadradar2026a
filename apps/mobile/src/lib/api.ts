@@ -1,279 +1,233 @@
 import { getApiBaseUrl } from "./env";
+import { getApiKey } from "./auth";
 
-type JsonObject = Record<string, unknown>;
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-function isObject(v: unknown): v is JsonObject {
+export type ApiFetchArgs = {
+  method: Method;
+  path: string; // absolute URL OR /api/...
+  apiKey?: string | null; // optional override
+  body?: unknown; // object OR FormData OR string
+};
+
+export type ApiOk<T> = {
+  ok: true;
+  status: number;
+  data: T;
+  traceId?: string;
+};
+
+export type ApiErr = {
+  ok: false;
+  status: number; // 0 for network errors
+  code: string;
+  message: string;
+  details?: unknown;
+  traceId?: string;
+};
+
+export type ApiResult<T> = ApiOk<T> | ApiErr;
+
+function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
 
-function toStr(v: unknown): string | undefined {
-  return typeof v === "string" ? v : undefined;
+function joinUrl(base: string, path: string): string {
+  if (/^https?:\/\//i.test(path)) return path;
+  const b = base.endsWith("/") ? base.slice(0, -1) : base;
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return `${b}${p}`;
 }
 
-export type ApiResult<T> =
-  | { ok: true; status: number; data: T; traceId?: string; headers?: Record<string, string> }
-  | { ok: false; status: number; code: string; message: string; traceId?: string; headers?: Record<string, string> };
-
-function getTraceIdFromHeaders(h: Headers): string | undefined {
-  return h.get("x-trace-id") || h.get("X-Trace-Id") || undefined;
-}
-
-function headersToObject(h: Headers): Record<string, string> {
-  const out: Record<string, string> = {};
-  h.forEach((value, key) => {
-    out[key.toLowerCase()] = value;
-  });
-  return out;
-}
-
-function safeJsonParse(text: string): unknown {
-  const t = text.trim();
-  if (!t) return null;
+async function safeParseJson(res: Response): Promise<unknown> {
+  const ct = res.headers.get("content-type") || "";
+  if (!ct.includes("application/json")) return undefined;
   try {
-    return JSON.parse(t) as unknown;
+    return await res.json();
   } catch {
-    return null;
+    return undefined;
   }
 }
 
-function isFormDataBody(v: unknown): v is FormData {
-  // RN provides global FormData
-  return typeof FormData !== "undefined" && v instanceof FormData;
+function bodyToInit(body: unknown): { body?: BodyInit; contentType?: string } {
+  if (body === undefined || body === null) return {};
+  if (typeof FormData !== "undefined" && body instanceof FormData) return { body };
+  if (typeof body === "string") return { body, contentType: "text/plain;charset=utf-8" };
+  return { body: JSON.stringify(body), contentType: "application/json;charset=utf-8" };
 }
 
-function mapError<T>(r: ApiResult<unknown>): ApiResult<T> {
-  if (r.ok) {
-    return { ok: true, status: r.status, data: r.data as T, traceId: r.traceId, headers: r.headers };
-  }
-  return { ok: false, status: r.status, code: r.code, message: r.message, traceId: r.traceId, headers: r.headers };
-}
-
-function badResponse<T>(message: string, traceId?: string, headers?: Record<string, string>): ApiResult<T> {
-  return { ok: false, status: 500, code: "BAD_RESPONSE", message, traceId, headers };
-}
-
-function extractId(payload: unknown, keys: string[]): string | null {
-  if (!payload) return null;
-
-  if (typeof payload === "string" && payload.trim()) return payload.trim();
-
-  if (isObject(payload)) {
-    for (const k of keys) {
-      const v = (payload as JsonObject)[k];
-      if (typeof v === "string" && v.trim()) return v.trim();
-    }
-
-    // nested variants
-    for (const k of keys) {
-      const obj = (payload as JsonObject)[k];
-      if (isObject(obj)) {
-        const v = (obj as JsonObject).id;
-        if (typeof v === "string" && v.trim()) return v.trim();
-      }
-    }
-
-    const data = (payload as JsonObject).data;
-    if (isObject(data)) return extractId(data, keys);
-  }
-
-  return null;
-}
-
-export async function apiFetch<T>(args: {
-  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-  path: string;
-  apiKey?: string | null;
-  body?: unknown;
-}): Promise<ApiResult<T>> {
-  const base = getApiBaseUrl();
-  const url = `${base}${args.path.startsWith("/") ? "" : "/"}${args.path}`;
-
-  const headers: Record<string, string> = { accept: "application/json" };
-  if (args.apiKey) headers["x-api-key"] = args.apiKey;
-
-  let body: FormData | string | undefined = undefined;
-
-  if (args.body !== undefined) {
-    if (isFormDataBody(args.body)) {
-      body = args.body;
-      // IMPORTANT: do NOT set content-type here; fetch will add boundary
-    } else {
-      headers["content-type"] = "application/json";
-      body = JSON.stringify(args.body);
-    }
-  }
-
+/**
+ * apiFetch (Mobile)
+ * - attaches x-api-key automatically (stored key) unless args.apiKey is explicitly set
+ * - normalizes jsonOk/jsonError envelopes into { ok, status, data|code/message, traceId }
+ * - NEVER throws for HTTP errors (returns ok:false); only network/exception becomes ok:false status=0
+ */
+export async function apiFetch<T = unknown>(args: ApiFetchArgs): Promise<ApiResult<T>> {
   try {
-    const res = await fetch(url, { method: args.method, headers, body });
+    const baseUrl = getApiBaseUrl();
+    const url = joinUrl(baseUrl, args.path);
 
-    const traceIdH = getTraceIdFromHeaders(res.headers);
-    const headersObj = headersToObject(res.headers);
+    const stored = await getApiKey();
+    const token = (args.apiKey ?? stored)?.trim() || "";
 
-    const text = await res.text();
-    const json = safeJsonParse(text);
+    const headers = new Headers();
+    headers.set("Accept", "application/json");
+    if (token) headers.set("x-api-key", token);
+
+    const initBody = bodyToInit(args.body);
+    if (initBody.contentType) headers.set("Content-Type", initBody.contentType);
+
+    const res = await fetch(url, { method: args.method, headers, body: initBody.body });
+
+    const headerTrace = res.headers.get("x-trace-id") || undefined;
+    const json = await safeParseJson(res);
+
+    const envelopeTrace =
+      isRecord(json) && typeof json.traceId === "string" ? (json.traceId as string) : undefined;
+
+    const traceId = envelopeTrace ?? headerTrace;
+
+    if (isRecord(json) && json.ok === true && "data" in json) {
+      return { ok: true, status: res.status, data: json.data as T, traceId };
+    }
+
+    if (isRecord(json) && json.ok === false && isRecord(json.error)) {
+      const err = json.error as Record<string, unknown>;
+      const code = typeof err.code === "string" ? err.code : `HTTP_${res.status}`;
+      const message = typeof err.message === "string" ? err.message : `HTTP ${res.status}`;
+      const details = "details" in err ? err.details : undefined;
+      return { ok: false, status: res.status, code, message, details, traceId };
+    }
 
     if (res.ok) {
-      // backend: { ok:true, data: <payload>, traceId }
-      if (isObject(json) && "data" in json) {
-        const traceId = toStr((json as JsonObject).traceId) || traceIdH;
-        return { ok: true, status: res.status, data: (json as JsonObject).data as T, traceId, headers: headersObj };
-      }
-      return { ok: true, status: res.status, data: json as T, traceId: traceIdH, headers: headersObj };
+      return { ok: true, status: res.status, data: (json as T) ?? (undefined as unknown as T), traceId };
     }
 
-    let code = "HTTP_ERROR";
-    let message = `HTTP ${res.status}`;
-    let traceId = traceIdH;
-
-    if (isObject(json)) {
-      const t = toStr((json as JsonObject).traceId);
-      if (t) traceId = t;
-
-      const err = (json as JsonObject).error;
-      if (isObject(err)) {
-        code = toStr((err as JsonObject).code) || code;
-        message = toStr((err as JsonObject).message) || message;
-      } else {
-        code = toStr((json as JsonObject).code) || code;
-        message = toStr((json as JsonObject).message) || message;
-      }
-    }
-
-    return { ok: false, status: res.status, code, message, traceId, headers: headersObj };
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : "Network request failed";
-    return { ok: false, status: 0, code: "NETWORK_ERROR", message: msg };
+    return { ok: false, status: res.status, code: `HTTP_${res.status}`, message: `HTTP ${res.status}`, traceId };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Network error.";
+    return { ok: false, status: 0, code: "NETWORK", message: msg };
   }
 }
 
-/**
- * POST /api/mobile/v1/leads
- * expected: { leadId } OR { id } OR { lead: { id } } OR wrapped {data:{...}}
- */
-export async function createLead(args: {
-  apiKey: string;
-  payload: {
-    clientLeadId: string;
-    formId: string;
-    capturedAt: string;
-    values: unknown;
-  };
-}): Promise<ApiResult<{ leadId: string }>> {
-  const res = await apiFetch<unknown>({
+/** ---- Helper exports expected by existing screens (Forms/Capture/OCR) ---- */
+
+export type CreateLeadBody = {
+  formId: string;
+  clientLeadId: string;
+  capturedAt: string; // ISO
+  values: Record<string, unknown>;
+};
+
+export type CreateLeadResponse = {
+  leadId: string;
+  deduped?: boolean;
+};
+
+type LegacyCreateLeadArgs = { apiKey?: string | null; payload: CreateLeadBody };
+
+export function createLead(body: CreateLeadBody, apiKey?: string | null): Promise<ApiResult<CreateLeadResponse>>;
+export function createLead(args: LegacyCreateLeadArgs): Promise<ApiResult<CreateLeadResponse>>;
+export async function createLead(
+  a: CreateLeadBody | LegacyCreateLeadArgs,
+  apiKey?: string | null,
+): Promise<ApiResult<CreateLeadResponse>> {
+  const payload = "payload" in a ? a.payload : a;
+  const key = "payload" in a ? (a.apiKey ?? null) : (apiKey ?? null);
+
+  return apiFetch<CreateLeadResponse>({
     method: "POST",
     path: "/api/mobile/v1/leads",
-    apiKey: args.apiKey,
-    body: args.payload,
+    apiKey: key,
+    body: payload,
   });
-
-  if (!res.ok) return mapError(res);
-
-  const leadId = extractId(res.data, ["leadId", "id", "lead"]);
-  if (!leadId) return badResponse("createLead: leadId fehlt in Response.", res.traceId, res.headers);
-
-  return { ok: true, status: res.status, data: { leadId }, traceId: res.traceId, headers: res.headers };
 }
 
-/**
- * POST /api/mobile/v1/leads/:leadId/attachments (multipart/form-data)
- * expected: { attachmentId } OR { id } OR { attachment: { id } } OR wrapped {data:{...}}
- */
-export async function uploadLeadAttachment(args: {
-  apiKey: string;
-  leadId: string;
-  fileUri: string;
-  mimeType: string;
-  fileName: string;
-}): Promise<ApiResult<{ attachmentId: string }>> {
-  const leadId = (args.leadId || "").trim();
-  if (!leadId) return badResponse("uploadLeadAttachment: leadId fehlt.");
+export type UploadLeadAttachmentResponse = { attachmentId: string };
+type LegacyUploadLeadAttachmentArgs = { apiKey?: string | null; leadId: string; payload: FormData };
 
-  const fd = new FormData();
-  // RN: file object must be cast to any
-  fd.append("file", { uri: args.fileUri, name: args.fileName, type: args.mimeType } as unknown as Blob);
-  fd.append("fileName", args.fileName);
-  fd.append("mimeType", args.mimeType);
+export function uploadLeadAttachment(
+  leadId: string,
+  formData: FormData,
+  apiKey?: string | null,
+): Promise<ApiResult<UploadLeadAttachmentResponse>>;
+export function uploadLeadAttachment(args: LegacyUploadLeadAttachmentArgs): Promise<ApiResult<UploadLeadAttachmentResponse>>;
+export async function uploadLeadAttachment(
+  a: string | LegacyUploadLeadAttachmentArgs,
+  b?: FormData,
+  c?: string | null,
+): Promise<ApiResult<UploadLeadAttachmentResponse>> {
+  const leadId = typeof a === "string" ? a : a.leadId;
+  const formData = typeof a === "string" ? (b as FormData) : a.payload;
+  const key = typeof a === "string" ? (c ?? null) : (a.apiKey ?? null);
 
-  const res = await apiFetch<unknown>({
+  return apiFetch<UploadLeadAttachmentResponse>({
     method: "POST",
     path: `/api/mobile/v1/leads/${encodeURIComponent(leadId)}/attachments`,
-    apiKey: args.apiKey,
-    body: fd,
+    apiKey: key,
+    body: formData,
   });
-
-  if (!res.ok) return mapError(res);
-
-  const attachmentId = extractId(res.data, ["attachmentId", "id", "attachment"]);
-  if (!attachmentId) return badResponse("uploadLeadAttachment: attachmentId fehlt in Response.", res.traceId, res.headers);
-
-  return { ok: true, status: res.status, data: { attachmentId }, traceId: res.traceId, headers: res.headers };
 }
 
-/**
- * POST /api/mobile/v1/attachments/:attachmentId/ocr
- * expected: { ocrResultId } OR { id } OR wrapped
- *
- * If your backend uses a different path, we also try a fallback.
- */
-export async function storeAttachmentOcrResult(args: {
-  apiKey: string;
-  attachmentId: string;
-  payload: {
-    engine: string;
-    engineVersion?: string;
-    mode?: string;
-    resultHash?: string;
-    rawText: string;
-    blocksJson?: unknown;
-    suggestions?: unknown;
-  };
-}): Promise<ApiResult<{ ocrResultId: string }>> {
-  const attachmentId = (args.attachmentId || "").trim();
-  if (!attachmentId) return badResponse("storeAttachmentOcrResult: attachmentId fehlt.");
+export type StoreAttachmentOcrBody = {
+  engine: string;
+  engineVersion?: string;
+  mode: string;
+  resultHash: string;
+  rawText: string;
+  blocksJson?: unknown | null;
+  suggestions?: Record<string, unknown> | null;
+};
 
-  const tryOnce = async (path: string) =>
-    apiFetch<unknown>({
-      method: "POST",
-      path,
-      apiKey: args.apiKey,
-      body: args.payload,
-    });
+export type StoreAttachmentOcrResponse = { ocrResultId: string };
 
-  let res = await tryOnce(`/api/mobile/v1/attachments/${encodeURIComponent(attachmentId)}/ocr`);
+type LegacyStoreAttachmentOcrArgs = { apiKey?: string | null; attachmentId: string; payload: StoreAttachmentOcrBody };
 
-  // fallback for older route naming
-  if (!res.ok && res.status === 404) {
-    res = await tryOnce(`/api/mobile/v1/attachments/${encodeURIComponent(attachmentId)}/ocr-results`);
-  }
+export function storeAttachmentOcrResult(
+  attachmentId: string,
+  payload: StoreAttachmentOcrBody,
+  apiKey?: string | null,
+): Promise<ApiResult<StoreAttachmentOcrResponse>>;
+export function storeAttachmentOcrResult(args: LegacyStoreAttachmentOcrArgs): Promise<ApiResult<StoreAttachmentOcrResponse>>;
+export async function storeAttachmentOcrResult(
+  a: string | LegacyStoreAttachmentOcrArgs,
+  b?: StoreAttachmentOcrBody,
+  c?: string | null,
+): Promise<ApiResult<StoreAttachmentOcrResponse>> {
+  const attachmentId = typeof a === "string" ? a : a.attachmentId;
+  const payload = typeof a === "string" ? (b as StoreAttachmentOcrBody) : a.payload;
+  const key = typeof a === "string" ? (c ?? null) : (a.apiKey ?? null);
 
-  if (!res.ok) return mapError(res);
-
-  const ocrResultId = extractId(res.data, ["ocrResultId", "id", "ocrResult"]);
-  if (!ocrResultId) return badResponse("storeAttachmentOcrResult: ocrResultId fehlt in Response.", res.traceId, res.headers);
-
-  return { ok: true, status: res.status, data: { ocrResultId }, traceId: res.traceId, headers: res.headers };
+  return apiFetch<StoreAttachmentOcrResponse>({
+    method: "POST",
+    path: `/api/mobile/v1/attachments/${encodeURIComponent(attachmentId)}/ocr`,
+    apiKey: key,
+    body: payload,
+  });
 }
 
-/**
- * PATCH /api/mobile/v1/leads/:leadId/contact
- * response can be ignored; we keep it as ok:true with payload.
- */
-export async function patchLeadContact(args: {
-  apiKey: string;
-  leadId: string;
-  payload: Record<string, unknown>;
-}): Promise<ApiResult<{ ok: true }>> {
-  const leadId = (args.leadId || "").trim();
-  if (!leadId) return badResponse("patchLeadContact: leadId fehlt.");
+export type PatchLeadContactResponse = { updated: true } | Record<string, unknown>;
+type LegacyPatchLeadContactArgs = { apiKey?: string | null; leadId: string; payload: Record<string, unknown> };
 
-  const res = await apiFetch<unknown>({
+export function patchLeadContact(
+  leadId: string,
+  body: Record<string, unknown>,
+  apiKey?: string | null,
+): Promise<ApiResult<PatchLeadContactResponse>>;
+export function patchLeadContact(args: LegacyPatchLeadContactArgs): Promise<ApiResult<PatchLeadContactResponse>>;
+export async function patchLeadContact(
+  a: string | LegacyPatchLeadContactArgs,
+  b?: Record<string, unknown>,
+  c?: string | null,
+): Promise<ApiResult<PatchLeadContactResponse>> {
+  const leadId = typeof a === "string" ? a : a.leadId;
+  const payload = typeof a === "string" ? (b as Record<string, unknown>) : a.payload;
+  const key = typeof a === "string" ? (c ?? null) : (a.apiKey ?? null);
+
+  return apiFetch<PatchLeadContactResponse>({
     method: "PATCH",
     path: `/api/mobile/v1/leads/${encodeURIComponent(leadId)}/contact`,
-    apiKey: args.apiKey,
-    body: args.payload,
+    apiKey: key,
+    body: payload,
   });
-
-  if (!res.ok) return mapError(res);
-
-  return { ok: true, status: res.status, data: { ok: true }, traceId: res.traceId, headers: res.headers };
 }
