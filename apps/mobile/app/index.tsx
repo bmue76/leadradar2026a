@@ -1,12 +1,22 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { ImageSourcePropType } from "react-native";
-import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, Image } from "react-native";
+import {
+  Alert,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  Image,
+} from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { apiFetch } from "../src/lib/api";
 import { BottomSheetModal } from "../src/ui/BottomSheetModal";
 
+// ✅ Expo default path (falls bei dir anders, hier anpassen!)
 import BRAND_LOGO_FALLBACK from "../assets/images/icon.png";
 
 type ApiErrorShape = {
@@ -24,15 +34,12 @@ type ApiOkShape<T> = {
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
-
 function isApiOk<T>(v: unknown): v is ApiOkShape<T> {
   return isRecord(v) && v.ok === true && "data" in v;
 }
-
 function isApiErr(v: unknown): v is ApiErrorShape {
   return isRecord(v) && v.ok === false && "error" in v;
 }
-
 function unwrapOk<T>(v: unknown): T {
   if (isApiOk<T>(v)) return v.data;
   if (isApiErr(v)) throw new Error(`${v.error.code}: ${v.error.message}`);
@@ -46,7 +53,6 @@ type ActiveEvent = {
   endsAt?: string | null;
   location?: string | null;
 };
-
 type EventsActiveResponse = { activeEvent: ActiveEvent | null };
 
 type FormSummary = {
@@ -91,8 +97,8 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const tzOffsetMinutes = useMemo(() => new Date().getTimezoneOffset(), []);
 
-  const [loading, setLoading] = useState<boolean>(true);
-  const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [activeEvent, setActiveEvent] = useState<ActiveEvent | null>(null);
@@ -101,43 +107,38 @@ export default function HomeScreen() {
 
   const [tenantLogoDataUrl, setTenantLogoDataUrl] = useState<string | null>(null);
 
-  const [sheetOpen, setSheetOpen] = useState<boolean>(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [entryMode, setEntryMode] = useState<EntryMode>("lead");
 
   async function load() {
     setError(null);
 
     try {
-      const [evRaw, formsRaw, statsRaw] = await Promise.all([
+      const [evRaw, formsRaw, statsRaw, brandingRaw] = await Promise.all([
         apiFetch({ method: "GET", path: "/api/mobile/v1/events/active" }),
         apiFetch({ method: "GET", path: "/api/mobile/v1/forms" }),
         apiFetch({
           method: "GET",
           path: `/api/mobile/v1/stats/me?range=today&tzOffsetMinutes=${encodeURIComponent(String(tzOffsetMinutes))}`,
         }),
+        apiFetch({ method: "GET", path: "/api/mobile/v1/branding" }),
       ]);
 
       const ev = unwrapOk<EventsActiveResponse>(evRaw).activeEvent;
       const f = unwrapOk<FormSummary[]>(formsRaw);
       const s = unwrapOk<StatsMeResponse>(statsRaw);
+      const b = unwrapOk<BrandingResponse>(brandingRaw);
 
       setActiveEvent(ev ?? null);
       setForms(Array.isArray(f) ? f : []);
       setStats(s ?? null);
+      setTenantLogoDataUrl(b.logoDataUrl ?? null);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Unknown error.";
       setError(msg);
+      setTenantLogoDataUrl(null);
     } finally {
       setLoading(false);
-    }
-
-    // Branding ist “nice to have”: darf Home nicht failen
-    try {
-      const brandingRaw = await apiFetch({ method: "GET", path: "/api/mobile/v1/branding" });
-      const b = unwrapOk<BrandingResponse>(brandingRaw);
-      setTenantLogoDataUrl(b.logoDataUrl ?? null);
-    } catch {
-      setTenantLogoDataUrl(null);
     }
   }
 
@@ -207,13 +208,20 @@ export default function HomeScreen() {
         <View style={styles.headerRow}>
           <View style={styles.brandRow}>
             <Image
-              alt="Tenant Logo"
               accessibilityLabel="Tenant Logo"
               source={headerLogoSource}
               style={styles.brandLogo}
               resizeMode="contain"
             />
           </View>
+
+          {/* DEV hint (optional, helps verify): */}
+          {__DEV__ ? (
+            <Text style={styles.devHint}>
+              branding: {tenantLogoDataUrl ? "logo" : "fallback"}
+            </Text>
+          ) : null}
+
           <Text style={styles.title}>Home</Text>
         </View>
 
@@ -325,7 +333,6 @@ export default function HomeScreen() {
               ) : null}
             </Pressable>
           ))}
-          {forms.length === 0 ? <Text style={styles.sheetEmpty}>Keine Formulare zugewiesen.</Text> : null}
         </View>
       </BottomSheetModal>
     </>
@@ -335,9 +342,10 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: { paddingTop: 18, paddingHorizontal: 16, gap: 12 },
 
-  headerRow: { gap: 8, marginBottom: 4 },
+  headerRow: { gap: 6, marginBottom: 4 },
   brandRow: { flexDirection: "row", alignItems: "center" },
-  brandLogo: { width: 160, height: 32 },
+  brandLogo: { width: 170, height: 34 },
+  devHint: { fontSize: 12, opacity: 0.5 },
   title: { fontSize: 30, fontWeight: "700", letterSpacing: -0.2 },
 
   card: {
@@ -353,7 +361,6 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: 18, fontWeight: "700", flex: 1 },
   cardMeta: { marginTop: 6, opacity: 0.7 },
   chev: { fontSize: 22, opacity: 0.35 },
-
   warnText: { marginTop: 8, opacity: 0.75 },
 
   errorTitle: { fontSize: 16, fontWeight: "700", marginBottom: 6, color: "#b91c1c" },
@@ -406,5 +413,4 @@ const styles = StyleSheet.create({
   sheetItem: { paddingVertical: 12, paddingHorizontal: 12, borderRadius: 12, backgroundColor: "rgba(0,0,0,0.04)" },
   sheetItemTitle: { fontSize: 15, fontWeight: "700" },
   sheetItemMeta: { marginTop: 4, opacity: 0.7, fontSize: 12 },
-  sheetEmpty: { opacity: 0.7 },
 });

@@ -18,6 +18,7 @@ type BrandingPayload = {
     logoSizeBytes?: number | null;
     logoUpdatedAt?: string | null;
   };
+  // Data URL, so mobile can render without extra auth headers
   logoDataUrl: string | null;
 };
 
@@ -33,26 +34,24 @@ async function buildBrandingPayload(tenantId: string): Promise<BrandingPayload> 
 
   const absPath = getAbsolutePath({ rootDirName: BRANDING_ROOT_DIR, relativeKey: t.logoKey });
   const exists = await fileExists(absPath);
+
   if (!exists) {
     // resilient MVP: DB says logo, but file missing -> treat as no logo
     return { branding: { hasLogo: false }, logoDataUrl: null };
   }
 
-  try {
-    const buf = await readFile(absPath);
-    const base64 = buf.toString("base64");
-    return {
-      branding: {
-        hasLogo: true,
-        logoMime: t.logoMime,
-        logoSizeBytes: t.logoSizeBytes ?? null,
-        logoUpdatedAt: t.logoUpdatedAt ? t.logoUpdatedAt.toISOString() : null,
-      },
-      logoDataUrl: `data:${t.logoMime};base64,${base64}`,
-    };
-  } catch {
-    return { branding: { hasLogo: false }, logoDataUrl: null };
-  }
+  const buf = await readFile(absPath);
+  const base64 = buf.toString("base64");
+
+  return {
+    branding: {
+      hasLogo: true,
+      logoMime: t.logoMime,
+      logoSizeBytes: t.logoSizeBytes ?? null,
+      logoUpdatedAt: t.logoUpdatedAt ? t.logoUpdatedAt.toISOString() : null,
+    },
+    logoDataUrl: `data:${t.logoMime};base64,${base64}`,
+  };
 }
 
 export async function GET(req: Request) {
@@ -61,7 +60,7 @@ export async function GET(req: Request) {
 
     enforceRateLimit(`mobile:${auth.apiKeyId}`, { limit: 30, windowMs: 60_000 });
 
-    // Ops telemetry (same pattern as forms)
+    // Ops telemetry
     const now = new Date();
     await prisma.mobileApiKey.update({ where: { id: auth.apiKeyId }, data: { lastUsedAt: now } });
     await prisma.mobileDevice.update({ where: { id: auth.deviceId }, data: { lastSeenAt: now } });
