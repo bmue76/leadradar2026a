@@ -12,38 +12,64 @@ export const runtime = "nodejs";
 const BRANDING_ROOT_DIR = ".tmp_branding";
 
 type BrandingPayload = {
+  tenant: { id: string; slug: string; name: string };
   branding: {
     hasLogo: boolean;
     logoMime?: string | null;
     logoSizeBytes?: number | null;
     logoUpdatedAt?: string | null;
   };
-  // Data URL, so mobile can render without extra auth headers
+  // Data URL (base64) so mobile can render without special headers
   logoDataUrl: string | null;
 };
 
 async function buildBrandingPayload(tenantId: string): Promise<BrandingPayload> {
   const t = await prisma.tenant.findUnique({
     where: { id: tenantId },
-    select: { logoKey: true, logoMime: true, logoSizeBytes: true, logoUpdatedAt: true },
+    select: {
+      id: true,
+      slug: true,
+      name: true,
+      logoKey: true,
+      logoMime: true,
+      logoSizeBytes: true,
+      logoUpdatedAt: true,
+    },
   });
 
-  if (!t?.logoKey || !t.logoMime) {
-    return { branding: { hasLogo: false }, logoDataUrl: null };
+  // Should never happen because auth is tenant-bound, but keep resilient.
+  if (!t) {
+    return {
+      tenant: { id: tenantId, slug: "unknown", name: "Unknown" },
+      branding: { hasLogo: false },
+      logoDataUrl: null,
+    };
+  }
+
+  if (!t.logoKey || !t.logoMime) {
+    return {
+      tenant: { id: t.id, slug: t.slug, name: t.name },
+      branding: { hasLogo: false },
+      logoDataUrl: null,
+    };
   }
 
   const absPath = getAbsolutePath({ rootDirName: BRANDING_ROOT_DIR, relativeKey: t.logoKey });
   const exists = await fileExists(absPath);
 
   if (!exists) {
-    // resilient MVP: DB says logo, but file missing -> treat as no logo
-    return { branding: { hasLogo: false }, logoDataUrl: null };
+    return {
+      tenant: { id: t.id, slug: t.slug, name: t.name },
+      branding: { hasLogo: false },
+      logoDataUrl: null,
+    };
   }
 
   const buf = await readFile(absPath);
   const base64 = buf.toString("base64");
 
   return {
+    tenant: { id: t.id, slug: t.slug, name: t.name },
     branding: {
       hasLogo: true,
       logoMime: t.logoMime,

@@ -16,7 +16,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { apiFetch } from "../src/lib/api";
 import { BottomSheetModal } from "../src/ui/BottomSheetModal";
 
-// ✅ Expo default path (falls bei dir anders, hier anpassen!)
 import BRAND_LOGO_FALLBACK from "../assets/images/icon.png";
 
 type ApiErrorShape = {
@@ -70,6 +69,7 @@ type StatsMeResponse = {
 };
 
 type BrandingResponse = {
+  tenant: { id: string; slug: string; name: string };
   branding: {
     hasLogo: boolean;
     logoMime?: string | null;
@@ -105,7 +105,9 @@ export default function HomeScreen() {
   const [forms, setForms] = useState<FormSummary[]>([]);
   const [stats, setStats] = useState<StatsMeResponse | null>(null);
 
+  const [tenantName, setTenantName] = useState<string>("—");
   const [tenantLogoDataUrl, setTenantLogoDataUrl] = useState<string | null>(null);
+  const [logoMode, setLogoMode] = useState<"logo" | "fallback">("fallback");
 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [entryMode, setEntryMode] = useState<EntryMode>("lead");
@@ -132,11 +134,15 @@ export default function HomeScreen() {
       setActiveEvent(ev ?? null);
       setForms(Array.isArray(f) ? f : []);
       setStats(s ?? null);
+
+      setTenantName(b.tenant?.name || "—");
       setTenantLogoDataUrl(b.logoDataUrl ?? null);
+      setLogoMode(b.logoDataUrl ? "logo" : "fallback");
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Unknown error.";
       setError(msg);
       setTenantLogoDataUrl(null);
+      setLogoMode("fallback");
     } finally {
       setLoading(false);
     }
@@ -195,9 +201,10 @@ export default function HomeScreen() {
 
   const contentBottomPad = 32 + Math.max(insets.bottom, 0) + 120;
 
-  const headerLogoSource: ImageSourcePropType = tenantLogoDataUrl
-    ? { uri: tenantLogoDataUrl }
-    : (BRAND_LOGO_FALLBACK as unknown as ImageSourcePropType);
+  const headerLogoSource: ImageSourcePropType =
+    tenantLogoDataUrl && logoMode === "logo"
+      ? { uri: tenantLogoDataUrl }
+      : (BRAND_LOGO_FALLBACK as unknown as ImageSourcePropType);
 
   return (
     <>
@@ -206,21 +213,30 @@ export default function HomeScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
         <View style={styles.headerRow}>
-          <View style={styles.brandRow}>
-            <Image
-              accessibilityLabel="Tenant Logo"
-              source={headerLogoSource}
-              style={styles.brandLogo}
-              resizeMode="contain"
-            />
-          </View>
+          <View style={styles.brandStack}>
+            <View style={styles.logoBadge}>
+              <Image
+                accessibilityLabel="Tenant Logo"
+                source={headerLogoSource}
+                style={styles.brandLogo}
+                resizeMode="contain"
+                onError={() => {
+                  // If decode fails, force fallback
+                  setLogoMode("fallback");
+                }}
+              />
+            </View>
 
-          {/* DEV hint (optional, helps verify): */}
-          {__DEV__ ? (
-            <Text style={styles.devHint}>
-              branding: {tenantLogoDataUrl ? "logo" : "fallback"}
+            <Text style={styles.tenantName} numberOfLines={1}>
+              {tenantName}
             </Text>
-          ) : null}
+
+            {__DEV__ ? (
+              <Text style={styles.devHint}>
+                branding: {tenantLogoDataUrl ? "dataUrl" : "null"} · mode: {logoMode}
+              </Text>
+            ) : null}
+          </View>
 
           <Text style={styles.title}>Home</Text>
         </View>
@@ -342,10 +358,23 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: { paddingTop: 18, paddingHorizontal: 16, gap: 12 },
 
-  headerRow: { gap: 6, marginBottom: 4 },
-  brandRow: { flexDirection: "row", alignItems: "center" },
-  brandLogo: { width: 170, height: 34 },
-  devHint: { fontSize: 12, opacity: 0.5 },
+  headerRow: { gap: 10, marginBottom: 4 },
+  brandStack: { gap: 6, alignSelf: "flex-start" },
+
+  logoBadge: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 14,
+    backgroundColor: "rgba(0,0,0,0.03)",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.08)",
+  },
+  brandLogo: { width: 180, height: 42 },
+
+  tenantName: { fontSize: 12, fontWeight: "600", opacity: 0.55 },
+  devHint: { fontSize: 11, opacity: 0.45 },
+
   title: { fontSize: 30, fontWeight: "700", letterSpacing: -0.2 },
 
   card: {
