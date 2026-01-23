@@ -1,29 +1,84 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
-import { getApiBaseUrl } from "../src/lib/env";
+import React, { useCallback, useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+
 import { apiFetch } from "../src/lib/api";
 
 const ACCENT = "#D33B3B";
 
-function unwrapOk<T>(res: any): T {
-  if (res && typeof res === "object" && "ok" in res) {
-    if (res.ok) return (res.data ?? res) as T;
-    throw new Error(res?.error?.message ?? "Request failed.");
+type ApiErrorShape = {
+  code: string;
+  message: string;
+  details?: unknown;
+};
+
+type ApiOk<T> = {
+  ok: true;
+  data: T;
+  traceId?: string;
+};
+
+type ApiErr = {
+  ok: false;
+  error: ApiErrorShape;
+  traceId?: string;
+};
+
+type ApiEnvelope<T> = ApiOk<T> | ApiErr;
+
+type StatsMeResponse = {
+  leadsToday: number;
+  avgPerHour: number;
+  pendingAttachments: number;
+  lastLeadAt?: string | null;
+  todayHourlyBuckets?: Array<{ hour: number; count: number }>;
+};
+
+class ApiError extends Error {
+  public readonly code?: string;
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.code = code;
   }
-  return res as T;
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+function isEnvelope<T>(v: unknown): v is ApiEnvelope<T> {
+  if (!isRecord(v)) return false;
+  if (v.ok === true) return "data" in v;
+  if (v.ok === false) return "error" in v;
+  return false;
+}
+
+function unwrapOk<T>(v: unknown): T {
+  if (isEnvelope<T>(v)) {
+    if (v.ok) return v.data;
+    throw new ApiError(v.error?.message ?? "Request failed.", v.error?.code);
+  }
+  return v as T; // tolerant fallback
 }
 
 export default function Stats() {
-  const baseUrl = useMemo(() => getApiBaseUrl(), []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [data, setData] = useState({
+  const [data, setData] = useState<Required<StatsMeResponse>>({
     leadsToday: 0,
     avgPerHour: 0,
     pendingAttachments: 0,
-    lastLeadAt: null as string | null,
-    todayHourlyBuckets: [] as Array<{ hour: number; count: number }>,
+    lastLeadAt: null,
+    todayHourlyBuckets: [],
   });
 
   const refresh = useCallback(async () => {
@@ -31,11 +86,12 @@ export default function Stats() {
     setError(null);
     try {
       const tzOffsetMinutes = new Date().getTimezoneOffset();
-      const res = await apiFetch(
-        `${baseUrl}/api/mobile/v1/stats/me?range=today&tzOffsetMinutes=${encodeURIComponent(String(tzOffsetMinutes))}`,
-        { method: "GET" }
-      );
-      const s = unwrapOk<any>(res);
+      const path = `/api/mobile/v1/stats/me?range=today&tzOffsetMinutes=${encodeURIComponent(
+        String(tzOffsetMinutes)
+      )}`;
+
+      const res = await apiFetch({ method: "GET", path });
+      const s = unwrapOk<StatsMeResponse>(res as unknown);
 
       setData({
         leadsToday: Number(s?.leadsToday ?? 0),
@@ -44,12 +100,13 @@ export default function Stats() {
         lastLeadAt: s?.lastLeadAt ?? null,
         todayHourlyBuckets: Array.isArray(s?.todayHourlyBuckets) ? s.todayHourlyBuckets : [],
       });
-    } catch (e: any) {
-      setError(e?.message ?? "Network error.");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Network error.";
+      setError(msg);
     } finally {
       setLoading(false);
     }
-  }, [baseUrl]);
+  }, []);
 
   useEffect(() => {
     void refresh();
@@ -123,7 +180,9 @@ export default function Stats() {
             </View>
 
             <Text style={styles.cardSub}>
-              {data.lastLeadAt ? `Letzter Lead um ${new Date(data.lastLeadAt).toLocaleTimeString()}` : "Noch kein Lead heute."}
+              {data.lastLeadAt
+                ? `Letzter Lead um ${new Date(data.lastLeadAt).toLocaleTimeString()}`
+                : "Noch kein Lead heute."}
             </Text>
 
             <Pressable style={[styles.primaryBtn, { marginTop: 12 }]} onPress={refresh}>
