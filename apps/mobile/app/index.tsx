@@ -1,379 +1,544 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
-  Image,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   View,
+  Image,
 } from "react-native";
-import Ionicons from "@expo/vector-icons/Ionicons";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { apiFetch } from "../src/lib/api";
 import { BottomSheetModal } from "../src/ui/BottomSheetModal";
-import { useHomeData, AssignedForm } from "../src/features/home/useHomeData";
 
-const ACCENT = "#D33B3B";
+// ✅ ESLint: no require() imports
+import BRAND_LOGO_FALLBACK from "../assets/images/icon.png";
 
-// MVP Branding: App Icon as logo.
-// Later: replace with tenant branding (API / local mapping) without changing UI structure.
-const BRAND_LOGO = require("../assets/icon.png");
+type ApiErrorShape = {
+  ok: false;
+  error: { code: string; message: string; details?: unknown };
+  traceId: string;
+};
+
+type ApiOkShape<T> = {
+  ok: true;
+  data: T;
+  traceId: string;
+};
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+function isApiOk<T>(v: unknown): v is ApiOkShape<T> {
+  return isRecord(v) && v.ok === true && "data" in v;
+}
+
+function isApiErr(v: unknown): v is ApiErrorShape {
+  return isRecord(v) && v.ok === false && "error" in v;
+}
+
+function unwrapOk<T>(v: unknown): T {
+  if (isApiOk<T>(v)) return v.data;
+  if (isApiErr(v)) throw new Error(`${v.error.code}: ${v.error.message}`);
+  throw new Error("Invalid API response shape.");
+}
+
+type ActiveEvent = {
+  id: string;
+  name: string;
+  startsAt?: string | null;
+  endsAt?: string | null;
+  location?: string | null;
+};
+
+type EventsActiveResponse = { activeEvent: ActiveEvent | null };
+
+type FormSummary = {
+  id: string;
+  name: string;
+  description?: string | null;
+  status?: string | null;
+};
+
+type StatsMeResponse = {
+  leadsToday: number;
+  avgPerHour: number;
+  pendingAttachments: number;
+  todayHourlyBuckets?: Array<{ hour: number; count: number }>;
+};
+
+type BrandingResponse = {
+  branding: {
+    hasLogo: boolean;
+    logoMime?: string | null;
+    logoSizeBytes?: number | null;
+    logoUpdatedAt?: string | null;
+  };
+  logoDataUrl: string | null;
+};
+
+type EntryMode = "lead" | "card" | "manual";
 
 function formatEventMeta(startsAt?: string | null, endsAt?: string | null, location?: string | null) {
   const parts: string[] = [];
-  try {
-    if (startsAt) {
-      const s = new Date(startsAt);
-      parts.push(s.toLocaleDateString());
-    }
-    if (endsAt) {
-      const e = new Date(endsAt);
-      const endStr = e.toLocaleDateString();
-      if (!parts.includes(endStr)) parts.push(endStr);
-    }
-  } catch {
-    // ignore
+  if (startsAt || endsAt) {
+    const s = startsAt ? new Date(startsAt).toLocaleDateString() : "";
+    const e = endsAt ? new Date(endsAt).toLocaleDateString() : "";
+    const range = s && e ? `${s} – ${e}` : s || e;
+    if (range) parts.push(range);
   }
   if (location) parts.push(location);
   return parts.join(" · ");
 }
 
-export default function Home() {
+export default function HomeScreen() {
   const insets = useSafeAreaInsets();
-  const { state, refresh } = useHomeData();
-  const [sheetVisible, setSheetVisible] = useState(false);
-  const [sheetMode, setSheetMode] = useState<"lead" | "card" | "manual">("lead");
+  const tzOffsetMinutes = useMemo(() => new Date().getTimezoneOffset(), []);
 
-  const forms = useMemo(() => {
-    if (state.status !== "ready") return [];
-    return state.forms ?? [];
-  }, [state]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
-  function openFormPicker(mode: "lead" | "card" | "manual") {
-    setSheetMode(mode);
-    setSheetVisible(true);
+  const [activeEvent, setActiveEvent] = useState<ActiveEvent | null>(null);
+  const [forms, setForms] = useState<FormSummary[]>([]);
+  const [stats, setStats] = useState<StatsMeResponse | null>(null);
+
+  // ✅ tenant branding logo from backend (data-url), fallback to local icon
+  const [tenantLogoDataUrl, setTenantLogoDataUrl] = useState<string | null>(null);
+
+  const [sheetOpen, setSheetOpen] = useState<boolean>(false);
+  const [entryMode, setEntryMode] = useState<EntryMode>("lead");
+
+  async function load() {
+    setError(null);
+    try {
+      const [evRaw, formsRaw, statsRaw, brandingRaw] = await Promise.all([
+        apiFetch({ method: "GET", path: "/api/mobile/v1/events/active" }),
+        apiFetch({ method: "GET", path: "/api/mobile/v1/forms" }),
+        apiFetch({
+          method: "GET",
+          path: `/api/mobile/v1/stats/me?range=today&tzOffsetMinutes=${encodeURIComponent(String(tzOffsetMinutes))}`,
+        }),
+        apiFetch({ method: "GET", path: "/api/mobile/v1/branding" }),
+      ]);
+
+      const ev = unwrapOk<EventsActiveResponse>(evRaw).activeEvent;
+      const f = unwrapOk<FormSummary[]>(formsRaw);
+      const s = unwrapOk<StatsMeResponse>(statsRaw);
+      const b = unwrapOk<BrandingResponse>(brandingRaw);
+
+      setActiveEvent(ev ?? null);
+      setForms(Array.isArray(f) ? f : []);
+      setStats(s ?? null);
+      setTenantLogoDataUrl(b.logoDataUrl ?? null);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unknown error.";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
   }
 
-  function goCapture(form: AssignedForm, mode: "lead" | "card" | "manual") {
-    setSheetVisible(false);
-    router.push({
-      pathname: "/forms/[id]",
-      params: { id: form.id, entry: mode },
-    });
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function onRefresh() {
+    setRefreshing(true);
+    try {
+      await load();
+    } finally {
+      setRefreshing(false);
+    }
   }
 
-  function onPrimaryCTA() {
-    if (state.status === "needsProvision") {
-      router.push("/provision");
-      return;
-    }
-    if (state.status !== "ready") {
-      void refresh();
-      return;
-    }
+  function openCaptureForForm(formId: string, mode: EntryMode) {
+    const qp = mode === "lead" ? "" : `?entry=${encodeURIComponent(mode)}`;
+    router.push(`/forms/${formId}${qp}`);
+  }
 
+  function handlePrimaryCTA() {
     if (forms.length === 0) {
-      Alert.alert(
-        "Keine Formulare",
-        "Dieser Device hat aktuell keine ACTIVE Formulare zugewiesen. Öffne den Tab „Formulare“.",
-        [
-          { text: "Abbrechen", style: "cancel" },
-          { text: "Zu Formulare", onPress: () => router.push("/forms") },
-        ]
-      );
+      Alert.alert("Keine Formulare", "Dir sind aktuell keine aktiven Formulare zugewiesen.", [
+        { text: "Formulare öffnen", onPress: () => router.push("/forms") },
+        { text: "OK" },
+      ]);
       return;
     }
-
     if (forms.length === 1) {
-      goCapture(forms[0], "lead");
+      openCaptureForForm(forms[0].id, "lead");
       return;
     }
-
-    openFormPicker("lead");
+    setEntryMode("lead");
+    setSheetOpen(true);
   }
 
-  function onQuickAction(mode: "card" | "manual") {
-    if (state.status === "needsProvision") {
-      router.push("/provision");
-      return;
-    }
-    if (state.status !== "ready") {
-      void refresh();
-      return;
-    }
-
+  function handleQuick(mode: EntryMode) {
     if (forms.length === 0) {
-      Alert.alert(
-        "Keine Formulare",
-        "Bitte zuerst ein Formular auswählen/zuweisen. Öffne den Tab „Formulare“.",
-        [
-          { text: "Abbrechen", style: "cancel" },
-          { text: "Zu Formulare", onPress: () => router.push("/forms") },
-        ]
-      );
+      Alert.alert("Keine Formulare", "Dir sind aktuell keine aktiven Formulare zugewiesen.", [
+        { text: "Formulare öffnen", onPress: () => router.push("/forms") },
+        { text: "OK" },
+      ]);
       return;
     }
-
     if (forms.length === 1) {
-      goCapture(forms[0], mode);
+      openCaptureForForm(forms[0].id, mode);
       return;
     }
-
-    openFormPicker(mode);
+    setEntryMode(mode);
+    setSheetOpen(true);
   }
 
-  // Enough space so the last button row is always reachable above tab bar + Android system nav
-  const extraBottom = 24 + Math.max(insets.bottom, 0) + 72;
+  // breathing room above TabBar + Android system nav
+  const contentBottomPad = 24 + Math.max(insets.bottom, 0) + 72;
+
+  const headerLogoSource = tenantLogoDataUrl
+    ? ({ uri: tenantLogoDataUrl } as const)
+    : (BRAND_LOGO_FALLBACK as unknown);
 
   return (
-    <ScrollView
-      style={styles.page}
-      contentContainerStyle={[styles.container, { paddingBottom: extraBottom, paddingTop: 16 + insets.top * 0.2 }]}
-      refreshControl={<RefreshControl refreshing={false} onRefresh={refresh} />}
-    >
-      <View style={styles.headerRow}>
-        <View style={styles.brandRow}>
-          <Image source={BRAND_LOGO} style={styles.brandLogo} resizeMode="contain" />
+    <>
+      <ScrollView
+        contentContainerStyle={[styles.container, { paddingBottom: contentBottomPad }]}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        {/* Header */}
+        <View style={styles.headerRow}>
+          <View style={styles.brandRow}>
+            <Image
+              alt="Tenant Logo"
+              accessibilityLabel="Tenant Logo"
+              source={headerLogoSource as never}
+              style={styles.brandLogo}
+              resizeMode="contain"
+            />
+          </View>
+          <Text style={styles.title}>Home</Text>
         </View>
 
-        <Pressable onPress={() => router.push("/stats")} style={styles.iconBtn} accessibilityRole="button">
-          <Ionicons name="stats-chart-outline" size={20} color="#444" />
-        </Pressable>
-      </View>
+        {/* Active Event Card */}
+        <View style={styles.card}>
+          <Text style={styles.cardLabel}>Aktives Event</Text>
 
-      <Text style={styles.title}>Home</Text>
-
-      {state.status === "loading" && (
-        <View style={styles.loadingWrap}>
-          <ActivityIndicator />
-          <Text style={styles.loadingText}>Lade…</Text>
-        </View>
-      )}
-
-      {state.status === "needsProvision" && (
-        <View style={[styles.card, styles.warnCard]}>
-          <Text style={styles.cardTitle}>Device nicht aktiviert</Text>
-          <Text style={styles.cardSub}>Bitte Provisioning durchführen, um online erfassen zu können.</Text>
-          <Pressable style={[styles.btn, { marginTop: 12 }]} onPress={() => router.push("/provision")}>
-            <Text style={styles.btnText}>Provisioning öffnen</Text>
-          </Pressable>
-        </View>
-      )}
-
-      {state.status === "error" && (
-        <View style={[styles.card, styles.warnCard]}>
-          <Text style={styles.cardTitle}>Netzwerkfehler</Text>
-          <Text style={styles.cardSub}>{state.message}</Text>
-          <Pressable style={[styles.btn, { marginTop: 12 }]} onPress={refresh}>
-            <Text style={styles.btnText}>Retry</Text>
-          </Pressable>
-        </View>
-      )}
-
-      {state.status === "ready" && (
-        <>
-          {/* Active Event */}
-          <Pressable style={styles.card} onPress={() => router.push("/stats")}>
-            <View style={styles.cardRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.cardTitle}>
-                  {state.activeEvent ? state.activeEvent.name : "Kein aktives Event"}
+          {loading ? (
+            <View style={styles.skeletonBlock} />
+          ) : activeEvent ? (
+            <>
+              <View style={styles.cardRow}>
+                <Text style={styles.cardTitle} numberOfLines={1}>
+                  {activeEvent.name}
                 </Text>
-                <Text style={styles.cardSub}>
-                  {state.activeEvent
-                    ? formatEventMeta(state.activeEvent.startsAt, state.activeEvent.endsAt, state.activeEvent.location)
-                    : "Bitte Event aktivieren (Admin) oder Retry."}
-                </Text>
+                <Text style={styles.chev}>›</Text>
               </View>
-              <Ionicons name="chevron-forward" size={18} color="#9A9A9A" />
-            </View>
-
-            {!state.activeEvent && (
-              <Pressable style={[styles.secondaryBtn, { marginTop: 12 }]} onPress={refresh}>
+              {formatEventMeta(activeEvent.startsAt, activeEvent.endsAt, activeEvent.location) ? (
+                <Text style={styles.cardMeta}>
+                  {formatEventMeta(activeEvent.startsAt, activeEvent.endsAt, activeEvent.location)}
+                </Text>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <Text style={styles.warnText}>Kein aktives Event gefunden.</Text>
+              <Pressable style={styles.secondaryBtn} onPress={load}>
                 <Text style={styles.secondaryBtnText}>Retry</Text>
               </Pressable>
-            )}
-          </Pressable>
+            </>
+          )}
+        </View>
 
-          {/* Mini Stats */}
-          <Pressable style={styles.card} onPress={() => router.push("/stats")}>
-            <Text style={styles.cardTitle}>Statistik heute</Text>
-            <View style={styles.statsRow}>
-              <View style={styles.statBox}>
-                <Text style={styles.statLabel}>Leads</Text>
-                <Text style={styles.statValue}>{state.stats.leadsToday}</Text>
-              </View>
-              <View style={styles.divider} />
-              <View style={styles.statBox}>
-                <Text style={styles.statLabel}>Ø pro Stunde</Text>
-                <Text style={styles.statValue}>{state.stats.avgPerHour}/h</Text>
-              </View>
-              <View style={styles.divider} />
-              <View style={styles.statBox}>
-                <Text style={styles.statLabel}>Anhänge ausstehend</Text>
-                <Text style={styles.statValue}>{state.stats.pendingAttachments}</Text>
-              </View>
-            </View>
-
-            <View style={styles.miniBars}>
-              {(state.stats.todayHourlyBuckets ?? []).slice(-12).map((b) => {
-                const h = Math.max(4, Math.min(36, b.count * 6));
-                return <View key={String(b.hour)} style={[styles.bar, { height: h }]} />;
-              })}
-              {(state.stats.todayHourlyBuckets ?? []).length === 0 && (
-                <Text style={styles.cardSub}>Weitere Statistiken im Tab „Stats“</Text>
-              )}
-            </View>
-          </Pressable>
-
-          {/* Primary CTA */}
-          <Pressable style={styles.primaryBtn} onPress={onPrimaryCTA}>
-            <Text style={styles.primaryBtnText}>Lead erfassen</Text>
-          </Pressable>
-
-          {/* Quick Actions */}
-          <View style={styles.card}>
-            <Pressable style={styles.rowBtn} onPress={() => onQuickAction("card")}>
-              <View style={styles.rowLeft}>
-                <Ionicons name="card-outline" size={18} color="#444" />
-                <Text style={styles.rowText}>Visitenkarte scannen</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color="#9A9A9A" />
-            </Pressable>
-
-            <View style={styles.rowDivider} />
-
-            <Pressable style={styles.rowBtn} onPress={() => onQuickAction("manual")}>
-              <View style={styles.rowLeft}>
-                <Ionicons name="person-add-outline" size={18} color="#444" />
-                <Text style={styles.rowText}>Kontakt manuell hinzufügen</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color="#9A9A9A" />
+        {/* Error State */}
+        {error ? (
+          <View style={[styles.card, styles.cardError]}>
+            <Text style={styles.errorTitle}>Fehler</Text>
+            <Text style={styles.errorText}>{error}</Text>
+            <Pressable style={styles.secondaryBtn} onPress={load}>
+              <Text style={styles.secondaryBtnText}>Retry</Text>
             </Pressable>
           </View>
+        ) : null}
 
-          <Text style={styles.footerHint}>Daten werden online erfasst · Pull to refresh</Text>
-        </>
-      )}
+        {/* Mini Stats */}
+        <Pressable style={styles.card} onPress={() => router.push("/stats")}>
+          <View style={styles.cardRow}>
+            <Text style={styles.cardLabel}>Statistik heute</Text>
+            <Text style={styles.chev}>›</Text>
+          </View>
 
-      {/* Form Picker */}
-      <BottomSheetModal visible={sheetVisible} onClose={() => setSheetVisible(false)}>
-        <View style={{ paddingHorizontal: 16, paddingBottom: 6 }}>
-          <Text style={styles.sheetTitle}>Form wählen</Text>
-          <Text style={styles.sheetSub}>Wähle das Formular für den Capture-Flow.</Text>
-        </View>
-
-        <View style={{ paddingHorizontal: 8 }}>
-          {forms.map((f) => (
-            <Pressable key={f.id} style={styles.sheetItem} onPress={() => goCapture(f, sheetMode)}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.sheetItemTitle}>{f.name}</Text>
-                {!!f.description && <Text style={styles.sheetItemSub}>{f.description}</Text>}
+          {loading ? (
+            <View style={styles.skeletonRow} />
+          ) : (
+            <View style={styles.statsRow}>
+              <View style={styles.stat}>
+                <Text style={styles.statLabel}>Leads</Text>
+                <Text style={styles.statValue}>{stats?.leadsToday ?? 0}</Text>
               </View>
-              <Ionicons name="chevron-forward" size={18} color="#9A9A9A" />
-            </Pressable>
-          ))}
-        </View>
+              <View style={styles.stat}>
+                <Text style={styles.statLabel}>Ø/h</Text>
+                <Text style={styles.statValue}>{(stats?.avgPerHour ?? 0).toFixed(1)}</Text>
+              </View>
+              <View style={styles.stat}>
+                <Text style={styles.statLabel}>Anhänge</Text>
+                <Text style={styles.statValue}>{stats?.pendingAttachments ?? 0}</Text>
+              </View>
+            </View>
+          )}
 
-        <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
-          <Pressable style={styles.secondaryBtn} onPress={() => setSheetVisible(false)}>
-            <Text style={styles.secondaryBtnText}>Schliessen</Text>
+          <Text style={styles.miniHint}>Weitere Statistiken im „Stats“-Tab</Text>
+        </Pressable>
+
+        {/* Primary CTA */}
+        <Pressable style={styles.primaryBtn} onPress={handlePrimaryCTA}>
+          <Text style={styles.primaryBtnText}>Lead erfassen</Text>
+        </Pressable>
+
+        {/* Quick Actions */}
+        <View style={styles.quickWrap}>
+          <Pressable style={[styles.quickRow, { borderTopWidth: 0 }]} onPress={() => handleQuick("card")}>
+            <Text style={styles.quickText}>Visitenkarte scannen</Text>
+            <Text style={styles.chev}>›</Text>
+          </Pressable>
+
+          <Pressable style={styles.quickRow} onPress={() => handleQuick("manual")}>
+            <Text style={styles.quickText}>Kontakt manuell hinzufügen</Text>
+            <Text style={styles.chev}>›</Text>
           </Pressable>
         </View>
+
+        {/* Footer hint */}
+        <Text style={styles.footerHint}>Daten werden online erfasst · Pull to refresh</Text>
+      </ScrollView>
+
+      {/* Form select sheet (for >1 forms) */}
+      <BottomSheetModal visible={sheetOpen} onClose={() => setSheetOpen(false)}>
+        <Text style={styles.sheetTitle}>Form wählen</Text>
+        <View style={styles.sheetList}>
+          {forms.map((f) => (
+            <Pressable
+              key={f.id}
+              style={styles.sheetItem}
+              onPress={() => {
+                setSheetOpen(false);
+                openCaptureForForm(f.id, entryMode);
+              }}
+            >
+              <Text style={styles.sheetItemTitle} numberOfLines={1}>
+                {f.name}
+              </Text>
+              {f.description ? (
+                <Text style={styles.sheetItemMeta} numberOfLines={1}>
+                  {f.description}
+                </Text>
+              ) : null}
+            </Pressable>
+          ))}
+          {forms.length === 0 ? <Text style={styles.sheetEmpty}>Keine Formulare zugewiesen.</Text> : null}
+        </View>
       </BottomSheetModal>
-    </ScrollView>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: "#F6F6F6" },
-  container: { paddingHorizontal: 16 },
+  container: {
+    paddingTop: 18,
+    paddingHorizontal: 16,
+    gap: 12,
+  },
 
-  headerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  brandRow: { flexDirection: "row", alignItems: "center" },
-  brandLogo: { width: 120, height: 28 },
-
-  iconBtn: { padding: 10, borderRadius: 10, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#ECECEC" },
-  title: { marginTop: 14, marginBottom: 10, fontSize: 34, fontWeight: "700", color: "#111" },
-
-  loadingWrap: { padding: 16, alignItems: "center", gap: 10 },
-  loadingText: { color: "#666" },
+  headerRow: {
+    gap: 8,
+    marginBottom: 4,
+  },
+  brandRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  brandLogo: {
+    width: 140,
+    height: 30,
+  },
+  title: {
+    fontSize: 30,
+    fontWeight: "700",
+    letterSpacing: -0.2,
+  },
 
   card: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 16,
-    padding: 16,
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 14,
     borderWidth: 1,
-    borderColor: "#ECECEC",
-    marginTop: 12,
+    borderColor: "rgba(0,0,0,0.06)",
   },
-  warnCard: { borderColor: "#F0D6D6" },
-  cardRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  cardTitle: { fontSize: 16, fontWeight: "700", color: "#111" },
-  cardSub: { marginTop: 6, fontSize: 13, color: "#666" },
-
-  btn: { backgroundColor: ACCENT, borderRadius: 12, paddingVertical: 12, alignItems: "center" },
-  btnText: { color: "#FFF", fontWeight: "700" },
-
-  secondaryBtn: {
-    backgroundColor: "#F6F6F6",
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#E9E9E9",
+  cardError: {
+    borderColor: "rgba(220,38,38,0.25)",
   },
-  secondaryBtnText: { color: "#333", fontWeight: "700" },
-
-  statsRow: { flexDirection: "row", alignItems: "stretch", marginTop: 12 },
-  statBox: { flex: 1 },
-  statLabel: { fontSize: 12, color: "#777" },
-  statValue: { marginTop: 6, fontSize: 20, fontWeight: "800", color: "#111" },
-  divider: { width: 1, backgroundColor: "#EFEFEF", marginHorizontal: 12 },
-
-  miniBars: {
-    marginTop: 12,
+  cardRow: {
     flexDirection: "row",
-    alignItems: "flex-end",
-    gap: 6,
-    minHeight: 38,
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
   },
-  bar: { width: 10, borderRadius: 6, backgroundColor: "#D9E2F2" },
+  cardLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    opacity: 0.7,
+  },
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    flex: 1,
+  },
+  cardMeta: {
+    marginTop: 6,
+    opacity: 0.7,
+  },
+  chev: {
+    fontSize: 22,
+    opacity: 0.35,
+  },
+
+  warnText: {
+    marginTop: 8,
+    opacity: 0.75,
+  },
+
+  errorTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    marginBottom: 6,
+    color: "#b91c1c",
+  },
+  errorText: {
+    opacity: 0.8,
+    marginBottom: 10,
+  },
 
   primaryBtn: {
-    marginTop: 14,
-    backgroundColor: ACCENT,
+    backgroundColor: "#d32f2f",
     borderRadius: 14,
     paddingVertical: 16,
     alignItems: "center",
   },
-  primaryBtnText: { color: "#FFF", fontWeight: "800", fontSize: 16 },
+  primaryBtnText: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 16,
+  },
 
-  rowBtn: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 12 },
-  rowLeft: { flexDirection: "row", alignItems: "center", gap: 10 },
-  rowText: { fontSize: 15, color: "#222", fontWeight: "600" },
-  rowDivider: { height: 1, backgroundColor: "#EFEFEF" },
+  secondaryBtn: {
+    marginTop: 10,
+    alignSelf: "flex-start",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: "rgba(0,0,0,0.06)",
+  },
+  secondaryBtnText: {
+    fontWeight: "600",
+    opacity: 0.85,
+  },
 
-  footerHint: { marginTop: 10, fontSize: 12, color: "#888", textAlign: "center" },
-
-  sheetTitle: { fontSize: 18, fontWeight: "800", color: "#111" },
-  sheetSub: { marginTop: 4, fontSize: 13, color: "#666" },
-  sheetItem: {
+  quickWrap: {
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.06)",
+    overflow: "hidden",
+  },
+  quickRow: {
+    paddingVertical: 14,
+    paddingHorizontal: 14,
     flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
+    borderTopWidth: 1,
+    borderTopColor: "rgba(0,0,0,0.06)",
+  },
+  quickText: {
+    fontSize: 16,
+    fontWeight: "600",
+  },
+
+  statsRow: {
+    flexDirection: "row",
+    gap: 16,
+    marginTop: 10,
+  },
+  stat: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.03)",
+    borderRadius: 12,
+    padding: 10,
+  },
+  statLabel: {
+    fontSize: 12,
+    opacity: 0.65,
+    fontWeight: "600",
+  },
+  statValue: {
+    marginTop: 6,
+    fontSize: 18,
+    fontWeight: "800",
+    letterSpacing: -0.2,
+  },
+  miniHint: {
+    marginTop: 10,
+    opacity: 0.6,
+    fontSize: 12,
+  },
+
+  footerHint: {
+    marginTop: 2,
+    opacity: 0.55,
+    fontSize: 12,
+    textAlign: "center",
+  },
+
+  skeletonBlock: {
+    marginTop: 10,
+    height: 18,
+    borderRadius: 8,
+    backgroundColor: "rgba(0,0,0,0.06)",
+  },
+  skeletonRow: {
+    marginTop: 12,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: "rgba(0,0,0,0.06)",
+  },
+
+  sheetTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    marginBottom: 10,
+  },
+  sheetList: {
     gap: 10,
+    paddingBottom: 10,
+  },
+  sheetItem: {
     paddingVertical: 12,
     paddingHorizontal: 12,
     borderRadius: 12,
-    backgroundColor: "#FFF",
-    borderWidth: 1,
-    borderColor: "#EFEFEF",
-    marginBottom: 8,
+    backgroundColor: "rgba(0,0,0,0.04)",
   },
-  sheetItemTitle: { fontSize: 15, fontWeight: "700", color: "#111" },
-  sheetItemSub: { marginTop: 4, fontSize: 12, color: "#666" },
+  sheetItemTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  sheetItemMeta: {
+    marginTop: 4,
+    opacity: 0.7,
+    fontSize: 12,
+  },
+  sheetEmpty: {
+    opacity: 0.7,
+  },
 });
