@@ -11,7 +11,7 @@ export const runtime = "nodejs";
 
 const BRANDING_ROOT_DIR = ".tmp_branding";
 
-type Payload = {
+type LogoBase64Payload = {
   mime: string;
   base64: string;
 };
@@ -20,27 +20,34 @@ export async function GET(req: Request) {
   try {
     const auth = await requireMobileAuth(req);
 
-    enforceRateLimit(`mobile:${auth.apiKeyId}`, { limit: 15, windowMs: 60_000 });
+    enforceRateLimit(`mobile:${auth.apiKeyId}:branding_logo`, { limit: 30, windowMs: 60_000 });
 
-    const tenant = await prisma.tenant.findUnique({
+    // Ops telemetry
+    const now = new Date();
+    await prisma.mobileApiKey.update({
+      where: { id: auth.apiKeyId },
+      data: { lastUsedAt: now },
+    });
+    await prisma.mobileDevice.update({
+      where: { id: auth.deviceId },
+      data: { lastSeenAt: now },
+    });
+
+    const t = await prisma.tenant.findUnique({
       where: { id: auth.tenantId },
       select: { logoKey: true, logoMime: true },
     });
 
-    if (!tenant?.logoKey || !tenant.logoMime) {
+    if (!t?.logoKey || !t.logoMime) {
       return jsonError(req, 404, "NOT_FOUND", "Logo not found.");
     }
 
-    const absPath = getAbsolutePath({ rootDirName: BRANDING_ROOT_DIR, relativeKey: tenant.logoKey });
+    const absPath = getAbsolutePath({ rootDirName: BRANDING_ROOT_DIR, relativeKey: t.logoKey });
     const exists = await fileExists(absPath);
     if (!exists) return jsonError(req, 404, "NOT_FOUND", "Logo not found.");
 
     const buf = await readFile(absPath);
-
-    const payload: Payload = {
-      mime: tenant.logoMime,
-      base64: buf.toString("base64"),
-    };
+    const payload: LogoBase64Payload = { mime: t.logoMime, base64: buf.toString("base64") };
 
     return jsonOk(req, payload);
   } catch (e) {
