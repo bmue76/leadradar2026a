@@ -8,6 +8,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { apiFetch } from "../src/lib/api";
 
@@ -66,10 +67,13 @@ function unwrapOk<T>(v: unknown): T {
     if (v.ok) return v.data;
     throw new ApiError(v.error?.message ?? "Request failed.", v.error?.code);
   }
-  return v as T; // tolerant fallback
+  return v as T;
 }
 
 export default function Stats() {
+  const insets = useSafeAreaInsets();
+  const extraBottom = 24 + Math.max(insets.bottom, 0) + 72;
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -115,7 +119,7 @@ export default function Stats() {
   return (
     <ScrollView
       style={styles.page}
-      contentContainerStyle={styles.container}
+      contentContainerStyle={[styles.container, { paddingBottom: extraBottom }]}
       refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} />}
     >
       <Text style={styles.title}>Statistik</Text>
@@ -199,7 +203,7 @@ export default function Stats() {
 
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: "#F6F6F6" },
-  container: { padding: 16, paddingBottom: 24 },
+  container: { padding: 16 },
   title: { marginTop: 10, marginBottom: 10, fontSize: 34, fontWeight: "700", color: "#111" },
 
   segment: {

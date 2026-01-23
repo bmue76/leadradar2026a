@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -11,11 +12,16 @@ import {
 } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { router } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { BottomSheetModal } from "../src/ui/BottomSheetModal";
 import { useHomeData, AssignedForm } from "../src/features/home/useHomeData";
 
 const ACCENT = "#D33B3B";
+
+// MVP Branding: App Icon as logo.
+// Later: replace with tenant branding (API / local mapping) without changing UI structure.
+const BRAND_LOGO = require("../assets/icon.png");
 
 function formatEventMeta(startsAt?: string | null, endsAt?: string | null, location?: string | null) {
   const parts: string[] = [];
@@ -37,6 +43,7 @@ function formatEventMeta(startsAt?: string | null, endsAt?: string | null, locat
 }
 
 export default function Home() {
+  const insets = useSafeAreaInsets();
   const { state, refresh } = useHomeData();
   const [sheetVisible, setSheetVisible] = useState(false);
   const [sheetMode, setSheetMode] = useState<"lead" | "card" | "manual">("lead");
@@ -53,7 +60,6 @@ export default function Home() {
 
   function goCapture(form: AssignedForm, mode: "lead" | "card" | "manual") {
     setSheetVisible(false);
-    // Capture flow entry flags are passed as query params (tolerant if screen ignores them)
     router.push({
       pathname: "/forms/[id]",
       params: { id: form.id, entry: mode },
@@ -120,22 +126,22 @@ export default function Home() {
     openFormPicker(mode);
   }
 
-  const refreshing = false;
+  // Enough space so the last button row is always reachable above tab bar + Android system nav
+  const extraBottom = 24 + Math.max(insets.bottom, 0) + 72;
 
   return (
     <ScrollView
       style={styles.page}
-      contentContainerStyle={styles.container}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
+      contentContainerStyle={[styles.container, { paddingBottom: extraBottom, paddingTop: 16 + insets.top * 0.2 }]}
+      refreshControl={<RefreshControl refreshing={false} onRefresh={refresh} />}
     >
       <View style={styles.headerRow}>
         <View style={styles.brandRow}>
-          <View style={styles.brandDot} />
-          <Text style={styles.brandText}>Atlex GmbH</Text>
+          <Image source={BRAND_LOGO} style={styles.brandLogo} resizeMode="contain" />
         </View>
 
         <Pressable onPress={() => router.push("/stats")} style={styles.iconBtn} accessibilityRole="button">
-          <Ionicons name="search-outline" size={20} color="#444" />
+          <Ionicons name="stats-chart-outline" size={20} color="#444" />
         </Pressable>
       </View>
 
@@ -250,7 +256,6 @@ export default function Home() {
             </Pressable>
           </View>
 
-          {/* Footer hint */}
           <Text style={styles.footerHint}>Daten werden online erfasst · Pull to refresh</Text>
         </>
       )}
@@ -286,11 +291,12 @@ export default function Home() {
 
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: "#F6F6F6" },
-  container: { padding: 16, paddingBottom: 24 },
+  container: { paddingHorizontal: 16 },
+
   headerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  brandRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  brandDot: { width: 10, height: 10, borderRadius: 99, backgroundColor: ACCENT },
-  brandText: { fontSize: 16, fontWeight: "600", color: "#222" },
+  brandRow: { flexDirection: "row", alignItems: "center" },
+  brandLogo: { width: 120, height: 28 },
+
   iconBtn: { padding: 10, borderRadius: 10, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#ECECEC" },
   title: { marginTop: 14, marginBottom: 10, fontSize: 34, fontWeight: "700", color: "#111" },
 

@@ -3,6 +3,7 @@ import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "r
 import { router } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import * as SecureStore from "expo-secure-store";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const KEY = "lr:recentLeads:v1";
 
@@ -24,6 +25,9 @@ async function loadRecent(): Promise<RecentLead[]> {
 }
 
 export default function Leads() {
+  const insets = useSafeAreaInsets();
+  const extraBottom = 24 + Math.max(insets.bottom, 0) + 72;
+
   const [items, setItems] = useState<RecentLead[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -44,7 +48,7 @@ export default function Leads() {
   return (
     <ScrollView
       style={styles.page}
-      contentContainerStyle={styles.container}
+      contentContainerStyle={[styles.container, { paddingBottom: extraBottom }]}
       refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} />}
     >
       <Text style={styles.title}>Leads</Text>
@@ -82,7 +86,7 @@ export default function Leads() {
 
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: "#F6F6F6" },
-  container: { padding: 16, paddingBottom: 24 },
+  container: { padding: 16 },
   title: { marginTop: 10, marginBottom: 10, fontSize: 34, fontWeight: "700", color: "#111" },
   card: {
     backgroundColor: "#FFFFFF",
