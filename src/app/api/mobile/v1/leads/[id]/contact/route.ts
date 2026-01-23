@@ -19,10 +19,12 @@ const ContactPatchBodySchema = z
   .object({
     // meta
     contactSource: z.enum(["OCR_MOBILE", "MANUAL", "QR_VCARD"]).optional(),
-    contactOcrResultId: OptStr,
-    ocrResultId: OptStr, // alias (falls irgendwo noch verwendet)
 
-    // mobile shape (präferiert)
+    // we ACCEPT this, but we do NOT write it to Lead (not a Lead column)
+    contactOcrResultId: OptStr,
+    ocrResultId: OptStr,
+
+    // mobile shape
     contactFirstName: OptStr,
     contactLastName: OptStr,
     contactEmail: OptStr,
@@ -68,11 +70,8 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     const body = await validateBody(req, ContactPatchBodySchema, 128 * 1024);
     const leadId = (await ctx.params).id;
 
-    const contactOcrResultId = body.contactOcrResultId ?? body.ocrResultId ?? undefined;
-
     const data = {
       contactSource: body.contactSource ?? undefined,
-      contactOcrResultId,
 
       contactFirstName: body.contactFirstName ?? body.firstName ?? undefined,
       contactLastName: body.contactLastName ?? body.lastName ?? undefined,
@@ -88,7 +87,6 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       contactCountry: body.contactCountry ?? body.country ?? undefined,
     };
 
-    // tenant-safe update
     const res = await prisma.lead.updateMany({
       where: { id: leadId, tenantId: auth.tenantId },
       data,

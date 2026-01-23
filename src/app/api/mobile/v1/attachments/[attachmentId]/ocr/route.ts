@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { Prisma, type LeadOcrResult } from "@prisma/client";
 import { z } from "zod";
-import { NextRequest } from "next/server";
 
 import { jsonError, jsonOk } from "@/lib/api";
 import { enforceRateLimit } from "@/lib/rateLimit";
@@ -55,23 +54,23 @@ const ContactSchema = z.object({
   country: z.string().trim().min(1).optional(),
 });
 
-const PutOcrBodySchema = z.object({
-  engine: z.enum(["MLKIT"]).optional(),
-  engineVersion: z.string().trim().min(1).optional(),
-  languageHint: z.string().trim().min(1).optional(),
+const UpsertOcrBodySchema = z
+  .object({
+    engine: z.enum(["MLKIT"]).optional(),
+    engineVersion: z.string().trim().min(1).optional(),
+    languageHint: z.string().trim().min(1).optional(),
 
-  rawText: z.string().min(1),
-  blocksJson: z.unknown().optional(),
+    rawText: z.string().min(1),
+    blocksJson: z.unknown().optional(),
 
-  // “neues” Feld (server-seitig)
-  parsedContact: ContactSchema.optional(),
+    // accept both names (backend/admin vs mobile)
+    parsedContact: ContactSchema.optional(),
+    suggestions: z.unknown().optional(),
 
-  // “altes”/mobile Feld – wir speichern es trotzdem, damit die Admin-UI etwas hat
-  suggestions: z.unknown().optional(),
-
-  confidence: z.number().min(0).max(1).optional(),
-  resultHash: z.string().trim().min(1).optional(),
-});
+    confidence: z.number().min(0).max(1).optional(),
+    resultHash: z.string().trim().min(1).optional(),
+  })
+  .passthrough();
 
 function toOcrApiShape(r: LeadOcrResult) {
   return {
@@ -105,7 +104,7 @@ async function updateMobileTelemetry(auth: { apiKeyId: string; deviceId: string 
   await prisma.mobileDevice.update({ where: { id: auth.deviceId }, data: { lastSeenAt: now } });
 }
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ attachmentId: string }> }) {
+export async function GET(req: Request, ctx: { params: Promise<{ attachmentId: string }> }) {
   try {
     const auth = await requireMobileAuth(req);
     enforceRateLimit(`mobile:${auth.apiKeyId}:ocr_get`, { limit: 120, windowMs: 60_000 });
@@ -141,14 +140,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ attachmentI
   }
 }
 
-async function upsertOcr(req: NextRequest, ctx: { params: Promise<{ attachmentId: string }> }, rlKey: "post" | "put") {
+async function upsert(req: Request, ctx: { params: Promise<{ attachmentId: string }> }, verb: "POST" | "PUT") {
   const auth = await requireMobileAuth(req);
-  enforceRateLimit(`mobile:${auth.apiKeyId}:ocr_${rlKey}`, { limit: 60, windowMs: 60_000 });
+  enforceRateLimit(`mobile:${auth.apiKeyId}:ocr_${verb.toLowerCase()}`, { limit: 60, windowMs: 60_000 });
 
   await updateMobileTelemetry(auth);
 
   const query = await validateQuery(req, OcrModeQuerySchema);
-  const body = await validateBody(req, PutOcrBodySchema, 2 * 1024 * 1024);
+  const body = await validateBody(req, UpsertOcrBodySchema, 2 * 1024 * 1024);
   const attachmentId = (await ctx.params).attachmentId;
 
   const attachment = await prisma.leadAttachment.findFirst({
@@ -160,7 +159,7 @@ async function upsertOcr(req: NextRequest, ctx: { params: Promise<{ attachmentId
     return jsonError(req, 409, "INVALID_ATTACHMENT_TYPE", "Attachment is not a business card image.");
   }
 
-  const parsedContactLike = body.parsedContact ?? body.suggestions ?? null;
+  const parsedOrSuggestions = body.parsedContact ?? body.suggestions ?? null;
 
   const computedHash =
     body.resultHash ??
@@ -171,7 +170,7 @@ async function upsertOcr(req: NextRequest, ctx: { params: Promise<{ attachmentId
       languageHint: body.languageHint ?? null,
       rawText: body.rawText,
       blocksJson: body.blocksJson ?? null,
-      parsedContact: parsedContactLike,
+      parsedOrSuggestions,
       confidence: body.confidence ?? null,
     });
 
@@ -190,12 +189,7 @@ async function upsertOcr(req: NextRequest, ctx: { params: Promise<{ attachmentId
   }
 
   if (existing?.resultHash && existing.resultHash === computedHash) {
-    return jsonOk(req, {
-      ocrResultId: existing.id, // ✅ wichtig für Mobile
-      id: existing.id,          // ✅ zusätzlicher Fallback
-      ocr: toOcrApiShape(existing),
-      idempotency: "HIT",
-    });
+    return jsonOk(req, { ocr: toOcrApiShape(existing), ocrResultId: existing.id, idempotency: "HIT" });
   }
 
   const now = new Date();
@@ -222,7 +216,7 @@ async function upsertOcr(req: NextRequest, ctx: { params: Promise<{ attachmentId
 
       rawText: body.rawText,
       blocksJson: toJsonInput(body.blocksJson),
-      parsedContactJson: toJsonInput(parsedContactLike),
+      parsedContactJson: toJsonInput(parsedOrSuggestions),
       confidence: body.confidence ?? null,
 
       resultHash: computedHash,
@@ -239,7 +233,7 @@ async function upsertOcr(req: NextRequest, ctx: { params: Promise<{ attachmentId
 
       rawText: body.rawText,
       blocksJson: toJsonInput(body.blocksJson),
-      parsedContactJson: toJsonInput(parsedContactLike),
+      parsedContactJson: toJsonInput(parsedOrSuggestions),
       confidence: body.confidence ?? null,
 
       resultHash: computedHash,
@@ -249,26 +243,21 @@ async function upsertOcr(req: NextRequest, ctx: { params: Promise<{ attachmentId
     },
   });
 
-  return jsonOk(req, {
-    ocrResultId: ocr.id, // ✅ wichtig für Mobile
-    id: ocr.id,          // ✅ zusätzlicher Fallback
-    ocr: toOcrApiShape(ocr),
-    idempotency: "MISS",
-  });
+  return jsonOk(req, { ocr: toOcrApiShape(ocr), ocrResultId: ocr.id, idempotency: "MISS" });
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ attachmentId: string }> }) {
+export async function POST(req: Request, ctx: { params: Promise<{ attachmentId: string }> }) {
   try {
-    return await upsertOcr(req, ctx, "post");
+    return await upsert(req, ctx, "POST");
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     return jsonError(req, 500, "INTERNAL", "Unexpected error.");
   }
 }
 
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ attachmentId: string }> }) {
+export async function PUT(req: Request, ctx: { params: Promise<{ attachmentId: string }> }) {
   try {
-    return await upsertOcr(req, ctx, "put");
+    return await upsert(req, ctx, "PUT");
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     return jsonError(req, 500, "INTERNAL", "Unexpected error.");
