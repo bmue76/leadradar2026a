@@ -19,6 +19,8 @@ import { BottomSheetModal } from "../src/ui/BottomSheetModal";
 
 import BRAND_LOGO_FALLBACK from "../assets/images/icon.png";
 
+const DEV_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? "(unset)";
+
 type ApiErrorShape = {
   ok: false;
   error: { code: string; message: string; details?: unknown };
@@ -29,16 +31,36 @@ type ApiOkShape<T> = { ok: true; data: T; traceId: string };
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
+
 function isApiOk<T>(v: unknown): v is ApiOkShape<T> {
   return isRecord(v) && v.ok === true && "data" in v;
 }
+
 function isApiErr(v: unknown): v is ApiErrorShape {
   return isRecord(v) && v.ok === false && "error" in v;
 }
-function unwrapOk<T>(v: unknown): T {
+
+function isResponseLike(v: unknown): v is { json: () => Promise<unknown> } {
+  if (!isRecord(v)) return false;
+  const j = v.json;
+  return typeof j === "function";
+}
+
+async function asJson(v: unknown): Promise<unknown> {
+  if (isResponseLike(v)) return await v.json();
+  return v;
+}
+
+/**
+ * Tolerant unwrap:
+ * - If API envelope: ok:true => return data
+ * - If API envelope: ok:false => throw
+ * - Else: assume it's already the data payload (some apiFetch wrappers do this)
+ */
+function unwrapData<T>(v: unknown): T {
   if (isApiOk<T>(v)) return v.data;
   if (isApiErr(v)) throw new Error(`${v.error.code}: ${v.error.message}`);
-  throw new Error("Invalid API response shape.");
+  return v as T;
 }
 
 type ActiveEvent = {
@@ -82,6 +104,23 @@ type LogoBase64Response = {
 
 type EntryMode = "lead" | "card" | "manual";
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function isTransientError(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return (
+    m.includes("unauthorized") ||
+    m.includes("network") ||
+    m.includes("fetch") ||
+    m.includes("timeout") ||
+    m.includes("failed") ||
+    m.includes("econn") ||
+    m.includes("enotfound")
+  );
+}
+
 function formatEventMeta(
   startsAt?: string | null,
   endsAt?: string | null,
@@ -110,8 +149,7 @@ function extFromMime(mime: string): string {
 }
 
 async function cacheDirUri(): Promise<string> {
-  // Some toolchains don't expose cacheDirectory/documentDirectory as value exports in TS types.
-  // Runtime still has them. We read them via a safe cast (no `any`).
+  // Some toolchains don't expose cacheDirectory/documentDirectory in TS types.
   const fs = FileSystem as unknown as {
     cacheDirectory?: string | null;
     documentDirectory?: string | null;
@@ -144,7 +182,6 @@ async function ensureLogoFile(opts: {
   const tag = safeKey(opts.logoUpdatedAt ?? "na");
   const prefix = `lr-tenant-logo-${opts.tenantId}-`;
 
-  // We don't know ext without fetching mime. Check a few candidates first.
   const existingCandidates = ["png", "jpg", "webp", "img"].map(
     (ext) => `${prefix}${tag}.${ext}`,
   );
@@ -161,20 +198,29 @@ async function ensureLogoFile(opts: {
     }
   }
 
-  // Fetch base64 JSON via apiFetch (includes x-api-key internally)
   const raw = await apiFetch({ method: "GET", path: opts.logoBase64Url });
-  const data = unwrapOk<LogoBase64Response>(raw);
+  const json = await asJson(raw);
+  const data = unwrapData<LogoBase64Response>(json);
 
   const ext = extFromMime(data.mime);
   const finalName = `${prefix}${tag}.${ext}`;
   const finalUri = `${dir}${finalName}`;
 
-  // Avoid FileSystem.EncodingType (value export not typed in your toolchain)
   await FileSystem.writeAsStringAsync(finalUri, data.base64, { encoding: "base64" });
 
   await bestEffortCleanupOldLogos(prefix, finalName);
 
   return { uri: finalUri };
+}
+
+async function getJson(label: string, path: string): Promise<unknown> {
+  try {
+    const raw = await apiFetch({ method: "GET", path });
+    return await asJson(raw);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Unknown error.";
+    throw new Error(`${label}: ${msg}`);
+  }
 }
 
 export default function HomeScreen() {
@@ -190,7 +236,7 @@ export default function HomeScreen() {
   const [stats, setStats] = useState<StatsMeResponse | null>(null);
 
   const [tenantName, setTenantName] = useState<string>("—");
-  const [tenantSlug, setTenantSlug] = useState<string>("—");
+  const [tenantSlug, setTenantSlug] = useState<string>("-");
   const [hasLogo, setHasLogo] = useState<boolean>(false);
 
   const [logoFileUri, setLogoFileUri] = useState<string | null>(null);
@@ -199,82 +245,95 @@ export default function HomeScreen() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [entryMode, setEntryMode] = useState<EntryMode>("lead");
 
-  async function load() {
-    setError(null);
+  async function loadOnce() {
+    const [evJson, formsJson, statsJson, brandingJson] = await Promise.all([
+      getJson("events/active", "/api/mobile/v1/events/active"),
+      getJson("forms", "/api/mobile/v1/forms"),
+      getJson(
+        "stats/me",
+        `/api/mobile/v1/stats/me?range=today&tzOffsetMinutes=${encodeURIComponent(
+          String(tzOffsetMinutes),
+        )}`,
+      ),
+      getJson("branding", "/api/mobile/v1/branding"),
+    ]);
 
-    try {
-      const [evRaw, formsRaw, statsRaw, brandingRaw] = await Promise.all([
-        apiFetch({ method: "GET", path: "/api/mobile/v1/events/active" }),
-        apiFetch({ method: "GET", path: "/api/mobile/v1/forms" }),
-        apiFetch({
-          method: "GET",
-          path: `/api/mobile/v1/stats/me?range=today&tzOffsetMinutes=${encodeURIComponent(
-            String(tzOffsetMinutes),
-          )}`,
-        }),
-        apiFetch({ method: "GET", path: "/api/mobile/v1/branding" }),
-      ]);
+    const ev = unwrapData<EventsActiveResponse>(evJson).activeEvent;
+    const f = unwrapData<FormSummary[]>(formsJson);
+    const s = unwrapData<StatsMeResponse>(statsJson);
+    const b = unwrapData<BrandingResponse>(brandingJson);
 
-      const ev = unwrapOk<EventsActiveResponse>(evRaw).activeEvent;
-      const f = unwrapOk<FormSummary[]>(formsRaw);
-      const s = unwrapOk<StatsMeResponse>(statsRaw);
-      const b = unwrapOk<BrandingResponse>(brandingRaw);
+    setActiveEvent(ev ?? null);
+    setForms(Array.isArray(f) ? f : []);
+    setStats(s ?? null);
 
-      setActiveEvent(ev ?? null);
-      setForms(Array.isArray(f) ? f : []);
-      setStats(s ?? null);
+    setTenantName(b.tenant?.name || "—");
+    setTenantSlug(b.tenant?.slug || "-");
 
-      setTenantName(b.tenant?.name || "—");
-      setTenantSlug(b.tenant?.slug || "—");
+    const logoWanted = Boolean(b.branding?.hasLogo && b.logoBase64Url && b.tenant?.id);
+    setHasLogo(logoWanted);
 
-      const logoWanted = Boolean(
-        b.branding?.hasLogo && b.logoBase64Url && b.tenant?.id,
-      );
-      setHasLogo(logoWanted);
+    if (logoWanted) {
+      try {
+        const file = await ensureLogoFile({
+          tenantId: b.tenant.id,
+          logoUpdatedAt: b.branding.logoUpdatedAt,
+          logoBase64Url: b.logoBase64Url!,
+        });
 
-      if (logoWanted) {
-        try {
-          const file = await ensureLogoFile({
-            tenantId: b.tenant.id,
-            logoUpdatedAt: b.branding.logoUpdatedAt,
-            logoBase64Url: b.logoBase64Url!,
-          });
-
-          if (file?.uri) {
-            setLogoFileUri(file.uri);
-            setLogoMode("file");
-          } else {
-            setLogoFileUri(null);
-            setLogoMode("fallback");
-          }
-        } catch {
+        if (file?.uri) {
+          setLogoFileUri(file.uri);
+          setLogoMode("file");
+        } else {
           setLogoFileUri(null);
           setLogoMode("fallback");
         }
-      } else {
+      } catch {
         setLogoFileUri(null);
         setLogoMode("fallback");
       }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Unknown error.";
-      setError(msg);
+    } else {
       setLogoFileUri(null);
       setLogoMode("fallback");
-      setHasLogo(false);
-    } finally {
-      setLoading(false);
     }
   }
 
+  async function loadWithRetries(opts: { showLoading: boolean }) {
+    if (opts.showLoading) setLoading(true);
+    setError(null);
+
+    const maxRetries = 2;
+
+    let lastMsg = "Unknown error.";
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      try {
+        if (attempt > 0) await sleep(300 + attempt * 350);
+        await loadOnce();
+        if (opts.showLoading) setLoading(false);
+        return;
+      } catch (e) {
+        lastMsg = e instanceof Error ? e.message : "Unknown error.";
+        if (attempt < maxRetries && isTransientError(lastMsg)) continue;
+        break;
+      }
+    }
+
+    setError(lastMsg);
+    setHasLogo(false);
+    setLogoFileUri(null);
+    setLogoMode("fallback");
+    if (opts.showLoading) setLoading(false);
+  }
+
   useEffect(() => {
-    void load();
+    void loadWithRetries({ showLoading: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function onRefresh() {
     setRefreshing(true);
     try {
-      await load();
+      await loadWithRetries({ showLoading: false });
     } finally {
       setRefreshing(false);
     }
@@ -317,13 +376,14 @@ export default function HomeScreen() {
     setSheetOpen(true);
   }
 
-  // Extra padding so content never hides under tab bar / android nav
   const contentBottomPad = 32 + Math.max(insets.bottom, 0) + 120;
 
   const headerLogoSource: ImageSourcePropType =
     logoFileUri && logoMode === "file"
       ? { uri: logoFileUri }
       : (BRAND_LOGO_FALLBACK as unknown as ImageSourcePropType);
+
+  const devErr = error ? error.slice(0, 90) : "none";
 
   return (
     <>
@@ -349,7 +409,7 @@ export default function HomeScreen() {
 
             {__DEV__ ? (
               <Text style={styles.devHint}>
-                tenant: {tenantSlug} · hasLogo: {String(hasLogo)} · mode: {logoMode}
+                base: {DEV_BASE_URL} · tenant: {tenantSlug} · hasLogo: {String(hasLogo)} · mode: {logoMode} · loading: {String(loading)} · err: {devErr}
               </Text>
             ) : null}
           </View>
@@ -379,7 +439,7 @@ export default function HomeScreen() {
           ) : (
             <>
               <Text style={styles.warnText}>Kein aktives Event gefunden.</Text>
-              <Pressable style={styles.secondaryBtn} onPress={load}>
+              <Pressable style={styles.secondaryBtn} onPress={() => void loadWithRetries({ showLoading: true })}>
                 <Text style={styles.secondaryBtnText}>Retry</Text>
               </Pressable>
             </>
@@ -390,7 +450,7 @@ export default function HomeScreen() {
           <View style={[styles.card, styles.cardError]}>
             <Text style={styles.errorTitle}>Fehler</Text>
             <Text style={styles.errorText}>{error}</Text>
-            <Pressable style={styles.secondaryBtn} onPress={load}>
+            <Pressable style={styles.secondaryBtn} onPress={() => void loadWithRetries({ showLoading: true })}>
               <Text style={styles.secondaryBtnText}>Retry</Text>
             </Pressable>
           </View>
