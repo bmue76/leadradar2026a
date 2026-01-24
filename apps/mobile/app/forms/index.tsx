@@ -1,10 +1,15 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { FlatList, Pressable, RefreshControl, Text, View } from "react-native";
+import React, { useCallback, useEffect, useState } from "react";
+import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { router } from "expo-router";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { StatusBar } from "expo-status-bar";
 
 import { apiFetch } from "../../src/lib/api";
 import { clearApiKey, getApiKey } from "../../src/lib/auth";
-import { getApiBaseUrl } from "../../src/lib/env";
+import { AppHeader } from "../../src/ui/AppHeader";
+import { PoweredBy } from "../../src/ui/PoweredBy";
+import { UI } from "../../src/ui/tokens";
+import { useBranding } from "../../src/features/branding/useBranding";
 
 type FormSummary = {
   id: string;
@@ -33,53 +38,60 @@ function labelForForm(f: FormSummary): string {
   return f.name || f.title || f.id;
 }
 
-function keyInfo(key: string | null): string {
-  if (!key) return "—";
-  const trimmed = key.trim();
-  const prefix = trimmed.slice(0, Math.min(12, trimmed.length));
-  return `${prefix}… (len ${trimmed.length})`;
+function pickList(data: unknown): unknown[] {
+  if (Array.isArray(data)) return data;
+  if (isObject(data) && Array.isArray(data.forms)) return data.forms as unknown[];
+  if (isObject(data) && Array.isArray(data.items)) return data.items as unknown[];
+  return [];
 }
 
 export default function FormsIndex() {
-  const baseUrl = useMemo(() => getApiBaseUrl(), []);
+  const insets = useSafeAreaInsets();
+  const { state: brandingState, branding } = useBranding();
+
   const [items, setItems] = useState<FormSummary[]>([]);
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [errorText, setErrorText] = useState<string>("");
-  const [storedKeyInfo, setStoredKeyInfo] = useState<string>("—");
 
   const load = useCallback(async () => {
     setErrorText("");
     setBusy(true);
     try {
       const key = await getApiKey();
-      setStoredKeyInfo(keyInfo(key));
 
       if (!key) {
         router.replace("/provision");
         return;
       }
 
-      const res = await apiFetch<unknown>({
+      const res = await apiFetch({
         method: "GET",
         path: "/api/mobile/v1/forms",
         apiKey: key,
       });
 
-      if (!res.ok) {
-        const msg = `HTTP ${res.status} — ${res.message}${res.traceId ? ` (traceId: ${res.traceId})` : ""}`;
-        setErrorText(msg);
+      if (!isObject(res) || typeof (res as { ok?: unknown }).ok !== "boolean") {
+        setErrorText("Invalid API response shape");
         setItems([]);
         return;
       }
 
-      const data = res.data;
-      let rawList: unknown[] = [];
+      const ok = Boolean((res as { ok: boolean }).ok);
+      if (!ok) {
+        const status = typeof (res as { status?: unknown }).status === "number" ? (res as { status: number }).status : 0;
+        const message =
+          typeof (res as { message?: unknown }).message === "string"
+            ? (res as { message: string }).message
+            : "Request failed";
+        const traceId = typeof (res as { traceId?: unknown }).traceId === "string" ? (res as { traceId: string }).traceId : "";
+        setErrorText(`HTTP ${status || "?"} — ${message}${traceId ? ` (traceId: ${traceId})` : ""}`);
+        setItems([]);
+        return;
+      }
 
-      if (Array.isArray(data)) rawList = data;
-      else if (isObject(data) && Array.isArray(data.forms)) rawList = data.forms as unknown[];
-      else if (isObject(data) && Array.isArray(data.items)) rawList = data.items as unknown[];
-
+      const data = (res as { data?: unknown }).data;
+      const rawList = pickList(data);
       const list = rawList.map(asFormSummary).filter((x): x is FormSummary => x !== null);
       setItems(list);
     } finally {
@@ -88,7 +100,7 @@ export default function FormsIndex() {
   }, []);
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
   const onRefresh = useCallback(async () => {
@@ -105,75 +117,114 @@ export default function FormsIndex() {
     router.replace("/provision");
   }, []);
 
-  return (
-    <View style={{ flex: 1, padding: 16, gap: 12 }}>
-      <Text style={{ fontSize: 22, fontWeight: "900" }}>Formulare</Text>
+  const tenantName = brandingState.kind === "ready" ? branding.tenantName : null;
+  const logoDataUrl = brandingState.kind === "ready" ? branding.logoDataUrl : null;
 
-      <View style={{ padding: 12, borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", gap: 6 }}>
-        <Text style={{ fontWeight: "800" }}>API Base URL</Text>
-        <Text style={{ fontFamily: "monospace", opacity: 0.85 }}>{baseUrl}</Text>
-        <Text style={{ fontWeight: "800", marginTop: 6 }}>Gespeicherter apiKey</Text>
-        <Text style={{ fontFamily: "monospace", opacity: 0.85 }}>{storedKeyInfo}</Text>
-      </View>
+  const listPadBottom = UI.tabBarBaseHeight + Math.max(insets.bottom, 0) + 28;
+
+  return (
+    <SafeAreaView style={styles.safe} edges={["top"]}>
+      <StatusBar style="dark" backgroundColor={UI.bg} />
+
+      <AppHeader title="Formulare" tenantName={tenantName} logoDataUrl={logoDataUrl} />
 
       {errorText ? (
-        <View style={{ padding: 12, borderRadius: 12, borderWidth: 1, borderColor: "#FCA5A5", backgroundColor: "#FEF2F2" }}>
-          <Text style={{ fontWeight: "900", color: "#991B1B" }}>Hinweis</Text>
-          <Text style={{ color: "#991B1B", marginTop: 6 }}>{errorText}</Text>
+        <View style={[styles.body, { paddingBottom: listPadBottom }]}>
+          <View style={styles.warnCard}>
+            <Text style={styles.warnTitle}>Hinweis</Text>
+            <Text style={styles.warnText}>{errorText}</Text>
 
-          <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
-            <Pressable
-              onPress={load}
-              style={{ flex: 1, paddingVertical: 10, borderRadius: 12, backgroundColor: "#111827", alignItems: "center" }}
-            >
-              <Text style={{ color: "white", fontWeight: "900" }}>Retry</Text>
-            </Pressable>
+            <View style={styles.row}>
+              <Pressable onPress={load} style={[styles.btn, styles.btnDark]}>
+                <Text style={styles.btnDarkText}>Retry</Text>
+              </Pressable>
 
-            <Pressable
-              onPress={reActivate}
-              style={{ flex: 1, paddingVertical: 10, borderRadius: 12, backgroundColor: "#DC2626", alignItems: "center" }}
-            >
-              <Text style={{ color: "white", fontWeight: "900" }}>Neu aktivieren</Text>
+              <Pressable onPress={reActivate} style={[styles.btn, styles.btnAccent]}>
+                <Text style={styles.btnAccentText}>Neu aktivieren</Text>
+              </Pressable>
+            </View>
+          </View>
+
+          <PoweredBy />
+        </View>
+      ) : !errorText && !busy && items.length === 0 ? (
+        <View style={[styles.body, { paddingBottom: listPadBottom }]}>
+          <View style={styles.card}>
+            <Text style={styles.h2}>Keine Formulare zugewiesen.</Text>
+            <Text style={styles.p}>Weise im Admin ein ACTIVE Form dem Device zu.</Text>
+
+            <Pressable onPress={reActivate} style={[styles.btn, styles.btnDark, { marginTop: 10 }]}>
+              <Text style={styles.btnDarkText}>Neu aktivieren</Text>
             </Pressable>
           </View>
-        </View>
-      ) : null}
 
-      {!errorText && !busy && items.length === 0 ? (
-        <View style={{ padding: 12, borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", gap: 8 }}>
-          <Text style={{ fontWeight: "900" }}>Keine Formulare zugewiesen.</Text>
-          <Text style={{ opacity: 0.75 }}>Weise im Admin ein ACTIVE Form dem Device zu.</Text>
-          <Pressable
-            onPress={reActivate}
-            style={{ paddingVertical: 10, borderRadius: 12, backgroundColor: "#111827", alignItems: "center" }}
-          >
-            <Text style={{ color: "white", fontWeight: "900" }}>Neu aktivieren</Text>
-          </Pressable>
+          <PoweredBy />
         </View>
-      ) : null}
-
-      <FlatList
-        data={items}
-        keyExtractor={(it) => it.id}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        renderItem={({ item }) => (
-          <Pressable
-            onPress={() => router.push(`/forms/${item.id}`)}
-            style={{
-              padding: 14,
-              borderRadius: 14,
-              borderWidth: 1,
-              borderColor: "#E5E7EB",
-              marginBottom: 10,
-              backgroundColor: "white",
-            }}
-          >
-            <Text style={{ fontWeight: "900" }}>{labelForForm(item)}</Text>
-            <Text style={{ opacity: 0.7, marginTop: 4, fontFamily: "monospace" }}>{item.id}</Text>
-            {item.status ? <Text style={{ opacity: 0.7, marginTop: 4 }}>Status: {item.status}</Text> : null}
-          </Pressable>
-        )}
-      />
-    </View>
+      ) : (
+        <FlatList
+          data={items}
+          keyExtractor={(it) => it.id}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          contentContainerStyle={[styles.list, { paddingBottom: listPadBottom }]}
+          ListFooterComponent={<PoweredBy />}
+          renderItem={({ item }) => (
+            <Pressable onPress={() => router.push(`/forms/${item.id}`)} style={styles.formCard}>
+              <Text style={styles.formTitle}>{labelForForm(item)}</Text>
+              <Text style={styles.formId}>{item.id}</Text>
+              {item.status ? <Text style={styles.formStatus}>Status: {item.status}</Text> : null}
+            </Pressable>
+          )}
+        />
+      )}
+    </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: UI.bg },
+
+  body: { paddingHorizontal: UI.padX, paddingTop: 14, gap: 12 },
+
+  list: { paddingHorizontal: UI.padX, paddingTop: 14 },
+
+  card: {
+    backgroundColor: UI.bg,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: UI.border,
+  },
+
+  warnCard: {
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "rgba(220,38,38,0.25)",
+    backgroundColor: "rgba(220,38,38,0.06)",
+  },
+  warnTitle: { fontWeight: "900", color: "rgba(153,27,27,0.95)" },
+  warnText: { marginTop: 6, color: "rgba(153,27,27,0.95)" },
+
+  row: { flexDirection: "row", gap: 10, marginTop: 12 },
+
+  btn: { flex: 1, paddingVertical: 12, borderRadius: 14, alignItems: "center" },
+  btnDark: { backgroundColor: UI.text },
+  btnDarkText: { color: "white", fontWeight: "900" },
+  btnAccent: { backgroundColor: UI.accent },
+  btnAccentText: { color: "white", fontWeight: "900" },
+
+  h2: { fontWeight: "900", color: UI.text },
+  p: { marginTop: 6, opacity: 0.75, color: UI.text },
+
+  formCard: {
+    padding: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: UI.border,
+    marginBottom: 10,
+    backgroundColor: UI.bg,
+  },
+  formTitle: { fontWeight: "900", color: UI.text },
+  formId: { opacity: 0.7, marginTop: 4, fontFamily: "monospace", color: UI.text },
+  formStatus: { opacity: 0.75, marginTop: 4, color: UI.text },
+});
