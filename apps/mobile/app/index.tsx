@@ -3,7 +3,7 @@ import { Image, Pressable, RefreshControl, ScrollView, StatusBar, StyleSheet, Te
 import { router } from "expo-router";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { getApiBaseUrl, getTenantSlug } from "../src/lib/env";
+import { getApiBaseUrl } from "../src/lib/env";
 import { apiFetch } from "../src/lib/api";
 
 type BrandingResp = {
@@ -11,12 +11,6 @@ type BrandingResp = {
   branding?: { hasLogo: boolean; logoMime?: string | null; logoUpdatedAt?: string | null };
   logoDataUrl?: string | null;
   logoBase64Url?: string | null;
-};
-
-type StatsResp = {
-  leads?: number;
-  leadsPerHour?: number;
-  attachments?: number;
 };
 
 type ActiveEventResp = { item?: { id: string; name: string } | null };
@@ -41,7 +35,6 @@ const ACCENT = "#D12B2B";
 export default function Home() {
   const insets = useSafeAreaInsets();
   const baseUrl = useMemo(() => getApiBaseUrl(), []);
-  const tenantSlug = useMemo(() => getTenantSlug?.() ?? null, []);
 
   const [refreshing, setRefreshing] = useState(false);
 
@@ -54,21 +47,21 @@ export default function Home() {
   const [todayLph, setTodayLph] = useState<number>(0);
   const [todayAttachments, setTodayAttachments] = useState<number>(0);
 
-  const leadradarLogoUri = useMemo(() => `${baseUrl.replace(/\/+$/, "")}/brand/leadradar-logo.png`, [baseUrl]);
+  const leadradarLogoUri = useMemo(
+    () => `${baseUrl.replace(/\/+$/, "")}/brand/leadradar-logo.png`,
+    [baseUrl],
+  );
 
   const loadAll = useCallback(async () => {
-    // Branding
     const brandingRes = await apiFetch<BrandingResp>({ path: "/api/mobile/v1/branding" });
     if (brandingRes.ok) {
       const b = brandingRes.data;
-      if (b.tenant?.name) setTenantName(b.tenant.name);
-      else setTenantName("—");
+      setTenantName(b.tenant?.name ?? "—");
 
       const dataUrl = b.logoDataUrl ? b.logoDataUrl : null;
       if (dataUrl) {
         setTenantLogoUri(dataUrl);
       } else if (b.logoBase64Url) {
-        // fallback: fetch base64 endpoint and build data-url
         const base64Res = await apiFetch<{ mime: string; base64: string }>({ path: b.logoBase64Url });
         if (base64Res.ok) {
           const mime = pickString(base64Res.data.mime) ?? "image/png";
@@ -85,32 +78,19 @@ export default function Home() {
       setTenantLogoUri(null);
     }
 
-    // Active Event
     const evtRes = await apiFetch<ActiveEventResp>({ path: "/api/mobile/v1/events/active" });
-    if (evtRes.ok) {
-      const item = evtRes.data?.item ?? null;
-      setActiveEventName(item?.name ?? null);
-    } else {
-      setActiveEventName(null);
-    }
+    if (evtRes.ok) setActiveEventName(evtRes.data?.item?.name ?? null);
+    else setActiveEventName(null);
 
-    // Stats today
-    const tzOffsetMinutes = new Date().getTimezoneOffset(); // CET => -60
-    const statsRes = await apiFetch<unknown>({ path: `/api/mobile/v1/stats/me?range=today&tzOffsetMinutes=${encodeURIComponent(String(tzOffsetMinutes))}` });
-    if (statsRes.ok) {
-      const d = statsRes.data;
-      if (isRecord(d)) {
-        const leads = pickNumber(d.leads) ?? 0;
-        const lph = pickNumber(d.leadsPerHour) ?? 0;
-        const att = pickNumber(d.attachments) ?? 0;
-        setTodayLeads(leads);
-        setTodayLph(lph);
-        setTodayAttachments(att);
-      } else {
-        setTodayLeads(0);
-        setTodayLph(0);
-        setTodayAttachments(0);
-      }
+    const tzOffsetMinutes = new Date().getTimezoneOffset();
+    const statsRes = await apiFetch<unknown>({
+      path: `/api/mobile/v1/stats/me?range=today&tzOffsetMinutes=${encodeURIComponent(String(tzOffsetMinutes))}`,
+    });
+
+    if (statsRes.ok && isRecord(statsRes.data)) {
+      setTodayLeads(pickNumber(statsRes.data.leads) ?? 0);
+      setTodayLph(pickNumber(statsRes.data.leadsPerHour) ?? 0);
+      setTodayAttachments(pickNumber(statsRes.data.attachments) ?? 0);
     } else {
       setTodayLeads(0);
       setTodayLph(0);
@@ -141,7 +121,6 @@ export default function Home() {
         contentContainerStyle={[styles.content, { paddingBottom: bottomPad }]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        {/* Header */}
         <View style={styles.header}>
           <View style={styles.brandRow}>
             <View style={styles.tenantLogoWrap}>
@@ -158,12 +137,9 @@ export default function Home() {
           </View>
 
           <Text style={styles.tenantName}>{tenantName}</Text>
-
-          {/* +5px Abstand zur Headline */}
           <Text style={styles.title}>Home</Text>
         </View>
 
-        {/* Active Event */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Aktives Event</Text>
           {activeEventName ? (
@@ -177,7 +153,6 @@ export default function Home() {
           </Pressable>
         </View>
 
-        {/* Mini Stats */}
         <Pressable onPress={() => router.push("/stats")} style={styles.card}>
           <View style={styles.cardRow}>
             <Text style={styles.cardTitle}>Statistik heute</Text>
@@ -202,12 +177,10 @@ export default function Home() {
           <Text style={styles.smallHint}>Weitere Statistiken im „Stats“-Tab</Text>
         </Pressable>
 
-        {/* Primary Action */}
         <Pressable onPress={() => router.push("/forms")} style={styles.primaryBtn}>
           <Text style={styles.primaryBtnText}>Lead erfassen</Text>
         </Pressable>
 
-        {/* Quick actions */}
         <View style={styles.listCard}>
           <Pressable onPress={() => router.push("/leads")} style={styles.listRow}>
             <Text style={styles.listRowText}>Visitenkarte scannen</Text>
@@ -222,7 +195,6 @@ export default function Home() {
 
         <Text style={styles.footerHint}>Daten werden online erfasst · Pull to refresh</Text>
 
-        {/* Powered by footer */}
         <View style={styles.poweredBy}>
           <Text style={styles.poweredByText}>powered by</Text>
           {/* eslint-disable-next-line jsx-a11y/alt-text */}
@@ -243,15 +215,21 @@ const styles = StyleSheet.create({
   content: { padding: 16, gap: 14 },
 
   header: { paddingTop: 6, paddingBottom: 4 },
-  brandRow: { flexDirection: "row", alignItems: "center" },
+  brandRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-start" },
 
-  // links bündig, ohne Rahmen/Background
-  tenantLogoWrap: { width: 160, height: 44, justifyContent: "center" },
-  tenantLogo: { width: "100%", height: "100%" },
+  // wichtig: padding(16) aus dem Screen "aushebeln" => ganz links bündig
+  tenantLogoWrap: {
+    width: 160,
+    height: 44,
+    justifyContent: "center",
+    alignItems: "flex-start",
+    marginLeft: -16,
+  },
+  tenantLogo: { width: 160, height: 44 },
 
   tenantName: { marginTop: 8, fontSize: 18, fontWeight: "700", color: "#111827" },
 
-  // Title kleiner + 5px mehr Abstand
+  // +5px Abstand zur Headline
   title: { marginTop: 13, fontSize: 44, fontWeight: "900", color: "#111827" },
 
   card: {
@@ -304,7 +282,13 @@ const styles = StyleSheet.create({
     backgroundColor: "white",
     overflow: "hidden",
   },
-  listRow: { paddingHorizontal: 16, paddingVertical: 16, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  listRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
   listRowText: { fontSize: 18, fontWeight: "800", color: "#111827" },
   divider: { height: 1, backgroundColor: "rgba(0,0,0,0.06)" },
 

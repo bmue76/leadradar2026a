@@ -1,5 +1,4 @@
 import React from "react";
-import { Platform } from "react-native";
 import { Tabs } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -17,7 +16,7 @@ export default function RootLayout() {
         tabBarActiveTintColor: ACCENT,
         tabBarInactiveTintColor: "#6B7280",
         tabBarLabelStyle: { fontSize: 12, fontWeight: "700" },
-        tabBarItemStyle: { flex: 1 }, // <-- verteilt über ganze Breite
+        tabBarItemStyle: { flex: 1 },
         tabBarStyle: {
           height: tabH,
           paddingBottom: Math.max(insets.bottom, 10),
@@ -63,7 +62,6 @@ export default function RootLayout() {
         }}
       />
 
-      {/* hidden (keine eigenen Tabs) */}
       <Tabs.Screen name="provision" options={{ href: null }} />
       <Tabs.Screen name="forms/[id]" options={{ href: null }} />
     </Tabs>

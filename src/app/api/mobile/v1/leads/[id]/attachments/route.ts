@@ -1,3 +1,4 @@
+import { NextRequest } from "next/server";
 import { z } from "zod";
 import { AttachmentType } from "@prisma/client";
 import { jsonError, jsonOk } from "@/lib/api";
@@ -41,9 +42,9 @@ function safeFilename(name: string, fallback: string): string {
 
 type FormDataWithGet = { get(name: string): FormDataEntryValue | null };
 
-export async function POST(req: Request, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const leadId = ctx.params.id;
+    const { id: leadId } = await ctx.params;
 
     const auth = await requireMobileAuth(req);
     enforceRateLimit(`mobile:${auth.apiKeyId}`, { limit: 60, windowMs: 60_000 });
@@ -123,14 +124,11 @@ export async function POST(req: Request, ctx: { params: { id: string } }) {
         data: { storageKey },
       });
     } catch (e) {
-      // cleanup DB row + any partial file
       await prisma.leadAttachment.delete({ where: { id: created.id } }).catch(() => undefined);
       await deleteFileIfExists({ rootDirName: ".tmp_attachments", relativeKey: storageKey }).catch(() => undefined);
       throw e;
     }
 
-    // keep mobile contract stable:
-    // return { attachmentId: ... } (client expects attachmentId)
     return jsonOk(req, {
       attachmentId: created.id,
       type: created.type,

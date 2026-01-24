@@ -14,6 +14,8 @@ function keyInfo(key: string | null): string {
 export default function Settings() {
   const baseUrl = getApiBaseUrl();
   const [keyText, setKeyText] = useState<string>("—");
+  const [keyFull, setKeyFull] = useState<string>("—");
+  const [reveal, setReveal] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const refreshStatus = useCallback(async () => {
@@ -21,6 +23,7 @@ export default function Settings() {
     try {
       const key = await getApiKey();
       setKeyText(keyInfo(key));
+      setKeyFull(key ? key.trim() : "—");
     } finally {
       setBusy(false);
     }
@@ -31,6 +34,8 @@ export default function Settings() {
     try {
       await clearApiKey();
       setKeyText("—");
+      setKeyFull("—");
+      setReveal(false);
       router.replace("/provision");
     } finally {
       setBusy(false);
@@ -38,7 +43,7 @@ export default function Settings() {
   }, []);
 
   return (
-    <View style={{ flex: 1, padding: 16, gap: 12 }}>
+    <View style={{ flex: 1, padding: 16, gap: 12, backgroundColor: "white" }}>
       <Text style={{ fontSize: 22, fontWeight: "900" }}>Einstellungen</Text>
 
       <View style={{ padding: 12, borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", gap: 6 }}>
@@ -46,7 +51,15 @@ export default function Settings() {
         <Text style={{ fontFamily: "monospace", opacity: 0.85 }}>{baseUrl}</Text>
 
         <Text style={{ fontWeight: "800", marginTop: 8 }}>Gespeicherter apiKey</Text>
-        <Text style={{ fontFamily: "monospace", opacity: 0.85 }}>{keyText}</Text>
+        <Text style={{ fontFamily: "monospace", opacity: 0.85 }}>{reveal ? keyFull : keyText}</Text>
+
+        <Pressable
+          disabled={busy}
+          onPress={() => setReveal((v) => !v)}
+          style={{ marginTop: 8, paddingVertical: 10, borderRadius: 12, backgroundColor: "#F3F4F6", alignItems: "center" }}
+        >
+          <Text style={{ fontWeight: "900" }}>{reveal ? "apiKey verbergen" : "apiKey anzeigen"}</Text>
+        </Pressable>
       </View>
 
       <Pressable
