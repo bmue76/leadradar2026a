@@ -1,49 +1,71 @@
 import React from "react";
+import { Platform } from "react-native";
 import { Tabs } from "expo-router";
-import { StatusBar } from "expo-status-bar";
-import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 
-function TabsShell() {
-  const insets = useSafeAreaInsets();
-  const padBottom = Math.max(insets.bottom, 10);
-  const height = 56 + padBottom;
-
-  return (
-    <>
-      <StatusBar style="dark" backgroundColor="#FFFFFF" translucent={false} />
-
-      <Tabs
-        screenOptions={{
-          headerShown: false,
-          tabBarHideOnKeyboard: true,
-          tabBarStyle: {
-            height,
-            paddingBottom: padBottom,
-            paddingTop: 8,
-          },
-          tabBarLabelStyle: {
-            fontWeight: "700",
-          },
-        }}
-      >
-        <Tabs.Screen name="index" options={{ title: "Home" }} />
-        <Tabs.Screen name="forms" options={{ title: "Formulare" }} />
-        <Tabs.Screen name="leads" options={{ title: "Leads" }} />
-        <Tabs.Screen name="stats" options={{ title: "Stats" }} />
-        <Tabs.Screen name="settings" options={{ title: "Settings" }} />
-
-        {/* Non-tab routes */}
-        <Tabs.Screen name="provision" options={{ href: null }} />
-        <Tabs.Screen name="forms/[id]" options={{ href: null }} />
-      </Tabs>
-    </>
-  );
-}
+const ACCENT = "#D12B2B";
 
 export default function RootLayout() {
+  const insets = useSafeAreaInsets();
+  const tabH = 56 + Math.max(insets.bottom, 10);
+
   return (
-    <SafeAreaProvider>
-      <TabsShell />
-    </SafeAreaProvider>
+    <Tabs
+      screenOptions={{
+        headerShown: false,
+        tabBarActiveTintColor: ACCENT,
+        tabBarInactiveTintColor: "#6B7280",
+        tabBarLabelStyle: { fontSize: 12, fontWeight: "700" },
+        tabBarItemStyle: { flex: 1 }, // <-- verteilt über ganze Breite
+        tabBarStyle: {
+          height: tabH,
+          paddingBottom: Math.max(insets.bottom, 10),
+          paddingTop: 6,
+          borderTopColor: "rgba(0,0,0,0.08)",
+          backgroundColor: "white",
+        },
+      }}
+    >
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: "Home",
+          tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" size={size ?? 22} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="forms"
+        options={{
+          title: "Formulare",
+          tabBarIcon: ({ color, size }) => <Ionicons name="list-outline" size={size ?? 22} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="leads"
+        options={{
+          title: "Leads",
+          tabBarIcon: ({ color, size }) => <Ionicons name="people-outline" size={size ?? 22} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="stats"
+        options={{
+          title: "Stats",
+          tabBarIcon: ({ color, size }) => <Ionicons name="stats-chart-outline" size={size ?? 22} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: "Settings",
+          tabBarIcon: ({ color, size }) => <Ionicons name="settings-outline" size={size ?? 22} color={color} />,
+        }}
+      />
+
+      {/* hidden (keine eigenen Tabs) */}
+      <Tabs.Screen name="provision" options={{ href: null }} />
+      <Tabs.Screen name="forms/[id]" options={{ href: null }} />
+    </Tabs>
   );
 }

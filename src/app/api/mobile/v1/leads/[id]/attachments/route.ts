@@ -5,7 +5,7 @@ import { isHttpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { requireMobileAuth } from "@/lib/mobileAuth";
 import { enforceRateLimit } from "@/lib/rateLimit";
-import { putBinaryFile } from "@/lib/storage";
+import { putBinaryFile, deleteFileIfExists } from "@/lib/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,7 +20,7 @@ const TypeSchema = z
   .transform((v) => (v && v.length ? v : "BUSINESS_CARD_IMAGE"))
   .refine(
     (v) => v === "BUSINESS_CARD_IMAGE" || v === "OTHER" || v === "IMAGE" || v === "PDF",
-    "Invalid attachment type."
+    "Invalid attachment type.",
   );
 
 function extFromMime(mime: string): string | null {
@@ -39,13 +39,11 @@ function safeFilename(name: string, fallback: string): string {
   return cleaned.slice(0, 200);
 }
 
-type FormDataWithGet = {
-  get(name: string): FormDataEntryValue | null;
-};
+type FormDataWithGet = { get(name: string): FormDataEntryValue | null };
 
-export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
+export async function POST(req: Request, ctx: { params: { id: string } }) {
   try {
-    const { id: leadId } = await ctx.params;
+    const leadId = ctx.params.id;
 
     const auth = await requireMobileAuth(req);
     enforceRateLimit(`mobile:${auth.apiKeyId}`, { limit: 60, windowMs: 60_000 });
@@ -59,7 +57,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     const form = (await req.formData()) as unknown as FormDataWithGet;
 
     const fileVal = form.get("file");
-    if (!fileVal || !(fileVal instanceof File)) {
+    if (!(fileVal instanceof File)) {
       return jsonError(req, 400, "INVALID_BODY", "Invalid request body.", {
         file: ["Missing file (multipart field 'file')."],
       });
@@ -73,8 +71,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
     const mimeType = String(fileVal.type || "").toLowerCase();
     if (!ALLOWED_MIME.has(mimeType)) {
-      return jsonError(req, 400, "INVALID_BODY", "Invalid request body.", {
-        mimeType: [`Unsupported mimeType '${mimeType}'. Allowed: ${Array.from(ALLOWED_MIME).join(", ")}`],
+      return jsonError(req, 415, "UNSUPPORTED_MEDIA_TYPE", "Unsupported mimeType.", {
+        mimeType,
+        allowed: Array.from(ALLOWED_MIME),
       });
     }
 
@@ -111,20 +110,29 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
     const storageKey = `${auth.tenantId}/${lead.id}/${created.id}.${ext}`;
 
-    const buf = new Uint8Array(await fileVal.arrayBuffer());
-    await putBinaryFile({
-      rootDirName: ".tmp_attachments",
-      relativeKey: storageKey,
-      data: buf,
-    });
+    try {
+      const buf = new Uint8Array(await fileVal.arrayBuffer());
+      await putBinaryFile({
+        rootDirName: ".tmp_attachments",
+        relativeKey: storageKey,
+        data: buf,
+      });
 
-    await prisma.leadAttachment.update({
-      where: { id: created.id },
-      data: { storageKey },
-    });
+      await prisma.leadAttachment.update({
+        where: { id: created.id },
+        data: { storageKey },
+      });
+    } catch (e) {
+      // cleanup DB row + any partial file
+      await prisma.leadAttachment.delete({ where: { id: created.id } }).catch(() => undefined);
+      await deleteFileIfExists({ rootDirName: ".tmp_attachments", relativeKey: storageKey }).catch(() => undefined);
+      throw e;
+    }
 
+    // keep mobile contract stable:
+    // return { attachmentId: ... } (client expects attachmentId)
     return jsonOk(req, {
-      id: created.id,
+      attachmentId: created.id,
       type: created.type,
       filename: created.filename,
       mimeType: created.mimeType,

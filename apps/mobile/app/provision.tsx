@@ -9,156 +9,123 @@ import { clearApiKey, setApiKey } from "../src/lib/auth";
 import { parseProvisionToken } from "../src/lib/tokenParse";
 
 type Mode = "scan" | "manual";
+type ClaimData = { token: string };
 
-type ClaimResponse = {
-  token?: unknown; // one-time api key
-};
+function mapError(code?: string, status?: number): string {
+  if (code === "INVALID_PROVISION_TOKEN") return "Token ungültig/abgelaufen/verwendet.";
+  if (status === 401) return "Nicht autorisiert (Token ungültig).";
+  if (status === 429) return "Zu viele Versuche – bitte kurz warten.";
+  return "Aktivierung fehlgeschlagen.";
+}
 
 export default function Provision() {
   const params = useLocalSearchParams<{ token?: string }>();
   const baseUrl = useMemo(() => getApiBaseUrl(), []);
   const [mode, setMode] = useState<Mode>("scan");
-  const [tokenInput, setTokenInput] = useState<string>((params?.token ?? "").toString());
+  const [tokenInput, setTokenInput] = useState<string>(params.token ?? "");
   const [busy, setBusy] = useState(false);
-  const [errorText, setErrorText] = useState<string>("");
+  const [errorText, setErrorText] = useState<string | null>(null);
 
-  const [permission, requestPermission] = useCameraPermissions();
+  const [perm, requestPerm] = useCameraPermissions();
 
-  const parsedToken = useMemo(() => parseProvisionToken(tokenInput), [tokenInput]);
-
-  async function onResetDevice() {
-    setBusy(true);
-    try {
-      await clearApiKey();
-      Alert.alert("OK", "Gerät zurückgesetzt (apiKey gelöscht).");
-      setTokenInput("");
-      setErrorText("");
-      setMode("scan");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function mapError(code: string, status: number): string {
-    if (status === 401 && code === "INVALID_PROVISION_TOKEN") return "Token ungültig oder nicht mehr gültig.";
-    if (status === 429 && code === "RATE_LIMITED") return "Zu viele Versuche. Bitte kurz warten.";
-    if (code === "NETWORK_ERROR") return "Keine Verbindung. Bitte erneut versuchen.";
-    if (status === 401) return "Token ungültig oder nicht mehr gültig.";
-    if (status === 429) return "Zu viele Versuche. Bitte kurz warten.";
-    return "Aktivierung fehlgeschlagen.";
-  }
-
-  async function onClaim() {
-    setErrorText("");
-    const token = parsedToken;
+  async function claimToken(raw: string) {
+    const parsed = parseProvisionToken ? parseProvisionToken(raw) : raw.trim();
+    const token = (parsed ?? "").trim();
     if (!token) {
-      setErrorText("Bitte einen gültigen Token einfügen (prov_...) oder QR scannen.");
+      setErrorText("Token fehlt.");
       return;
     }
 
     setBusy(true);
-    try {
-      const deviceName = `android-${Platform.Version ?? ""}`.slice(0, 64);
+    setErrorText(null);
 
-      const res = await apiFetch<ClaimResponse>({
+    try {
+      // reset any previous key before claim (clean state)
+      await clearApiKey();
+
+      const res = await apiFetch<ClaimData>({
         method: "POST",
         path: "/api/mobile/v1/provision/claim",
-        body: { token, deviceName },
+        body: { token, deviceName: Platform.OS === "android" ? "Android Device" : "iOS Device" },
+        apiKey: null,
       });
 
       if (!res.ok) {
-        const msg = mapError(res.code, res.status);
-        setErrorText(`${msg}${res.traceId ? ` (traceId: ${res.traceId})` : ""}`);
+        setErrorText(`${mapError(res.code, res.status)}${res.traceId ? ` (traceId: ${res.traceId})` : ""}`);
         return;
       }
 
-      const tokenValue = res.data?.token;
-      const apiKey = typeof tokenValue === "string" ? tokenValue.trim() : "";
-
+      const apiKey = (res.data?.token ?? "").trim();
       if (!apiKey) {
         setErrorText(`Aktivierung fehlgeschlagen: apiKey fehlt in Response.${res.traceId ? ` (traceId: ${res.traceId})` : ""}`);
         return;
       }
 
       await setApiKey(apiKey);
-      router.replace("/forms");
+      router.replace("/");
     } finally {
       setBusy(false);
     }
   }
 
-  function onBarcode(data: string) {
-    const t = parseProvisionToken(String(data ?? ""));
-    if (t) {
-      setTokenInput(t);
-      setMode("manual");
-      setErrorText("");
-    } else {
-      setErrorText("QR erkannt, aber kein gültiger Token gefunden.");
-    }
-  }
+  const canScan = mode === "scan";
 
   return (
-    <View style={{ flex: 1, padding: 16, gap: 12 }}>
-      <Text style={{ fontSize: 22, fontWeight: "900" }}>Aktivieren</Text>
-
-      <View style={{ padding: 12, borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", gap: 6 }}>
-        <Text style={{ fontWeight: "800" }}>API Base URL</Text>
-        <Text style={{ fontFamily: "monospace", opacity: 0.85 }}>{baseUrl}</Text>
-      </View>
+    <View style={{ flex: 1, padding: 16, gap: 12, backgroundColor: "white" }}>
+      <Text style={{ fontSize: 26, fontWeight: "900" }}>Gerät aktivieren</Text>
+      <Text style={{ opacity: 0.7 }}>Base: {baseUrl}</Text>
 
       <View style={{ flexDirection: "row", gap: 10 }}>
         <Pressable
           onPress={() => setMode("scan")}
           style={{
-            flex: 1,
             paddingVertical: 10,
+            paddingHorizontal: 14,
             borderRadius: 12,
             backgroundColor: mode === "scan" ? "#111827" : "#F3F4F6",
-            alignItems: "center",
           }}
         >
-          <Text style={{ color: mode === "scan" ? "white" : "#111827", fontWeight: "800" }}>QR Scan</Text>
+          <Text style={{ color: mode === "scan" ? "white" : "#111827", fontWeight: "900" }}>QR Scan</Text>
         </Pressable>
 
         <Pressable
           onPress={() => setMode("manual")}
           style={{
-            flex: 1,
             paddingVertical: 10,
+            paddingHorizontal: 14,
             borderRadius: 12,
             backgroundColor: mode === "manual" ? "#111827" : "#F3F4F6",
-            alignItems: "center",
           }}
         >
-          <Text style={{ color: mode === "manual" ? "white" : "#111827", fontWeight: "800" }}>Manuell</Text>
+          <Text style={{ color: mode === "manual" ? "white" : "#111827", fontWeight: "900" }}>Manuell</Text>
         </Pressable>
       </View>
 
-      {mode === "scan" ? (
-        <View style={{ gap: 10 }}>
-          {permission?.granted ? (
-            <View style={{ height: 320, borderRadius: 16, overflow: "hidden", borderWidth: 1, borderColor: "#E5E7EB" }}>
-              <CameraView
-                style={{ flex: 1 }}
-                facing="back"
-                barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-                onBarcodeScanned={(r) => onBarcode(String(r.data ?? ""))}
-              />
-            </View>
+      {canScan ? (
+        <View style={{ flex: 1, borderRadius: 16, overflow: "hidden", borderWidth: 1, borderColor: "rgba(0,0,0,0.08)" }}>
+          {perm?.granted ? (
+            <CameraView
+              style={{ flex: 1 }}
+              onBarcodeScanned={(ev) => {
+                if (busy) return;
+                const raw = (ev.data ?? "").toString();
+                void claimToken(raw);
+              }}
+            />
           ) : (
-            <View style={{ padding: 14, borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", gap: 10 }}>
-              <Text style={{ fontWeight: "800" }}>Kamera-Berechtigung</Text>
-              <Text style={{ opacity: 0.75 }}>Für QR-Scan braucht die App Zugriff auf die Kamera.</Text>
+            <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 18, gap: 10 }}>
+              <Text style={{ fontWeight: "800" }}>Kamera-Berechtigung benötigt</Text>
               <Pressable
-                onPress={() => requestPermission()}
+                onPress={async () => {
+                  const r = await requestPerm();
+                  if (!r.granted) Alert.alert("Hinweis", "Bitte Kamera-Berechtigung aktivieren.");
+                }}
                 style={{ paddingVertical: 12, paddingHorizontal: 14, borderRadius: 12, backgroundColor: "#111827" }}
               >
-                <Text style={{ color: "white", fontWeight: "800" }}>Berechtigung anfragen</Text>
+                <Text style={{ color: "white", fontWeight: "900" }}>Berechtigung anfragen</Text>
               </Pressable>
             </View>
           )}
-          <Text style={{ opacity: 0.7 }}>QR kann raw Token (prov_...) oder Link mit ?token=... enthalten.</Text>
         </View>
       ) : (
         <View style={{ gap: 10 }}>
@@ -168,57 +135,21 @@ export default function Provision() {
             onChangeText={setTokenInput}
             autoCapitalize="none"
             autoCorrect={false}
-            placeholder='prov_... oder URL mit ?token=...'
-            style={{
-              borderWidth: 1,
-              borderColor: "#E5E7EB",
-              borderRadius: 12,
-              paddingHorizontal: 12,
-              paddingVertical: 10,
-              fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
-            }}
+            placeholder="lrp_…"
+            style={{ borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 12, padding: 12, fontFamily: "monospace" }}
           />
 
           <Pressable
             disabled={busy}
-            onPress={onClaim}
-            style={{
-              paddingVertical: 12,
-              paddingHorizontal: 14,
-              borderRadius: 12,
-              backgroundColor: busy ? "#9CA3AF" : "#111827",
-              alignItems: "center",
-            }}
+            onPress={() => void claimToken(tokenInput)}
+            style={{ paddingVertical: 14, borderRadius: 14, backgroundColor: busy ? "#9CA3AF" : "#111827", alignItems: "center" }}
           >
             <Text style={{ color: "white", fontWeight: "900" }}>{busy ? "Aktiviere…" : "Aktivieren"}</Text>
           </Pressable>
         </View>
       )}
 
-      {errorText ? (
-        <View style={{ padding: 12, borderRadius: 12, borderWidth: 1, borderColor: "#FCA5A5", backgroundColor: "#FEF2F2" }}>
-          <Text style={{ fontWeight: "900", color: "#991B1B" }}>Fehler</Text>
-          <Text style={{ color: "#991B1B", marginTop: 6 }}>{errorText}</Text>
-        </View>
-      ) : null}
-
-      <View style={{ flexDirection: "row", gap: 10, marginTop: "auto" }}>
-        <Pressable
-          disabled={busy}
-          onPress={() => router.push("/settings")}
-          style={{ flex: 1, paddingVertical: 12, borderRadius: 12, backgroundColor: "#F3F4F6", alignItems: "center" }}
-        >
-          <Text style={{ fontWeight: "800" }}>Einstellungen</Text>
-        </Pressable>
-
-        <Pressable
-          disabled={busy}
-          onPress={onResetDevice}
-          style={{ flex: 1, paddingVertical: 12, borderRadius: 12, backgroundColor: "#DC2626", alignItems: "center" }}
-        >
-          <Text style={{ color: "white", fontWeight: "900" }}>Gerät zurücksetzen</Text>
-        </Pressable>
-      </View>
+      {errorText ? <Text style={{ color: "#B00020", fontWeight: "800" }}>{errorText}</Text> : null}
     </View>
   );
 }
