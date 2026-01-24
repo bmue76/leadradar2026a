@@ -230,7 +230,7 @@ const styles = StyleSheet.create({
   tenantName: { marginTop: 8, fontSize: 18, fontWeight: "700", color: "#111827" },
 
   // +5px Abstand zur Headline
-  title: { marginTop: 13, fontSize: 44, fontWeight: "900", color: "#111827" },
+  title: { marginTop: 13, fontSize: 30, fontWeight: "900", color: "#111827" },
 
   card: {
     borderRadius: 18,
