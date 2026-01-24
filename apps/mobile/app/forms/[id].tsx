@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
@@ -12,6 +13,9 @@ import { uuidV4 } from "../../src/lib/uuid";
 import { recognizeTextFromBusinessCard } from "../../src/ocr/recognizeText";
 import { parseBusinessCard } from "../../src/ocr/parseBusinessCard";
 import type { ContactSuggestions } from "../../src/ocr/types";
+
+import { ScreenScaffold } from "../../src/ui/ScreenScaffold";
+import { UI } from "../../src/ui/tokens";
 
 type JsonObject = Record<string, unknown>;
 
@@ -57,7 +61,7 @@ type FormDetail = {
 function normalizeFieldType(v: unknown): FieldType {
   const t = (typeof v === "string" ? v : "TEXT").toUpperCase();
   const allowed: FieldType[] = ["TEXT", "TEXTAREA", "EMAIL", "PHONE", "CHECKBOX", "SINGLE_SELECT", "MULTI_SELECT"];
-  return (allowed.includes(t as FieldType) ? (t as FieldType) : "TEXT");
+  return allowed.includes(t as FieldType) ? (t as FieldType) : "TEXT";
 }
 
 function parseOptions(v: unknown): FieldOption[] {
@@ -91,15 +95,7 @@ function parseField(v: unknown): FormField | null {
 
   const options = parseOptions(v.options ?? v.choices ?? v.items);
 
-  return {
-    id: asString(v.id),
-    key,
-    label,
-    type,
-    required,
-    sortOrder,
-    options,
-  };
+  return { id: asString(v.id), key, label, type, required, sortOrder, options };
 }
 
 function parseFormDetail(payload: unknown): { form: FormDetail; fields: FormField[] } | null {
@@ -109,11 +105,7 @@ function parseFormDetail(payload: unknown): { form: FormDetail; fields: FormFiel
   const id = asString(formObj.id)?.trim();
   if (!id) return null;
 
-  const form: FormDetail = {
-    id,
-    name: asString(formObj.name),
-    title: asString(formObj.title),
-  };
+  const form: FormDetail = { id, name: asString(formObj.name), title: asString(formObj.title) };
 
   const fieldsRaw =
     Array.isArray(payload.fields) ? payload.fields :
@@ -201,7 +193,6 @@ function applyContactToValues(fields: FormField[], current: ValuesMap, s: Contac
     const fieldKey = pickFieldKey(fields, aliases);
     if (!fieldKey) continue;
 
-    // only write into text-like fields
     next[fieldKey] = val.trim();
   }
 
@@ -209,11 +200,8 @@ function applyContactToValues(fields: FormField[], current: ValuesMap, s: Contac
 }
 
 function smallHash(input: string): string {
-  // djb2-ish, deterministic
   let h = 5381;
-  for (let i = 0; i < input.length; i++) {
-    h = ((h << 5) + h) ^ input.charCodeAt(i);
-  }
+  for (let i = 0; i < input.length; i++) h = ((h << 5) + h) ^ input.charCodeAt(i);
   return `h${(h >>> 0).toString(16)}`;
 }
 
@@ -227,6 +215,7 @@ function confirmAsync(title: string, message: string, confirmLabel: string): Pro
 }
 
 export default function CaptureScreen() {
+  const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ id?: string }>();
   const formId = (params?.id ?? "").toString().trim();
 
@@ -263,7 +252,6 @@ export default function CaptureScreen() {
     }
     setValues(next);
 
-    // reset OCR state for the next lead
     setCardUri("");
     setOcrError("");
     setOcrRawText("");
@@ -301,22 +289,35 @@ export default function CaptureScreen() {
       const key = await requireKeyOrRedirect();
       if (!key) return;
 
-      const res = await apiFetch<unknown>({
+      const res = await apiFetch({
         method: "GET",
         path: `/api/mobile/v1/forms/${encodeURIComponent(formId)}`,
         apiKey: key,
       });
 
-      if (!res.ok) {
-        if (res.status === 401) {
-          await handleUnauthorized(res.traceId);
-          return;
-        }
-        setErrorText(`HTTP ${res.status} — ${res.message}${res.traceId ? ` (traceId: ${res.traceId})` : ""}`);
+      if (!isObject(res) || typeof res.ok !== "boolean") {
+        setErrorText("Invalid API response shape");
         return;
       }
 
-      const parsed = parseFormDetail(res.data);
+      if (res.ok !== true) {
+        const status = typeof (res as { status?: unknown }).status === "number" ? (res as { status: number }).status : 0;
+        const message =
+          typeof (res as { message?: unknown }).message === "string"
+            ? (res as { message: string }).message
+            : "Request failed";
+        const traceId = typeof (res as { traceId?: unknown }).traceId === "string" ? (res as { traceId: string }).traceId : "";
+
+        if (status === 401) {
+          await handleUnauthorized(traceId || undefined);
+          return;
+        }
+
+        setErrorText(`HTTP ${status || "?"} — ${message}${traceId ? ` (traceId: ${traceId})` : ""}`);
+        return;
+      }
+
+      const parsed = parseFormDetail((res as { data?: unknown }).data);
       if (!parsed) {
         setErrorText("Form-Response konnte nicht gelesen werden.");
         return;
@@ -338,7 +339,7 @@ export default function CaptureScreen() {
   }, [formId, handleUnauthorized, requireKeyOrRedirect]);
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
   const setValue = useCallback((key: string, v: ValuesMap[string]) => {
@@ -384,7 +385,6 @@ export default function CaptureScreen() {
       const uri = asset.uri;
       if (!uri) return;
 
-      // resize/compress
       const manipulated = await ImageManipulator.manipulateAsync(
         uri,
         [{ resize: { width: 1600 } }],
@@ -430,7 +430,6 @@ export default function CaptureScreen() {
       return;
     }
 
-    // Validate
     const problems: string[] = [];
     for (const f of fields) {
       const msg = validateField(f, values[f.key] ?? null);
@@ -457,7 +456,6 @@ export default function CaptureScreen() {
       const key = await requireKeyOrRedirect();
       if (!key) return;
 
-      // 1) create lead
       const payload = {
         clientLeadId: uuidV4(),
         formId,
@@ -477,7 +475,6 @@ export default function CaptureScreen() {
 
       const leadId = leadRes.data.leadId;
 
-      // 2) attachment + OCR + contact patch (only if we have a card)
       if (cardUri) {
         setSubmitStage("Attachment");
 
@@ -598,57 +595,57 @@ export default function CaptureScreen() {
     { key: "contactCountry", label: "Land" },
   ];
 
-  return (
-    <View style={{ flex: 1 }}>
-      <View style={{ padding: 16, gap: 8 }}>
-        <Text style={{ fontSize: 22, fontWeight: "900" }}>{title}</Text>
+  const padBottom = 24 + UI.tabBarBaseHeight + Math.max(insets.bottom, 0);
 
-        {errorText ? (
-          <View style={{ padding: 12, borderRadius: 12, borderWidth: 1, borderColor: "#FCA5A5", backgroundColor: "#FEF2F2" }}>
-            <Text style={{ fontWeight: "900", color: "#991B1B" }}>Hinweis</Text>
-            <Text style={{ color: "#991B1B", marginTop: 6 }}>{errorText}</Text>
+  return (
+    <ScreenScaffold title={title} scroll={false}>
+      {errorText ? (
+        <View style={{ paddingHorizontal: UI.padX, paddingTop: 14 }}>
+          <View style={{ padding: 12, borderRadius: 14, borderWidth: 1, borderColor: "rgba(220,38,38,0.25)", backgroundColor: "rgba(220,38,38,0.06)" }}>
+            <Text style={{ fontWeight: "900", color: "rgba(153,27,27,0.95)" }}>Hinweis</Text>
+            <Text style={{ color: "rgba(153,27,27,0.95)", marginTop: 6 }}>{errorText}</Text>
 
             <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
               <Pressable
                 onPress={load}
-                style={{ flex: 1, paddingVertical: 10, borderRadius: 12, backgroundColor: "#111827", alignItems: "center" }}
+                style={{ flex: 1, paddingVertical: 10, borderRadius: 12, backgroundColor: UI.text, alignItems: "center" }}
               >
                 <Text style={{ color: "white", fontWeight: "900" }}>{busy ? "…" : "Retry"}</Text>
               </Pressable>
 
               <Pressable
                 onPress={() => router.replace("/forms")}
-                style={{ flex: 1, paddingVertical: 10, borderRadius: 12, backgroundColor: "#F3F4F6", alignItems: "center" }}
+                style={{ flex: 1, paddingVertical: 10, borderRadius: 12, backgroundColor: "rgba(17,24,39,0.06)", alignItems: "center" }}
               >
-                <Text style={{ fontWeight: "900" }}>Zur Liste</Text>
+                <Text style={{ fontWeight: "900", color: UI.text }}>Zur Liste</Text>
               </Pressable>
             </View>
           </View>
-        ) : null}
-      </View>
+        </View>
+      ) : null}
 
-      <ScrollView contentContainerStyle={{ padding: 16, paddingTop: 0, gap: 12 }}>
+      <ScrollView contentContainerStyle={{ paddingHorizontal: UI.padX, paddingTop: 14, paddingBottom: padBottom, gap: 12 }}>
         {/* Business card scan section */}
-        <View style={{ padding: 12, borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", backgroundColor: "white", gap: 10 }}>
-          <Text style={{ fontWeight: "900" }}>Visitenkarte</Text>
+        <View style={{ padding: 12, borderRadius: 14, borderWidth: 1, borderColor: UI.border, backgroundColor: UI.bg, gap: 10 }}>
+          <Text style={{ fontWeight: "900", color: UI.text }}>Visitenkarte</Text>
 
           {cardUri ? (
             <View style={{ flexDirection: "row", gap: 12, alignItems: "center" }}>
               <Image
                 alt=""
                 source={{ uri: cardUri }}
-                style={{ width: 70, height: 70, borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB" }}
+                style={{ width: 70, height: 70, borderRadius: 12, borderWidth: 1, borderColor: UI.border }}
                 contentFit="cover"
               />
               <View style={{ flex: 1, gap: 6 }}>
-                <Text style={{ fontWeight: "800" }}>Scan vorhanden</Text>
-                <Text style={{ opacity: 0.7, fontFamily: "monospace" }} numberOfLines={1}>{cardName}</Text>
+                <Text style={{ fontWeight: "900", color: UI.text }}>Scan vorhanden</Text>
+                <Text style={{ opacity: 0.7, fontFamily: "monospace", color: UI.text }} numberOfLines={1}>{cardName}</Text>
 
                 <View style={{ flexDirection: "row", gap: 10 }}>
                   <Pressable
                     onPress={scanBusinessCard}
                     disabled={ocrBusy || submitBusy}
-                    style={{ paddingVertical: 9, paddingHorizontal: 12, borderRadius: 12, backgroundColor: (ocrBusy || submitBusy) ? "#9CA3AF" : "#111827" }}
+                    style={{ paddingVertical: 9, paddingHorizontal: 12, borderRadius: 12, backgroundColor: (ocrBusy || submitBusy) ? "rgba(17,24,39,0.35)" : UI.text }}
                   >
                     <Text style={{ color: "white", fontWeight: "900" }}>{ocrBusy ? "Scanne…" : "Neu scannen"}</Text>
                   </Pressable>
@@ -664,9 +661,9 @@ export default function CaptureScreen() {
                       setRawExpanded(false);
                     }}
                     disabled={ocrBusy || submitBusy}
-                    style={{ paddingVertical: 9, paddingHorizontal: 12, borderRadius: 12, backgroundColor: "#F3F4F6" }}
+                    style={{ paddingVertical: 9, paddingHorizontal: 12, borderRadius: 12, backgroundColor: "rgba(17,24,39,0.06)" }}
                   >
-                    <Text style={{ fontWeight: "900" }}>Entfernen</Text>
+                    <Text style={{ fontWeight: "900", color: UI.text }}>Entfernen</Text>
                   </Pressable>
                 </View>
               </View>
@@ -678,7 +675,7 @@ export default function CaptureScreen() {
               style={{
                 paddingVertical: 12,
                 borderRadius: 12,
-                backgroundColor: (ocrBusy || submitBusy) ? "#9CA3AF" : "#111827",
+                backgroundColor: (ocrBusy || submitBusy) ? "rgba(17,24,39,0.35)" : UI.text,
                 alignItems: "center",
               }}
             >
@@ -687,42 +684,49 @@ export default function CaptureScreen() {
           )}
 
           {ocrError ? (
-            <View style={{ padding: 10, borderRadius: 12, borderWidth: 1, borderColor: "#FCA5A5", backgroundColor: "#FEF2F2" }}>
-              <Text style={{ fontWeight: "900", color: "#991B1B" }}>OCR Fehler</Text>
-              <Text style={{ color: "#991B1B", marginTop: 6 }}>{ocrError}</Text>
+            <View style={{ padding: 10, borderRadius: 12, borderWidth: 1, borderColor: "rgba(220,38,38,0.25)", backgroundColor: "rgba(220,38,38,0.06)" }}>
+              <Text style={{ fontWeight: "900", color: "rgba(153,27,27,0.95)" }}>OCR Fehler</Text>
+              <Text style={{ color: "rgba(153,27,27,0.95)", marginTop: 6 }}>{ocrError}</Text>
             </View>
           ) : null}
 
           {hasOcr ? (
             <View style={{ gap: 10 }}>
-              <View style={{ padding: 10, borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", backgroundColor: "#FAFAFA" }}>
-                <Text style={{ fontWeight: "900", marginBottom: 6 }}>OCR Vorschau</Text>
-                <Text style={{ fontFamily: "monospace", opacity: 0.85, lineHeight: 18 }}>{rawPreview || "—"}</Text>
+              <View style={{ padding: 10, borderRadius: 12, borderWidth: 1, borderColor: UI.border, backgroundColor: "rgba(17,24,39,0.03)" }}>
+                <Text style={{ fontWeight: "900", marginBottom: 6, color: UI.text }}>OCR Vorschau</Text>
+                <Text style={{ fontFamily: "monospace", opacity: 0.85, lineHeight: 18, color: UI.text }}>{rawPreview || "—"}</Text>
                 <Pressable onPress={() => setRawExpanded((p) => !p)} style={{ marginTop: 8 }}>
-                  <Text style={{ fontWeight: "900" }}>{rawExpanded ? "Weniger" : "Mehr"}</Text>
+                  <Text style={{ fontWeight: "900", color: UI.text }}>{rawExpanded ? "Weniger" : "Mehr"}</Text>
                 </Pressable>
               </View>
 
               <View style={{ gap: 8 }}>
-                <Text style={{ fontWeight: "900" }}>Kontaktvorschlag</Text>
+                <Text style={{ fontWeight: "900", color: UI.text }}>Kontaktvorschlag</Text>
 
                 {contactInputs.map((it) => (
                   <View key={it.key} style={{ gap: 6 }}>
-                    <Text style={{ fontWeight: "800", opacity: 0.9 }}>{it.label}</Text>
+                    <Text style={{ fontWeight: "900", opacity: 0.9, color: UI.text }}>{it.label}</Text>
                     <TextInput
                       value={(contactDraft[it.key] || "").toString()}
                       onChangeText={(t) => setContactDraft((prev) => ({ ...prev, [it.key]: t }))}
                       autoCapitalize={it.key === "contactEmail" || it.key === "contactWebsite" ? "none" : "words"}
                       autoCorrect={false}
-                      keyboardType={it.key === "contactEmail" ? "email-address" : (it.key === "contactPhone" || it.key === "contactMobile") ? "phone-pad" : "default"}
+                      keyboardType={
+                        it.key === "contactEmail"
+                          ? "email-address"
+                          : it.key === "contactPhone" || it.key === "contactMobile"
+                          ? "phone-pad"
+                          : "default"
+                      }
                       placeholder={it.placeholder || ""}
                       style={{
                         borderWidth: 1,
-                        borderColor: "#E5E7EB",
+                        borderColor: UI.border,
                         borderRadius: 12,
                         paddingHorizontal: 12,
                         paddingVertical: 10,
-                        backgroundColor: "white",
+                        backgroundColor: UI.bg,
+                        color: UI.text,
                       }}
                     />
                   </View>
@@ -734,7 +738,7 @@ export default function CaptureScreen() {
                   style={{
                     paddingVertical: 12,
                     borderRadius: 12,
-                    backgroundColor: (submitBusy || ocrBusy) ? "#9CA3AF" : (contactApplied ? "#111827" : "#111827"),
+                    backgroundColor: (submitBusy || ocrBusy) ? "rgba(17,24,39,0.35)" : UI.text,
                     alignItems: "center",
                     marginTop: 4,
                   }}
@@ -751,9 +755,9 @@ export default function CaptureScreen() {
           const v = values[f.key] ?? (f.type === "CHECKBOX" ? false : f.type === "MULTI_SELECT" ? [] : "");
 
           return (
-            <View key={f.key} style={{ padding: 12, borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", backgroundColor: "white", gap: 8 }}>
-              <Text style={{ fontWeight: "900" }}>
-                {f.label} {f.required ? <Text style={{ color: "#DC2626" }}>*</Text> : null}
+            <View key={f.key} style={{ padding: 12, borderRadius: 14, borderWidth: 1, borderColor: UI.border, backgroundColor: UI.bg, gap: 8 }}>
+              <Text style={{ fontWeight: "900", color: UI.text }}>
+                {f.label} {f.required ? <Text style={{ color: UI.accent }}>*</Text> : null}
               </Text>
 
               {(f.type === "TEXT" || f.type === "EMAIL" || f.type === "PHONE") ? (
@@ -766,10 +770,12 @@ export default function CaptureScreen() {
                   placeholder={f.type === "EMAIL" ? "name@firma.ch" : f.type === "PHONE" ? "+41 ..." : ""}
                   style={{
                     borderWidth: 1,
-                    borderColor: "#E5E7EB",
+                    borderColor: UI.border,
                     borderRadius: 12,
                     paddingHorizontal: 12,
                     paddingVertical: 10,
+                    backgroundColor: UI.bg,
+                    color: UI.text,
                   }}
                 />
               ) : null}
@@ -782,12 +788,14 @@ export default function CaptureScreen() {
                   numberOfLines={4}
                   style={{
                     borderWidth: 1,
-                    borderColor: "#E5E7EB",
+                    borderColor: UI.border,
                     borderRadius: 12,
                     paddingHorizontal: 12,
                     paddingVertical: 10,
                     minHeight: 100,
                     textAlignVertical: "top",
+                    backgroundColor: UI.bg,
+                    color: UI.text,
                   }}
                 />
               ) : null}
@@ -798,11 +806,11 @@ export default function CaptureScreen() {
                   style={{
                     paddingVertical: 10,
                     borderRadius: 12,
-                    backgroundColor: (typeof v === "boolean" ? v : false) ? "#111827" : "#F3F4F6",
+                    backgroundColor: (typeof v === "boolean" ? v : false) ? UI.text : "rgba(17,24,39,0.06)",
                     alignItems: "center",
                   }}
                 >
-                  <Text style={{ color: (typeof v === "boolean" ? v : false) ? "white" : "#111827", fontWeight: "900" }}>
+                  <Text style={{ color: (typeof v === "boolean" ? v : false) ? "white" : UI.text, fontWeight: "900" }}>
                     {(typeof v === "boolean" ? v : false) ? "Ja" : "Nein"}
                   </Text>
                 </Pressable>
@@ -821,11 +829,11 @@ export default function CaptureScreen() {
                           paddingHorizontal: 12,
                           borderRadius: 12,
                           borderWidth: 1,
-                          borderColor: selected ? "#111827" : "#E5E7EB",
-                          backgroundColor: selected ? "#111827" : "white",
+                          borderColor: selected ? UI.text : UI.border,
+                          backgroundColor: selected ? UI.text : UI.bg,
                         }}
                       >
-                        <Text style={{ color: selected ? "white" : "#111827", fontWeight: "800" }}>{opt.label}</Text>
+                        <Text style={{ color: selected ? "white" : UI.text, fontWeight: "900" }}>{opt.label}</Text>
                       </Pressable>
                     );
                   })}
@@ -846,11 +854,11 @@ export default function CaptureScreen() {
                           paddingHorizontal: 12,
                           borderRadius: 12,
                           borderWidth: 1,
-                          borderColor: selected ? "#111827" : "#E5E7EB",
-                          backgroundColor: selected ? "#111827" : "white",
+                          borderColor: selected ? UI.text : UI.border,
+                          backgroundColor: selected ? UI.text : UI.bg,
                         }}
                       >
-                        <Text style={{ color: selected ? "white" : "#111827", fontWeight: "800" }}>{opt.label}</Text>
+                        <Text style={{ color: selected ? "white" : UI.text, fontWeight: "900" }}>{opt.label}</Text>
                       </Pressable>
                     );
                   })}
@@ -860,7 +868,7 @@ export default function CaptureScreen() {
           );
         })}
 
-        <View style={{ flexDirection: "row", gap: 10, marginTop: 6, marginBottom: 24 }}>
+        <View style={{ flexDirection: "row", gap: 10, marginTop: 6 }}>
           <Pressable
             disabled={submitBusy || busy}
             onPress={onSubmit}
@@ -868,7 +876,7 @@ export default function CaptureScreen() {
               flex: 1,
               paddingVertical: 12,
               borderRadius: 12,
-              backgroundColor: submitBusy || busy ? "#9CA3AF" : "#111827",
+              backgroundColor: submitBusy || busy ? "rgba(17,24,39,0.35)" : UI.text,
               alignItems: "center",
             }}
           >
@@ -884,14 +892,14 @@ export default function CaptureScreen() {
               flex: 1,
               paddingVertical: 12,
               borderRadius: 12,
-              backgroundColor: "#F3F4F6",
+              backgroundColor: "rgba(17,24,39,0.06)",
               alignItems: "center",
             }}
           >
-            <Text style={{ fontWeight: "900" }}>Nächster Lead</Text>
+            <Text style={{ fontWeight: "900", color: UI.text }}>Nächster Lead</Text>
           </Pressable>
         </View>
       </ScrollView>
-    </View>
+    </ScreenScaffold>
   );
 }
