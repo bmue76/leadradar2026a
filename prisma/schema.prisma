@@ -133,6 +133,10 @@ model Tenant {
   logoWidth        Int?
   logoHeight       Int?
 
+  // Corporate Accent Color (Tenant) — TP 4.6
+  // Format validated server-side: "#RRGGBB" (6-digit hex, case-insensitive).
+  accentColor String?
+
   // Relations
   users           User[]
   forms           Form[]
