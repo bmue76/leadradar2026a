@@ -40,15 +40,14 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
   },
 
-  // Screen padding aushebeln => wirklich ganz links bündig
+  // kein “full-bleed” mehr => Logo richtet sich am gleichen Padding aus wie Tenant/Title/Content
   logoRow: {
-    marginLeft: -UI.padX,
     alignItems: "flex-start",
     justifyContent: "center",
     minHeight: UI.logoHeight + 8,
   },
 
-  // Box darf gross sein – Inhalt wird dank contentPosition links ausgerichtet
+  // Box darf gross sein – Inhalt ist links verankert via contentPosition
   logo: {
     width: UI.logoWidth,
     height: UI.logoHeight,
