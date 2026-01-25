@@ -1,10 +1,9 @@
 import React from "react";
-import { Image, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
+import { Image } from "expo-image";
 
 import { useBranding } from "../features/branding/useBranding";
 import { UI } from "./tokens";
-
-/* eslint-disable jsx-a11y/alt-text */
 
 type Props = { title: string };
 
@@ -20,9 +19,11 @@ export function AppHeader({ title }: Props) {
         {logoUri ? (
           <Image
             source={{ uri: logoUri }}
-            accessibilityLabel="Tenant Logo"
             style={styles.logo}
-            resizeMode="contain"
+            contentFit="contain"
+            contentPosition="left center"
+            accessible
+            accessibilityLabel="Tenant Logo"
           />
         ) : null}
       </View>
@@ -39,13 +40,15 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
   },
 
-  // Screen padding aushebeln => wirklich links bündig
+  // Screen padding aushebeln => wirklich ganz links bündig
   logoRow: {
     marginLeft: -UI.padX,
     alignItems: "flex-start",
     justifyContent: "center",
     minHeight: UI.logoHeight + 8,
   },
+
+  // Box darf gross sein – Inhalt wird dank contentPosition links ausgerichtet
   logo: {
     width: UI.logoWidth,
     height: UI.logoHeight,
