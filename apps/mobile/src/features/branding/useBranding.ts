@@ -9,7 +9,7 @@ type BrandingState =
       tenantName: string | null;
       tenantSlug: string | null;
       hasLogo: boolean;
-      logoDataUrl: string | null; // data:image/...;base64,... OR direct dataUrl
+      logoDataUrl: string | null; // final data-url
     }
   | { kind: "error"; message: string };
 
@@ -17,11 +17,15 @@ type BrandingApiPayload = {
   tenant?: { name?: unknown; slug?: unknown };
   branding?: { hasLogo?: unknown };
   logoDataUrl?: unknown;
-  logoBase64Url?: unknown; // <-- support
+  logoBase64Url?: unknown; // path to base64 endpoint
 };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
+}
+
+function pickString(v: unknown): string | null {
+  return typeof v === "string" && v.trim().length ? v : null;
 }
 
 function parseBrandingData(raw: unknown): {
@@ -34,26 +38,28 @@ function parseBrandingData(raw: unknown): {
   if (!isRecord(raw)) return null;
   const data = raw as BrandingApiPayload;
 
-  const tenantName = isRecord(data.tenant) && typeof data.tenant.name === "string" ? data.tenant.name : null;
-  const tenantSlug = isRecord(data.tenant) && typeof data.tenant.slug === "string" ? data.tenant.slug : null;
+  const tenantName =
+    isRecord(data.tenant) && typeof data.tenant.name === "string" ? data.tenant.name : null;
+  const tenantSlug =
+    isRecord(data.tenant) && typeof data.tenant.slug === "string" ? data.tenant.slug : null;
 
-  const hasLogo = isRecord(data.branding) && typeof data.branding.hasLogo === "boolean" ? data.branding.hasLogo : false;
+  const hasLogo =
+    isRecord(data.branding) && typeof data.branding.hasLogo === "boolean"
+      ? data.branding.hasLogo
+      : false;
 
-  const logoDataUrl = typeof data.logoDataUrl === "string" ? data.logoDataUrl : null;
-
-  const base64UrlRaw = (data as Record<string, unknown>).logoBase64Url;
-  const logoBase64Url = typeof base64UrlRaw === "string" ? base64UrlRaw : null;
+  const logoDataUrl = pickString(data.logoDataUrl);
+  const logoBase64Url = pickString(data.logoBase64Url);
 
   return { tenantName, tenantSlug, hasLogo, logoDataUrl, logoBase64Url };
 }
 
-function parseBase64Payload(raw: unknown): { mime: string; base64: string } | null {
-  if (!isRecord(raw)) return null;
-  const mime = raw.mime;
-  const base64 = raw.base64;
-  if (typeof mime !== "string" || !mime.trim()) return null;
-  if (typeof base64 !== "string" || !base64.trim()) return null;
-  return { mime: mime.trim(), base64: base64.trim() };
+function extractErrorMessage(res: unknown): string {
+  if (!isRecord(res)) return "Request failed";
+  const maybeError = res.error;
+  if (isRecord(maybeError) && typeof maybeError.message === "string") return maybeError.message;
+  if (typeof res.message === "string") return res.message;
+  return "Request failed";
 }
 
 export function useBranding() {
@@ -75,50 +81,63 @@ export function useBranding() {
       }
 
       if (res.ok !== true) {
-        const msg = typeof (res as Record<string, unknown>).message === "string" ? String((res as Record<string, unknown>).message) : "Request failed";
-        setState({ kind: "error", message: msg });
+        setState({ kind: "error", message: extractErrorMessage(res) });
         return;
       }
 
-      const parsed = parseBrandingData((res as Record<string, unknown>).data);
+      const parsed = parseBrandingData(res.data);
       if (!parsed) {
         setState({ kind: "error", message: "Invalid branding payload" });
         return;
       }
 
-      // 1) If backend already gives dataUrl, use it
+      // 1) direct data-url vorhanden
       if (parsed.logoDataUrl) {
-        setState({ kind: "ready", tenantName: parsed.tenantName, tenantSlug: parsed.tenantSlug, hasLogo: parsed.hasLogo, logoDataUrl: parsed.logoDataUrl });
+        setState({
+          kind: "ready",
+          tenantName: parsed.tenantName,
+          tenantSlug: parsed.tenantSlug,
+          hasLogo: parsed.hasLogo,
+          logoDataUrl: parsed.logoDataUrl,
+        });
         return;
       }
 
-      // 2) If backend gives a base64 endpoint, resolve it
+      // 2) fallback: base64 endpoint -> data-url bauen
       if (parsed.logoBase64Url) {
-        const logoRes = await apiFetch({ method: "GET", path: parsed.logoBase64Url, apiKey });
+        const b64 = await apiFetch({ method: "GET", path: parsed.logoBase64Url, apiKey });
 
-        if (isRecord(logoRes) && logoRes.ok === true) {
-          const data = (logoRes as Record<string, unknown>).data;
-          const b64 = parseBase64Payload(data);
-          if (b64) {
-            const dataUrl = `data:${b64.mime};base64,${b64.base64}`;
-            setState({ kind: "ready", tenantName: parsed.tenantName, tenantSlug: parsed.tenantSlug, hasLogo: parsed.hasLogo, logoDataUrl: dataUrl });
-            return;
-          }
+        if (isRecord(b64) && b64.ok === true && isRecord(b64.data)) {
+          const mime = pickString(b64.data.mime) ?? "image/png";
+          const base64 = pickString(b64.data.base64);
+
+          const dataUrl = base64 ? `data:${mime};base64,${base64}` : null;
+
+          setState({
+            kind: "ready",
+            tenantName: parsed.tenantName,
+            tenantSlug: parsed.tenantSlug,
+            hasLogo: parsed.hasLogo,
+            logoDataUrl: dataUrl,
+          });
+          return;
         }
-
-        // fallback: no logo
-        setState({ kind: "ready", tenantName: parsed.tenantName, tenantSlug: parsed.tenantSlug, hasLogo: parsed.hasLogo, logoDataUrl: null });
-        return;
       }
 
-      // 3) No logo info
-      setState({ kind: "ready", tenantName: parsed.tenantName, tenantSlug: parsed.tenantSlug, hasLogo: parsed.hasLogo, logoDataUrl: null });
+      // 3) kein logo lieferbar
+      setState({
+        kind: "ready",
+        tenantName: parsed.tenantName,
+        tenantSlug: parsed.tenantSlug,
+        hasLogo: parsed.hasLogo,
+        logoDataUrl: null,
+      });
     } catch (e) {
       setState({ kind: "error", message: e instanceof Error ? e.message : "Unexpected error" });
     }
   }, []);
 
-  // keep your lint-friendly async kickoff
+  // Lint rule: avoid direct setState chain in effect body
   useEffect(() => {
     const t = setTimeout(() => {
       void refresh();
