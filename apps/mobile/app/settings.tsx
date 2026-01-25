@@ -46,7 +46,7 @@ export default function Settings() {
   }, []);
 
   return (
-    <ScreenScaffold title="Settings" scroll={false}>
+    <ScreenScaffold title="Settings" scroll={false} showPoweredBy>
       <View style={{ gap: 12 }}>
         <View style={styles.card}>
           <Text style={styles.h2}>API Base URL</Text>
