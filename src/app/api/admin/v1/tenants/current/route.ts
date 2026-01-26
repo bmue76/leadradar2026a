@@ -15,6 +15,7 @@ export async function GET(req: Request) {
         id: true,
         slug: true,
         name: true,
+        accentColor: true,
         createdAt: true,
         updatedAt: true,
       },

@@ -7,7 +7,7 @@ import { enforceRateLimit } from "@/lib/rateLimit";
 export const runtime = "nodejs";
 
 type BrandingPayload = {
-  tenant: { id: string; slug: string; name: string };
+  tenant: { id: string; slug: string; name: string; accentColor: string | null };
   branding: {
     hasLogo: boolean;
     logoMime: string | null;
@@ -34,14 +34,13 @@ export async function GET(req: Request) {
       data: { lastSeenAt: now },
     });
 
-    // IMPORTANT: Mobile tenant is derived from ApiKey (auth.tenantId).
-    // Ignore x-tenant-slug / x-tenant-id for mobile branding to avoid accidental mismatch/fallback states.
     const t = await prisma.tenant.findUnique({
       where: { id: auth.tenantId },
       select: {
         id: true,
         slug: true,
         name: true,
+        accentColor: true,
         logoKey: true,
         logoMime: true,
         logoSizeBytes: true,
@@ -54,7 +53,7 @@ export async function GET(req: Request) {
     const hasLogo = Boolean(t.logoKey && t.logoMime && t.logoSizeBytes);
 
     const payload: BrandingPayload = {
-      tenant: { id: t.id, slug: t.slug, name: t.name },
+      tenant: { id: t.id, slug: t.slug, name: t.name, accentColor: t.accentColor ?? null },
       branding: {
         hasLogo,
         logoMime: hasLogo ? t.logoMime : null,
