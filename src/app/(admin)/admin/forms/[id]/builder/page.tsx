@@ -1,8 +1,5 @@
-import FormDetailClient from "../FormDetailClient";
+import BuilderShell from "./_components/BuilderShell";
 
-type Params = { id: string };
-
-export default async function Page({ params }: { params: Params | Promise<Params> }) {
-  const { id } = await Promise.resolve(params);
-  return <FormDetailClient formId={id} initialTab="builder" />;
+export default function BuilderPage({ params }: { params: { id: string } }) {
+  return <BuilderShell formId={params.id} />;
 }

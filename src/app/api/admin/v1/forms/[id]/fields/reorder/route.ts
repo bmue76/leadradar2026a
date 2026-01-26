@@ -1,112 +1,97 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { z } from "zod";
+
 import { prisma } from "@/lib/prisma";
-import { randomUUID } from "node:crypto";
+import { jsonError, jsonOk } from "@/lib/api";
+import { httpError, isHttpError, validateBody } from "@/lib/http";
+import { requireAdminAuth } from "@/lib/auth";
 
-type RouteCtx = { params: Promise<{ id: string }> };
+export const runtime = "nodejs";
 
-function traceId() {
-  try {
-    return randomUUID();
-  } catch {
-    return `trace_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  }
+const IdSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9]+$/i);
+
+function isPromiseLike<T>(v: unknown): v is Promise<T> {
+  return typeof v === "object" && v !== null && "then" in v && typeof (v as { then?: unknown }).then === "function";
 }
 
-function ok<T>(data: T, tid: string) {
-  return NextResponse.json({ ok: true, data, traceId: tid }, { status: 200 });
+async function getParams<T extends Record<string, string>>(ctx: unknown): Promise<T> {
+  const params = (ctx as { params?: unknown })?.params;
+  if (isPromiseLike<T>(params)) return await params;
+  return params as T;
 }
 
-function err(status: number, code: string, message: string, tid: string) {
-  return NextResponse.json({ ok: false, error: { code, message }, traceId: tid }, { status });
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
+const BodySchema = z
+  .object({
+    orderedIds: z.array(z.string().trim().min(1)).optional(),
+    order: z.array(z.string().trim().min(1)).optional(),
+  })
+  .refine((d) => Array.isArray(d.orderedIds) || Array.isArray(d.order), {
+    message: "Body must include orderedIds or order (array).",
+  });
 
 function uniqPreserve(xs: string[]) {
   return Array.from(new Set(xs));
 }
 
-async function handle(req: NextRequest, ctx: RouteCtx) {
-  const tid = traceId();
-
-  const { id } = await ctx.params;
-  const formId = String(id || "").trim();
-  if (!formId) return err(400, "BAD_REQUEST", "Missing form id.", tid);
-
-  let body: unknown;
+async function handle(req: Request, ctx: unknown) {
   try {
-    body = await req.json();
-  } catch {
-    return err(400, "BAD_REQUEST", "Invalid JSON body.", tid);
-  }
+    const { tenantId } = await requireAdminAuth(req);
+    const { id } = await getParams<{ id: string }>(ctx);
 
-  if (!isRecord(body)) return err(400, "BAD_REQUEST", "Invalid body.", tid);
+    const formId = String(id || "").trim();
+    if (!IdSchema.safeParse(formId).success) throw httpError(404, "NOT_FOUND", "Not found.");
 
-  // Client sends { order: [...] } — we also accept { orderedIds: [...] }
-  const raw = (body.orderedIds ?? body.order) as unknown;
-  if (!Array.isArray(raw)) return err(400, "BAD_REQUEST", "Body must include order (array).", tid);
+    const body = await validateBody(req, BodySchema);
 
-  const orderedIds = uniqPreserve(
-    raw.map((x) => String(x)).map((s) => s.trim()).filter(Boolean)
-  );
-  if (orderedIds.length === 0) return err(400, "BAD_REQUEST", "order must not be empty.", tid);
+    const raw = (body.orderedIds ?? body.order ?? []) as string[];
+    const orderedIds = uniqPreserve(raw.map((s) => String(s).trim()).filter(Boolean));
+    if (orderedIds.length === 0) throw httpError(400, "INVALID_BODY", "Invalid request body.", { order: ["Must not be empty."] });
 
-  // Optional safety net (adminFetchJson typically sends this)
-  const tenantSlug = req.headers.get("x-tenant-slug")?.trim() || "";
-
-  const form = await prisma.form.findFirst({
-    where: { id: formId },
-    select: { id: true, tenantId: true },
-  });
-  if (!form) return err(404, "NOT_FOUND", "Form not found.", tid);
-
-  if (tenantSlug) {
-    const tenant = await prisma.tenant.findUnique({
-      where: { slug: tenantSlug },
+    const form = await prisma.form.findFirst({
+      where: { id: formId, tenantId },
       select: { id: true },
     });
-    if (!tenant || tenant.id !== form.tenantId) {
-      // leak-safe
-      return err(404, "NOT_FOUND", "Form not found.", tid);
+    if (!form) throw httpError(404, "NOT_FOUND", "Not found.");
+
+    const fields = await prisma.formField.findMany({
+      where: { formId, tenantId },
+      select: { id: true },
+    });
+
+    const existingIds = fields.map((f) => f.id);
+    const existingSet = new Set(existingIds);
+
+    // Must be full permutation (TP2.8 contract)
+    if (orderedIds.length !== existingIds.length) {
+      throw httpError(400, "INVALID_BODY", "Invalid request body.", {
+        order: ["order must include ALL fields of this form."],
+      });
     }
+    if (orderedIds.some((fid) => !existingSet.has(fid))) {
+      throw httpError(400, "INVALID_BODY", "Invalid request body.", {
+        order: ["order contains unknown field ids."],
+      });
+    }
+
+    await prisma.$transaction(
+      orderedIds.map((fid, idx) =>
+        prisma.formField.updateMany({
+          where: { id: fid, formId, tenantId },
+          data: { sortOrder: (idx + 1) * 10 },
+        })
+      )
+    );
+
+    return jsonOk(req, { formId, updated: orderedIds.length, orderedIds });
+  } catch (e) {
+    if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
+    return jsonError(req, 500, "INTERNAL_ERROR", "Unexpected error.");
   }
-
-  const fields = await prisma.formField.findMany({
-    where: { formId, tenantId: form.tenantId },
-    select: { id: true },
-  });
-
-  const existingIds = fields.map((f) => f.id);
-  const existingSet = new Set(existingIds);
-
-  // Must be a full permutation of this form's fields
-  if (orderedIds.some((fid) => !existingSet.has(fid))) {
-    return err(400, "BAD_REQUEST", "order contains unknown field ids.", tid);
-  }
-  if (orderedIds.length !== existingIds.length) {
-    return err(400, "BAD_REQUEST", "order must include ALL fields of this form.", tid);
-  }
-
-  // Persist sortOrder (10,20,30,...)
-  await prisma.$transaction(
-    orderedIds.map((fid, idx) =>
-      prisma.formField.updateMany({
-        where: { id: fid, formId, tenantId: form.tenantId },
-        data: { sortOrder: (idx + 1) * 10 },
-      })
-    )
-  );
-
-  return ok({ formId, updated: orderedIds.length, orderedIds }, tid);
 }
 
-export async function POST(req: NextRequest, ctx: RouteCtx) {
+export async function POST(req: Request, ctx: unknown) {
   return handle(req, ctx);
 }
 
-// optional: allow PUT as well
-export async function PUT(req: NextRequest, ctx: RouteCtx) {
+export async function PUT(req: Request, ctx: unknown) {
   return handle(req, ctx);
 }
