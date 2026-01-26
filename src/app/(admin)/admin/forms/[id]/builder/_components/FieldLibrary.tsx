@@ -46,83 +46,14 @@ function DraggableItem(props: { item: LibraryItem; onQuickAdd: (it: LibraryItem)
 
 export const LIB_ITEMS: LibraryItem[] = [
   // ---- Form fields tab
-  {
-    id: "text",
-    tab: "fields",
-    kind: "type",
-    type: "TEXT",
-    title: "Text",
-    subtitle: "Single line",
-    defaultLabel: "Text",
-    keyBase: "text",
-    defaultPlaceholder: "",
-  },
-  {
-    id: "textarea",
-    tab: "fields",
-    kind: "type",
-    type: "TEXTAREA",
-    title: "Textarea",
-    subtitle: "Multi line",
-    defaultLabel: "Notes",
-    keyBase: "notes",
-    defaultPlaceholder: "Notes / context",
-  },
-  {
-    id: "email",
-    tab: "fields",
-    kind: "type",
-    type: "EMAIL",
-    title: "Email",
-    subtitle: "Validation + keyboard",
-    defaultLabel: "Email",
-    keyBase: "email2",
-    defaultPlaceholder: "name@company.com",
-  },
-  {
-    id: "phone",
-    tab: "fields",
-    kind: "type",
-    type: "PHONE",
-    title: "Phone",
-    subtitle: "Tel input",
-    defaultLabel: "Phone",
-    keyBase: "phone2",
-    defaultPlaceholder: "+41 ...",
-  },
-  {
-    id: "checkbox",
-    tab: "fields",
-    kind: "type",
-    type: "CHECKBOX",
-    title: "Checkbox",
-    subtitle: "True / False",
-    defaultLabel: "Checkbox",
-    keyBase: "checkbox",
-  },
+  { id: "text", tab: "fields", kind: "type", type: "TEXT", title: "Text", subtitle: "Single line", defaultLabel: "Text", keyBase: "text", defaultPlaceholder: "" },
+  { id: "textarea", tab: "fields", kind: "type", type: "TEXTAREA", title: "Textarea", subtitle: "Multi line", defaultLabel: "Notes", keyBase: "notes", defaultPlaceholder: "Notes / context" },
+  { id: "email", tab: "fields", kind: "type", type: "EMAIL", title: "Email", subtitle: "Validation + keyboard", defaultLabel: "Email", keyBase: "email2", defaultPlaceholder: "name@company.com" },
+  { id: "phone", tab: "fields", kind: "type", type: "PHONE", title: "Phone", subtitle: "Tel input", defaultLabel: "Phone", keyBase: "phone2", defaultPlaceholder: "+41 ..." },
+  { id: "checkbox", tab: "fields", kind: "type", type: "CHECKBOX", title: "Checkbox", subtitle: "True / False", defaultLabel: "Checkbox", keyBase: "checkbox" },
 
-  {
-    id: "single_select",
-    tab: "fields",
-    kind: "type",
-    type: "SINGLE_SELECT",
-    title: "Single Select",
-    subtitle: "Choose one",
-    defaultLabel: "Select",
-    keyBase: "select",
-    defaultConfig: { options: ["Option 1"] },
-  },
-  {
-    id: "multi_select",
-    tab: "fields",
-    kind: "type",
-    type: "MULTI_SELECT",
-    title: "Multi Select",
-    subtitle: "Choose many",
-    defaultLabel: "Multi Select",
-    keyBase: "multiselect",
-    defaultConfig: { options: ["Option 1"] },
-  },
+  { id: "single_select", tab: "fields", kind: "type", type: "SINGLE_SELECT", title: "Single Select", subtitle: "Choose one", defaultLabel: "Select", keyBase: "select", defaultConfig: { options: ["Option 1"] } },
+  { id: "multi_select", tab: "fields", kind: "type", type: "MULTI_SELECT", title: "Multi Select", subtitle: "Choose many", defaultLabel: "Multi Select", keyBase: "multiselect", defaultConfig: { options: ["Option 1"] } },
 
   // Rating preset (no new FieldType; mapped to SINGLE_SELECT options)
   {
@@ -139,29 +70,8 @@ export const LIB_ITEMS: LibraryItem[] = [
   },
 
   // useful presets
-  {
-    id: "yes_no",
-    tab: "fields",
-    kind: "preset",
-    type: "SINGLE_SELECT",
-    title: "Yes / No",
-    subtitle: "Preset: yes, no",
-    defaultLabel: "Yes / No",
-    keyBase: "yesNo",
-    defaultConfig: { options: ["Yes", "No"] },
-  },
-  {
-    id: "consent",
-    tab: "fields",
-    kind: "preset",
-    type: "CHECKBOX",
-    title: "Consent",
-    subtitle: "GDPR / marketing opt-in",
-    defaultLabel: "Consent",
-    keyBase: "consent",
-    defaultConfig: null,
-    defaultHelpText: "I agree to be contacted.",
-  },
+  { id: "yes_no", tab: "fields", kind: "preset", type: "SINGLE_SELECT", title: "Yes / No", subtitle: "Preset: yes, no", defaultLabel: "Yes / No", keyBase: "yesNo", defaultConfig: { options: ["Yes", "No"] } },
+  { id: "consent", tab: "fields", kind: "preset", type: "CHECKBOX", title: "Consent", subtitle: "GDPR / marketing opt-in", defaultLabel: "Consent", keyBase: "consent", defaultConfig: null, defaultHelpText: "I agree to be contacted." },
 
   // ---- Contact fields tab
   { id: "c_firstName", tab: "contacts", kind: "contact", type: "TEXT", title: "First name", defaultLabel: "First name", key: "firstName", defaultPlaceholder: "First name" },
@@ -177,15 +87,8 @@ export const LIB_ITEMS: LibraryItem[] = [
   { id: "c_website", tab: "contacts", kind: "contact", type: "TEXT", title: "Website", defaultLabel: "Website", key: "website", defaultPlaceholder: "https://..." },
 ];
 
-const CONTACT_BLOCK_KEYS: Array<LibraryItem extends any ? string : never> = [
-  "firstName",
-  "lastName",
-  "company",
-  "email",
-  "phone",
-  "jobTitle",
-  "website",
-];
+const CONTACT_BLOCK_KEYS = ["firstName", "lastName", "company", "email", "phone", "jobTitle", "website"] as const;
+const CONTACT_BLOCK_KEY_SET: ReadonlySet<string> = new Set(CONTACT_BLOCK_KEYS);
 
 export default function FieldLibrary(props: {
   items: LibraryItem[];
@@ -196,9 +99,7 @@ export default function FieldLibrary(props: {
   const visible = props.items.filter((x) => x.tab === tab);
 
   const contactBlockItems = React.useMemo(() => {
-    return props.items.filter(
-      (x) => x.tab === "contacts" && x.kind === "contact" && CONTACT_BLOCK_KEYS.includes(x.key)
-    );
+    return props.items.filter((x) => x.tab === "contacts" && x.kind === "contact" && CONTACT_BLOCK_KEY_SET.has(x.key));
   }, [props.items]);
 
   const canBatch = typeof props.onQuickAddMany === "function";
@@ -219,14 +120,14 @@ export default function FieldLibrary(props: {
 
       {tab === "contacts" ? (
         <div className="mt-3 flex items-center justify-between gap-2">
-          <div className="text-xs text-slate-600">
-            Add all common contact fields in one click.
-          </div>
+          <div className="text-xs text-slate-600">Add all common contact fields in one click.</div>
           <button
             type="button"
             className={[
               "h-9 rounded-lg px-3 text-sm font-semibold border",
-              canBatch ? "bg-white text-slate-700 border-slate-200 hover:bg-slate-50" : "bg-slate-50 text-slate-300 border-slate-200 cursor-not-allowed",
+              canBatch
+                ? "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+                : "bg-slate-50 text-slate-300 border-slate-200 cursor-not-allowed",
             ].join(" ")}
             disabled={!canBatch}
             onClick={() => {
@@ -246,9 +147,7 @@ export default function FieldLibrary(props: {
         ))}
       </div>
 
-      <div className="mt-3 text-xs text-slate-500">
-        Tip: drag onto the canvas or click to add. Contact fields are de-duped by key.
-      </div>
+      <div className="mt-3 text-xs text-slate-500">Tip: drag onto the canvas or click to add. Contact fields are de-duped by key.</div>
     </div>
   );
 }
