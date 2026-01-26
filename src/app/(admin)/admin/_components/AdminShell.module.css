@@ -14,6 +14,90 @@
   --brandSoft: rgba(225, 29, 46, 0.12);
 }
 
+/* =============================================================================
+   Builder Mode: Navigation ≠ Workspace
+   - Sidebar stays global but becomes quiet (icons-only + tooltip)
+============================================================================= */
+.rootBuilder .sidebar {
+  width: 72px;
+  opacity: 0.98;
+}
+
+.rootBuilder .sidebarHeader {
+  padding: 0;
+  justify-content: center;
+}
+
+.rootBuilder .brandRow {
+  width: 100%;
+  justify-content: center;
+}
+
+.rootBuilder .brandText {
+  display: none;
+}
+
+.rootBuilder .sidebarContent {
+  padding: 8px;
+}
+
+.rootBuilder .navGroupLabel {
+  display: none;
+}
+
+.rootBuilder .navText {
+  display: none;
+}
+
+.rootBuilder .navItem {
+  justify-content: center;
+  gap: 0;
+  padding: 10px 10px;
+  position: relative; /* tooltip anchor */
+}
+
+.rootBuilder .navIcon {
+  width: 22px;
+  height: 22px;
+  font-size: 16px;
+}
+
+/* Apple-clean tooltip (only meaningful when labels are hidden) */
+.rootBuilder .navItem[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--lr-border-subtle);
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lr-text);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 200;
+}
+
+.rootBuilder .navItem[data-tooltip]:hover::before {
+  content: "";
+  position: absolute;
+  left: calc(100% + 3px);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 8px;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  border-left: 1px solid var(--lr-border-subtle);
+  border-bottom: 1px solid var(--lr-border-subtle);
+  transform: translateY(-50%) rotate(45deg);
+  pointer-events: none;
+  z-index: 199;
+}
+
 .shell {
   display: flex;
   min-height: 100vh;
@@ -414,6 +498,35 @@
     transform: translateX(-102%);
     transition: transform 160ms ease;
     z-index: 30;
+    width: 280px;
+  }
+
+  /* On small screens, keep sidebar readable even in builder mode */
+  .rootBuilder .sidebar {
+    width: 280px;
+    opacity: 1;
+  }
+
+  .rootBuilder .brandText {
+    display: flex;
+  }
+
+  .rootBuilder .navGroupLabel {
+    display: block;
+  }
+
+  .rootBuilder .navText {
+    display: inline;
+  }
+
+  .rootBuilder .navItem {
+    justify-content: flex-start;
+    gap: 10px;
+  }
+
+  .rootBuilder .navItem[data-tooltip]:hover::after,
+  .rootBuilder .navItem[data-tooltip]:hover::before {
+    content: none;
   }
 
   .sidebarOpen {

@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Image from "next/image";
+import { usePathname } from "next/navigation";
 import styles from "./AdminShell.module.css";
 import SidebarNav from "./SidebarNav";
 import Topbar from "./Topbar";
@@ -19,7 +20,16 @@ type CurrentTenantDto = {
   };
 };
 
+function isBuilderPath(pathname: string | null): boolean {
+  const p = (pathname ?? "").toLowerCase();
+  if (!p.startsWith("/admin/forms/")) return false;
+  return p.endsWith("/builder") || p.includes("/builder/");
+}
+
 export default function AdminShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const builderMode = React.useMemo(() => isBuilderPath(pathname), [pathname]);
+
   const [hydrated, setHydrated] = React.useState(false);
   const [tenant, setTenant] = React.useState<CurrentTenantDto["tenant"] | null>(null);
 
@@ -61,7 +71,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
   const title = `${tenantName} - Admin`;
 
   return (
-    <div className={styles.root}>
+    <div className={[styles.root, builderMode ? styles.rootBuilder : ""].join(" ")}>
       <div className={styles.shell}>
         <aside className={[styles.sidebar, styles.sidebarOpen].join(" ")}>
           <div className={styles.sidebarHeader}>

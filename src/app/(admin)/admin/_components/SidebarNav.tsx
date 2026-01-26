@@ -37,10 +37,10 @@ export default function SidebarNav({ onNavigate }: { onNavigate?: () => void }) 
             key={it.href}
             href={it.href}
             onClick={() => onNavigate?.()}
-            className={[
-              styles.navItem,
-              active ? styles.navItemActive : "",
-            ].join(" ")}
+            className={[styles.navItem, active ? styles.navItemActive : ""].join(" ")}
+            aria-label={it.label}
+            title={it.label}
+            data-tooltip={it.label}
           >
             <span className={styles.navIcon} aria-hidden="true">
               {it.icon}
