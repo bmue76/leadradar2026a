@@ -1,4 +1,3 @@
-/* eslint-disable react-hooks/refs */
 "use client";
 
 import * as React from "react";
@@ -23,7 +22,7 @@ function TabButton(props: { active: boolean; onClick: () => void; children: Reac
 function DraggableItem(props: { item: LibraryItem; onQuickAdd: (it: LibraryItem) => void }) {
   const id = `lib:${props.item.id}`;
 
-  const d = useDraggable({
+  const { setNodeRef, listeners, attributes } = useDraggable({
     id,
     data: { kind: "library", item: props.item },
   });
@@ -31,9 +30,9 @@ function DraggableItem(props: { item: LibraryItem; onQuickAdd: (it: LibraryItem)
   return (
     <button
       type="button"
-      ref={d.setNodeRef}
-      {...d.listeners}
-      {...d.attributes}
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-left hover:bg-slate-50 active:bg-slate-100"
       onClick={() => props.onQuickAdd(props.item)}
       title="Drag onto canvas or click to add"
@@ -108,9 +107,33 @@ export const LIB_ITEMS: LibraryItem[] = [
   { id: "c_website", tab: "contacts", kind: "contact", type: "TEXT", title: "Website", defaultLabel: "Website", key: "website", defaultPlaceholder: "https://..." },
 ];
 
-export default function FieldLibrary(props: { items: LibraryItem[]; onQuickAdd: (it: LibraryItem) => void }) {
+const CONTACT_BLOCK_IDS = [
+  "c_firstName",
+  "c_lastName",
+  "c_company",
+  "c_email",
+  "c_phone",
+  "c_jobTitle",
+  "c_street",
+  "c_zip",
+  "c_city",
+  "c_country",
+] as const;
+
+export default function FieldLibrary(props: {
+  items: LibraryItem[];
+  onQuickAdd: (it: LibraryItem) => void;
+  onQuickAddMany?: (items: LibraryItem[]) => void;
+}) {
   const [tab, setTab] = React.useState<LibraryTab>("fields");
   const visible = props.items.filter((x) => x.tab === tab);
+
+  const contactBlock = React.useMemo(() => {
+    const set = new Set<string>(CONTACT_BLOCK_IDS as unknown as string[]);
+    return props.items.filter((x) => x.tab === "contacts" && x.kind === "contact" && set.has(x.id));
+  }, [props.items]);
+
+  const canAddContactBlock = tab === "contacts" && !!props.onQuickAddMany && contactBlock.length > 0;
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-3">
@@ -125,6 +148,28 @@ export default function FieldLibrary(props: { items: LibraryItem[]; onQuickAdd: 
           </TabButton>
         </div>
       </div>
+
+      {tab === "contacts" ? (
+        <div className="mt-3">
+          <button
+            type="button"
+            className={[
+              "w-full rounded-xl border px-3 py-2 text-left",
+              canAddContactBlock
+                ? "border-slate-200 bg-white hover:bg-slate-50"
+                : "border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed",
+            ].join(" ")}
+            onClick={canAddContactBlock ? () => props.onQuickAddMany?.(contactBlock) : undefined}
+            disabled={!canAddContactBlock}
+            title="Adds common contact fields in one go (de-duped by key)."
+          >
+            <div className="text-sm font-semibold">Add contact block</div>
+            <div className="mt-0.5 text-xs text-slate-500">
+              First name, Last name, Company, Email, Phone, Job title, Address, ZIP, City, Country
+            </div>
+          </button>
+        </div>
+      ) : null}
 
       <div className="mt-3 flex flex-col gap-2">
         {visible.map((it) => (
