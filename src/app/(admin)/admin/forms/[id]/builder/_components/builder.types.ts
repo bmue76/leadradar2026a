@@ -33,8 +33,16 @@ export type FormDto = {
   fields: FormFieldDto[];
 };
 
-export type AdminFetchOk<T> = { ok: true; data: T; traceId: string };
-export type AdminFetchErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
+// adminFetchJson result (actual shape in this repo)
+export type AdminFetchOk<T> = { ok: true; data: T; traceId?: string };
+export type AdminFetchErr = {
+  ok: false;
+  code: string;
+  message: string;
+  traceId?: string;
+  status?: number;
+  details?: unknown;
+};
 export type AdminFetchRes<T> = AdminFetchOk<T> | AdminFetchErr;
 
 export function isRecord(v: unknown): v is Record<string, unknown> {

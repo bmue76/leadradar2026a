@@ -75,18 +75,22 @@ function makeUniqueKey(t: FieldType, existingKeys: Set<string>): string {
     if (!existingKeys.has(k)) return k;
     i += 1;
   }
-  // fallback (should not happen)
   const k = `${base}_${Date.now()}`;
   return existingKeys.has(k) ? `${base}_${Date.now()}_${Math.floor(Math.random() * 1000)}` : k;
 }
 
 function cloneJson(v: unknown): unknown {
-  // config is JSON-ish; safe shallow clone by JSON stringify when possible
   try {
     return JSON.parse(JSON.stringify(v));
   } catch {
     return isRecord(v) ? { ...v } : v;
   }
+}
+
+function errToState(res: { message?: string; traceId?: string } | null | undefined): { status: "error"; message: string; traceId: string } {
+  const message = String(res?.message ?? "Unexpected error.");
+  const traceId = String(res?.traceId ?? "—");
+  return { status: "error", message, traceId };
 }
 
 export default function BuilderShell(props: { formId: string }) {
@@ -101,24 +105,22 @@ export default function BuilderShell(props: { formId: string }) {
 
   // Debounced reorder (avoid spamming)
   const reorderTimer = React.useRef<number | null>(null);
-  const queueReorder = React.useCallback(
-    (formId: string, orderedIds: string[]) => {
-      if (reorderTimer.current) window.clearTimeout(reorderTimer.current);
-      reorderTimer.current = window.setTimeout(() => {
-        void reorderFields(formId, orderedIds);
-      }, 500);
-    },
-    []
-  );
+  const queueReorder = React.useCallback((formId: string, orderedIds: string[]) => {
+    if (reorderTimer.current) window.clearTimeout(reorderTimer.current);
+    reorderTimer.current = window.setTimeout(() => {
+      void reorderFields(formId, orderedIds);
+    }, 500);
+  }, []);
 
   React.useEffect(() => {
     let alive = true;
+
     const run = async () => {
       const res = await loadForm(props.formId);
       if (!alive) return;
 
       if (!res.ok) {
-        setState({ status: "error", message: res.error.message, traceId: res.traceId });
+        setState(errToState(res));
         return;
       }
 
@@ -148,33 +150,28 @@ export default function BuilderShell(props: { formId: string }) {
     });
   }, []);
 
-  const doPatchField = React.useCallback(
-    async (formId: string, fieldId: string, patch: Partial<FormFieldDto>) => {
-      // optimistic already applied by caller
-      const res = await patchField(formId, fieldId, {
-        key: patch.key,
-        label: patch.label,
-        required: patch.required,
-        isActive: patch.isActive,
-        placeholder: patch.placeholder === undefined ? undefined : patch.placeholder,
-        helpText: patch.helpText === undefined ? undefined : patch.helpText,
-        config: patch.config === undefined ? undefined : patch.config,
-      });
+  const doPatchField = React.useCallback(async (formId: string, fieldId: string, patch: Partial<FormFieldDto>) => {
+    const res = await patchField(formId, fieldId, {
+      key: patch.key,
+      label: patch.label,
+      required: patch.required,
+      isActive: patch.isActive,
+      placeholder: patch.placeholder === undefined ? undefined : patch.placeholder,
+      helpText: patch.helpText === undefined ? undefined : patch.helpText,
+      config: patch.config === undefined ? undefined : patch.config,
+    });
 
-      if (!res.ok) {
-        // rollback by reloading (simple + correct for MVP)
-        const reload = await loadForm(formId);
-        if (reload.ok) {
-          const form = reload.data;
-          const ordered = [...(form.fields ?? [])].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
-          setState({ status: "ready", form, fields: ordered });
-        } else {
-          setState({ status: "error", message: res.error.message, traceId: res.traceId });
-        }
+    if (!res.ok) {
+      const reload = await loadForm(formId);
+      if (reload.ok) {
+        const form = reload.data;
+        const ordered = [...(form.fields ?? [])].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+        setState({ status: "ready", form, fields: ordered });
+      } else {
+        setState(errToState(res));
       }
-    },
-    []
-  );
+    }
+  }, []);
 
   const existingKeys = React.useMemo(() => {
     if (state.status !== "ready") return new Set<string>();
@@ -200,7 +197,7 @@ export default function BuilderShell(props: { formId: string }) {
       });
 
       if (!res.ok) {
-        setState({ status: "error", message: res.error.message, traceId: res.traceId });
+        setState(errToState(res));
         return;
       }
 
@@ -224,7 +221,7 @@ export default function BuilderShell(props: { formId: string }) {
 
       const r = await reorderFields(formId, nextIds);
       if (!r.ok) {
-        setState({ status: "error", message: r.error.message, traceId: r.traceId });
+        setState(errToState(r));
         return;
       }
     },
@@ -242,65 +239,70 @@ export default function BuilderShell(props: { formId: string }) {
     setOpenFieldId((cur) => (cur === fieldId ? null : fieldId));
   }, []);
 
-  const onDelete = React.useCallback(async (fieldId: string) => {
-    if (state.status !== "ready") return;
-    const formId = state.form.id;
+  const onDelete = React.useCallback(
+    async (fieldId: string) => {
+      if (state.status !== "ready") return;
+      const formId = state.form.id;
 
-    // optimistic remove
-    const nextFields = state.fields.filter((f) => f.id !== fieldId);
-    setState({ ...state, fields: nextFields });
-    if (openFieldId === fieldId) setOpenFieldId(null);
+      const nextFields = state.fields.filter((f) => f.id !== fieldId);
+      setState({ ...state, fields: nextFields });
+      if (openFieldId === fieldId) setOpenFieldId(null);
 
-    const del = await deleteField(formId, fieldId);
-    if (!del.ok) {
-      setState({ status: "error", message: del.error.message, traceId: del.traceId });
-      return;
-    }
+      const del = await deleteField(formId, fieldId);
+      if (!del.ok) {
+        setState(errToState(del));
+        return;
+      }
 
-    const ids = nextFields.map((f) => f.id);
-    const r = await reorderFields(formId, ids);
-    if (!r.ok) {
-      setState({ status: "error", message: r.error.message, traceId: r.traceId });
-      return;
-    }
-  }, [openFieldId, state]);
+      const ids = nextFields.map((f) => f.id);
+      const r = await reorderFields(formId, ids);
+      if (!r.ok) {
+        setState(errToState(r));
+        return;
+      }
+    },
+    [openFieldId, state]
+  );
 
-  const onDuplicate = React.useCallback(async (fieldId: string) => {
-    if (state.status !== "ready") return;
-    const formId = state.form.id;
-    const idx = state.fields.findIndex((f) => f.id === fieldId);
-    if (idx < 0) return;
+  const onDuplicate = React.useCallback(
+    async (fieldId: string) => {
+      if (state.status !== "ready") return;
+      const formId = state.form.id;
+      const idx = state.fields.findIndex((f) => f.id === fieldId);
+      if (idx < 0) return;
 
-    const src = state.fields[idx];
-    const k = makeUniqueKey(src.type, existingKeys);
+      const src = state.fields[idx];
+      const k = makeUniqueKey(src.type, existingKeys);
 
-    const res = await createField(formId, {
-      key: k,
-      label: `${src.label} (Copy)`,
-      type: src.type,
-      required: src.required,
-      isActive: src.isActive,
-      placeholder: src.placeholder,
-      helpText: src.helpText,
-      config: cloneJson(src.config),
-    });
+      const res = await createField(formId, {
+        key: k,
+        label: `${src.label} (Copy)`,
+        type: src.type,
+        required: src.required,
+        isActive: src.isActive,
+        placeholder: src.placeholder,
+        helpText: src.helpText,
+        config: cloneJson(src.config),
+      });
 
-    if (!res.ok) {
-      setState({ status: "error", message: res.error.message, traceId: res.traceId });
-      return;
-    }
+      if (!res.ok) {
+        setState(errToState(res));
+        return;
+      }
 
-    const created = res.data;
-    const nextFields = [...state.fields];
-    nextFields.splice(idx + 1, 0, created);
-    setState({ ...state, fields: nextFields });
+      const created = res.data;
+      const nextFields = [...state.fields];
+      nextFields.splice(idx + 1, 0, created);
+      setState({ ...state, fields: nextFields });
 
-    const r = await reorderFields(formId, nextFields.map((f) => f.id));
-    if (!r.ok) {
-      setState({ status: "error", message: r.error.message, traceId: r.traceId });
-      return;
-    }
-  }, [existingKeys, state]);
+      const r = await reorderFields(formId, nextFields.map((f) => f.id));
+      if (!r.ok) {
+        setState(errToState(r));
+        return;
+      }
+    },
+    [existingKeys, state]
+  );
 
   const onPatch = React.useCallback(
     (fieldId: string, patch: Partial<FormFieldDto>) => {
@@ -333,20 +335,15 @@ export default function BuilderShell(props: { formId: string }) {
       // Drag from library -> create field
       if (activeId.startsWith(LIB_PREFIX)) {
         const t = activeId.slice(LIB_PREFIX.length) as FieldType;
-
         if (!overId) return;
 
-        // drop on canvas container -> append
         if (overId === CANVAS_ID) {
           void addField(t, null);
           return;
         }
 
-        // drop on a field -> insert before that field
         const idx = state.fields.findIndex((f) => f.id === overId);
-        if (idx >= 0) {
-          void addField(t, idx);
-        }
+        if (idx >= 0) void addField(t, idx);
         return;
       }
 
