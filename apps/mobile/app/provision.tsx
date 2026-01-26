@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import { Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { CameraView, useCameraPermissions } from "expo-camera";
@@ -6,7 +6,6 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 
 import { apiFetch } from "../src/lib/api";
-import { getApiBaseUrl } from "../src/lib/env";
 import { clearApiKey, setApiKey } from "../src/lib/auth";
 import { parseProvisionToken } from "../src/lib/tokenParse";
 import { PoweredBy } from "../src/ui/PoweredBy";
@@ -25,9 +24,42 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
 
+function getStringProp(obj: Record<string, unknown>, key: string): string | undefined {
+  const v = obj[key];
+  return typeof v === "string" ? v : undefined;
+}
+
+function getNumberProp(obj: Record<string, unknown>, key: string): number | undefined {
+  const v = obj[key];
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+function getRecordProp(obj: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  const v = obj[key];
+  return isRecord(v) ? v : undefined;
+}
+
+function pickErrCode(obj: Record<string, unknown>): string | undefined {
+  // shape A: { ok:false, code, message, ... }
+  const direct = getStringProp(obj, "code");
+  if (direct) return direct;
+
+  // shape B: { ok:false, error:{ code, message, ... } }
+  const err = getRecordProp(obj, "error");
+  const nested = err ? getStringProp(err, "code") : undefined;
+  return nested;
+}
+
+function pickStatus(obj: Record<string, unknown>): number | undefined {
+  return getNumberProp(obj, "status");
+}
+
+function pickTraceId(obj: Record<string, unknown>): string {
+  return getStringProp(obj, "traceId") ?? "";
+}
+
 export default function Provision() {
   const params = useLocalSearchParams<{ token?: string }>();
-  const baseUrl = useMemo(() => getApiBaseUrl(), []);
   const [mode, setMode] = useState<Mode>("scan");
   const [tokenInput, setTokenInput] = useState<string>(params.token ?? "");
   const [busy, setBusy] = useState(false);
@@ -56,25 +88,30 @@ export default function Provision() {
         apiKey: null,
       });
 
-      if (!isRecord(res) || typeof res.ok !== "boolean") {
+      if (!isRecord(res)) {
         setErrorText("Invalid API response shape");
         return;
       }
 
-      if (res.ok !== true) {
-        const code = typeof (res as { code?: unknown }).code === "string" ? (res as { code: string }).code : undefined;
-        const status = typeof (res as { status?: unknown }).status === "number" ? (res as { status: number }).status : undefined;
-        const traceId = typeof (res as { traceId?: unknown }).traceId === "string" ? (res as { traceId: string }).traceId : "";
+      const okVal = res["ok"];
+      if (typeof okVal !== "boolean") {
+        setErrorText("Invalid API response shape");
+        return;
+      }
+
+      if (okVal !== true) {
+        const code = pickErrCode(res);
+        const status = pickStatus(res);
+        const traceId = pickTraceId(res);
         setErrorText(`${mapError(code, status)}${traceId ? ` (traceId: ${traceId})` : ""}`);
         return;
       }
 
-      const data = (res as { data?: unknown }).data;
-      const tokenValue =
-        isRecord(data) && typeof (data as { token?: unknown }).token === "string" ? String((data as { token: string }).token).trim() : "";
+      const data = getRecordProp(res, "data");
+      const tokenValue = data ? (getStringProp(data, "token") ?? "").trim() : "";
 
       if (!tokenValue) {
-        const traceId = typeof (res as { traceId?: unknown }).traceId === "string" ? (res as { traceId: string }).traceId : "";
+        const traceId = pickTraceId(res);
         setErrorText(`Aktivierung fehlgeschlagen: apiKey fehlt in Response.${traceId ? ` (traceId: ${traceId})` : ""}`);
         return;
       }
