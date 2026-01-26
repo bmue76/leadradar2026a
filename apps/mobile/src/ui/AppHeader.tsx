@@ -1,76 +1,83 @@
-import React, { useMemo } from "react";
-import { StyleSheet, Text, View, useWindowDimensions } from "react-native";
-import { Image } from "expo-image";
-
-import { useBranding } from "../features/branding/useBranding";
+/* eslint-disable jsx-a11y/alt-text */
+import React from "react";
+import { Image, StyleSheet, Text, View } from "react-native";
 import { UI } from "./tokens";
 
-type Props = { title: string };
+export type AppHeaderProps = {
+  title: string;
+  tenantName?: string | null;
+  logoDataUrl?: string | null; // data-url (base64) or normal URL
+};
 
-function clamp(n: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, n));
-}
-
-export function AppHeader({ title }: Props) {
-  const { branding } = useBranding();
-  const { width: screenW } = useWindowDimensions();
-
-  const tenantName = branding.tenantName ?? "—";
-  const logoUri = branding.logoDataUrl;
-
-  const logoW = useMemo(() => {
-    const contentW = Math.max(0, screenW - UI.padX * 2);
-    const raw = Math.round(contentW * UI.logoWidthRatio);
-    const max = Math.min(UI.logoWidthMax, contentW);
-    return clamp(raw, UI.logoWidthMin, max);
-  }, [screenW]);
-
+function AppHeaderImpl({ title, tenantName = null, logoDataUrl = null }: AppHeaderProps) {
   return (
-    <View style={styles.wrap}>
-      {logoUri ? (
-        <View style={styles.logoRow}>
-          <Image
-            source={{ uri: logoUri }}
-            style={[styles.logo, { width: logoW, height: UI.logoHeight }]}
-            contentFit="contain"
-            contentPosition="left center"
-            accessible
-            accessibilityLabel="Tenant Logo"
-          />
+    <View style={styles.root}>
+      <View style={styles.topRow}>
+        <View style={styles.logoWrap}>
+          {logoDataUrl ? (
+            <Image source={{ uri: logoDataUrl }} style={styles.logo} resizeMode="contain" accessibilityLabel="" />
+          ) : (
+            <View style={styles.logoPlaceholder} />
+          )}
         </View>
-      ) : null}
 
-      <Text style={styles.tenantName}>{tenantName}</Text>
-      <Text style={styles.title}>{title}</Text>
+        <View style={styles.rightCol}>
+          {tenantName ? <Text style={styles.tenantName}>{tenantName}</Text> : null}
+          <Text style={styles.title}>{title}</Text>
+        </View>
+      </View>
     </View>
   );
 }
 
+export const AppHeader = AppHeaderImpl;
+export default AppHeaderImpl;
+
 const styles = StyleSheet.create({
-  wrap: {
-    paddingTop: UI.padTop,
-    paddingBottom: 4,
+  root: {
+    backgroundColor: UI.bg,
+    borderBottomWidth: 1,
+    borderBottomColor: UI.border,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 10,
   },
-  // bleibt im normalen Content-Padding (kein marginLeft -UI.padX)
-  logoRow: {
+  topRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  logoWrap: {
+    width: 120,
+    height: 34,
     alignItems: "flex-start",
     justifyContent: "center",
-    minHeight: UI.logoHeight + 8,
   },
   logo: {
-    // width/height kommen dynamisch rein
+    width: 120,
+    height: 34,
+  },
+  logoPlaceholder: {
+    width: 56,
+    height: 20,
+    borderRadius: 6,
+    backgroundColor: "rgba(17,24,39,0.08)",
+  },
+  rightCol: {
+    flex: 1,
+    minHeight: 34,
+    justifyContent: "center",
   },
   tenantName: {
-    marginTop: 6,
-    fontSize: UI.tenantFontSize,
+    fontSize: 12,
     fontWeight: "700",
-    color: UI.text,
-    opacity: 0.85,
+    color: "rgba(17,24,39,0.55)",
+    marginBottom: 2,
   },
   title: {
-    marginTop: UI.tenantToTitleGap,
-    fontSize: UI.titleFontSize,
-    fontWeight: UI.titleWeight,
-    color: UI.text,
+    fontSize: 20,
+    fontWeight: "800",
+    color: "rgba(17,24,39,0.95)",
+    letterSpacing: -0.2,
   },
 });

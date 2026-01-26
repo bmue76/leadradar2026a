@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { jsonError, jsonOk } from "@/lib/api";
-import { isHttpError, validateBody, httpError } from "@/lib/http";
+import { isHttpError, validateBody } from "@/lib/http";
 import { requireAdminAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
@@ -22,7 +22,6 @@ export async function PATCH(req: Request) {
     const { tenantId } = await requireAdminAuth(req);
     const body = await validateBody(req, PatchBrandingSchema);
 
-    // No-op allowed (keeps endpoint flexible)
     const data: { accentColor?: string | null } = {};
     if (Object.prototype.hasOwnProperty.call(body, "accentColor")) {
       data.accentColor = body.accentColor ?? null;
@@ -37,7 +36,6 @@ export async function PATCH(req: Request) {
     return jsonOk(req, { tenant: updated });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
-    // Prisma: record not found -> leak-safe 404
     if (e instanceof Error && e.message.toLowerCase().includes("record to update not found")) {
       return jsonError(req, 404, "NOT_FOUND", "Not found.");
     }
