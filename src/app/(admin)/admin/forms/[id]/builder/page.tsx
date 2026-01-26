@@ -1,5 +1,8 @@
 import BuilderShell from "./_components/BuilderShell";
 
-export default function BuilderPage({ params }: { params: { id: string } }) {
-  return <BuilderShell formId={params.id} />;
+type RouteCtx = { params: Promise<{ id: string }> };
+
+export default async function BuilderPage(ctx: RouteCtx) {
+  const { id } = await ctx.params;
+  return <BuilderShell formId={id} />;
 }
