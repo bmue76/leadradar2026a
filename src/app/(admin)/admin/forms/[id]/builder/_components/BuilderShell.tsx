@@ -361,7 +361,7 @@ export default function BuilderShell({ formId }: { formId: string }) {
     setActiveDrag({ kind: "none" });
   }, []);
 
-  const onDragCancel = React.useCallback((_ev: DragCancelEvent) => {
+  const onDragCancel = React.useCallback(() => {
     setActiveDrag({ kind: "none" });
   }, []);
 
