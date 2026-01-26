@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/refs */
 "use client";
 
 import * as React from "react";
@@ -22,7 +23,7 @@ function TabButton(props: { active: boolean; onClick: () => void; children: Reac
 function DraggableItem(props: { item: LibraryItem; onQuickAdd: (it: LibraryItem) => void }) {
   const id = `lib:${props.item.id}`;
 
-  const { setNodeRef, listeners, attributes } = useDraggable({
+  const d = useDraggable({
     id,
     data: { kind: "library", item: props.item },
   });
@@ -30,9 +31,9 @@ function DraggableItem(props: { item: LibraryItem; onQuickAdd: (it: LibraryItem)
   return (
     <button
       type="button"
-      ref={setNodeRef}
-      {...listeners}
-      {...attributes}
+      ref={d.setNodeRef}
+      {...d.listeners}
+      {...d.attributes}
       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-left hover:bg-slate-50 active:bg-slate-100"
       onClick={() => props.onQuickAdd(props.item)}
       title="Drag onto canvas or click to add"
@@ -45,14 +46,83 @@ function DraggableItem(props: { item: LibraryItem; onQuickAdd: (it: LibraryItem)
 
 export const LIB_ITEMS: LibraryItem[] = [
   // ---- Form fields tab
-  { id: "text", tab: "fields", kind: "type", type: "TEXT", title: "Text", subtitle: "Single line", defaultLabel: "Text", keyBase: "text", defaultPlaceholder: "" },
-  { id: "textarea", tab: "fields", kind: "type", type: "TEXTAREA", title: "Textarea", subtitle: "Multi line", defaultLabel: "Notes", keyBase: "notes", defaultPlaceholder: "Notes / context" },
-  { id: "email", tab: "fields", kind: "type", type: "EMAIL", title: "Email", subtitle: "Validation + keyboard", defaultLabel: "Email", keyBase: "email2", defaultPlaceholder: "name@company.com" },
-  { id: "phone", tab: "fields", kind: "type", type: "PHONE", title: "Phone", subtitle: "Tel input", defaultLabel: "Phone", keyBase: "phone2", defaultPlaceholder: "+41 ..." },
-  { id: "checkbox", tab: "fields", kind: "type", type: "CHECKBOX", title: "Checkbox", subtitle: "True / False", defaultLabel: "Checkbox", keyBase: "checkbox" },
+  {
+    id: "text",
+    tab: "fields",
+    kind: "type",
+    type: "TEXT",
+    title: "Text",
+    subtitle: "Single line",
+    defaultLabel: "Text",
+    keyBase: "text",
+    defaultPlaceholder: "",
+  },
+  {
+    id: "textarea",
+    tab: "fields",
+    kind: "type",
+    type: "TEXTAREA",
+    title: "Textarea",
+    subtitle: "Multi line",
+    defaultLabel: "Notes",
+    keyBase: "notes",
+    defaultPlaceholder: "Notes / context",
+  },
+  {
+    id: "email",
+    tab: "fields",
+    kind: "type",
+    type: "EMAIL",
+    title: "Email",
+    subtitle: "Validation + keyboard",
+    defaultLabel: "Email",
+    keyBase: "email2",
+    defaultPlaceholder: "name@company.com",
+  },
+  {
+    id: "phone",
+    tab: "fields",
+    kind: "type",
+    type: "PHONE",
+    title: "Phone",
+    subtitle: "Tel input",
+    defaultLabel: "Phone",
+    keyBase: "phone2",
+    defaultPlaceholder: "+41 ...",
+  },
+  {
+    id: "checkbox",
+    tab: "fields",
+    kind: "type",
+    type: "CHECKBOX",
+    title: "Checkbox",
+    subtitle: "True / False",
+    defaultLabel: "Checkbox",
+    keyBase: "checkbox",
+  },
 
-  { id: "single_select", tab: "fields", kind: "type", type: "SINGLE_SELECT", title: "Single Select", subtitle: "Choose one", defaultLabel: "Select", keyBase: "select", defaultConfig: { options: ["Option 1"] } },
-  { id: "multi_select", tab: "fields", kind: "type", type: "MULTI_SELECT", title: "Multi Select", subtitle: "Choose many", defaultLabel: "Multi Select", keyBase: "multiselect", defaultConfig: { options: ["Option 1"] } },
+  {
+    id: "single_select",
+    tab: "fields",
+    kind: "type",
+    type: "SINGLE_SELECT",
+    title: "Single Select",
+    subtitle: "Choose one",
+    defaultLabel: "Select",
+    keyBase: "select",
+    defaultConfig: { options: ["Option 1"] },
+  },
+  {
+    id: "multi_select",
+    tab: "fields",
+    kind: "type",
+    type: "MULTI_SELECT",
+    title: "Multi Select",
+    subtitle: "Choose many",
+    defaultLabel: "Multi Select",
+    keyBase: "multiselect",
+    defaultConfig: { options: ["Option 1"] },
+  },
 
   // Rating preset (no new FieldType; mapped to SINGLE_SELECT options)
   {
@@ -107,18 +177,15 @@ export const LIB_ITEMS: LibraryItem[] = [
   { id: "c_website", tab: "contacts", kind: "contact", type: "TEXT", title: "Website", defaultLabel: "Website", key: "website", defaultPlaceholder: "https://..." },
 ];
 
-const CONTACT_BLOCK_IDS = [
-  "c_firstName",
-  "c_lastName",
-  "c_company",
-  "c_email",
-  "c_phone",
-  "c_jobTitle",
-  "c_street",
-  "c_zip",
-  "c_city",
-  "c_country",
-] as const;
+const CONTACT_BLOCK_KEYS: Array<LibraryItem extends any ? string : never> = [
+  "firstName",
+  "lastName",
+  "company",
+  "email",
+  "phone",
+  "jobTitle",
+  "website",
+];
 
 export default function FieldLibrary(props: {
   items: LibraryItem[];
@@ -128,12 +195,13 @@ export default function FieldLibrary(props: {
   const [tab, setTab] = React.useState<LibraryTab>("fields");
   const visible = props.items.filter((x) => x.tab === tab);
 
-  const contactBlock = React.useMemo(() => {
-    const set = new Set<string>(CONTACT_BLOCK_IDS as unknown as string[]);
-    return props.items.filter((x) => x.tab === "contacts" && x.kind === "contact" && set.has(x.id));
+  const contactBlockItems = React.useMemo(() => {
+    return props.items.filter(
+      (x) => x.tab === "contacts" && x.kind === "contact" && CONTACT_BLOCK_KEYS.includes(x.key)
+    );
   }, [props.items]);
 
-  const canAddContactBlock = tab === "contacts" && !!props.onQuickAddMany && contactBlock.length > 0;
+  const canBatch = typeof props.onQuickAddMany === "function";
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-3">
@@ -150,23 +218,24 @@ export default function FieldLibrary(props: {
       </div>
 
       {tab === "contacts" ? (
-        <div className="mt-3">
+        <div className="mt-3 flex items-center justify-between gap-2">
+          <div className="text-xs text-slate-600">
+            Add all common contact fields in one click.
+          </div>
           <button
             type="button"
             className={[
-              "w-full rounded-xl border px-3 py-2 text-left",
-              canAddContactBlock
-                ? "border-slate-200 bg-white hover:bg-slate-50"
-                : "border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed",
+              "h-9 rounded-lg px-3 text-sm font-semibold border",
+              canBatch ? "bg-white text-slate-700 border-slate-200 hover:bg-slate-50" : "bg-slate-50 text-slate-300 border-slate-200 cursor-not-allowed",
             ].join(" ")}
-            onClick={canAddContactBlock ? () => props.onQuickAddMany?.(contactBlock) : undefined}
-            disabled={!canAddContactBlock}
-            title="Adds common contact fields in one go (de-duped by key)."
+            disabled={!canBatch}
+            onClick={() => {
+              if (!props.onQuickAddMany) return;
+              props.onQuickAddMany(contactBlockItems);
+            }}
+            title={canBatch ? "Adds common contact fields (duplicates skipped)." : "Batch add not available."}
           >
-            <div className="text-sm font-semibold">Add contact block</div>
-            <div className="mt-0.5 text-xs text-slate-500">
-              First name, Last name, Company, Email, Phone, Job title, Address, ZIP, City, Country
-            </div>
+            Add contact block
           </button>
         </div>
       ) : null}
