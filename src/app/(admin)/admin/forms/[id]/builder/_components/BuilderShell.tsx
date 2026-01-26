@@ -1,9 +1,7 @@
 "use client";
 
-/* eslint-disable react-hooks/refs */
-/* eslint-disable react-hooks/set-state-in-effect */
-
 import * as React from "react";
+import type { DragCancelEvent, DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import {
   DndContext,
   DragOverlay,
@@ -15,13 +13,22 @@ import {
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 
-import type { BuilderField, LibraryItem, LibraryTab } from "../builder.types";
-import { CONTACT_KEYS, isSystemField } from "../builder.types";
-import { loadForm, createField, deleteField, patchField, reorderFields, patchFormBasics, patchFormStatus } from "../builder.persist";
+import type { BuilderField, LibraryItem } from "../builder.types";
+import { isSystemField } from "../builder.types";
+import {
+  loadForm,
+  createField,
+  deleteField,
+  patchField,
+  reorderFields,
+  patchFormBasics,
+  patchFormStatus,
+} from "../builder.persist";
 
 import FieldLibrary, { LIB_ITEMS } from "./FieldLibrary";
 import Canvas from "./Canvas";
 import FormSettingsPanel from "./FormSettingsPanel";
+import type { UniqueIdentifier } from "@dnd-kit/core";
 
 type LoadState =
   | { status: "loading" }
@@ -56,6 +63,10 @@ function arrayMove<T>(arr: T[], from: number, to: number): T[] {
   copy.splice(to, 0, it);
   return copy;
 }
+
+type ActiveData =
+  | { kind: "library"; item: LibraryItem }
+  | { kind: "field"; fieldId: string };
 
 type ActiveDrag =
   | { kind: "none" }
@@ -150,25 +161,21 @@ export default function BuilderShell({ formId }: { formId: string }) {
 
       const used = new Set(fields.map((f) => f.key));
 
-      let keyBase = "field";
-      let label = "Field";
-      let type = item.kind === "contact" ? item.type : item.type;
+      const keyBase = item.kind === "contact" ? item.key : item.keyBase;
+      const label = item.defaultLabel;
+      const type = item.type;
 
       let placeholder: string | null | undefined = undefined;
       let helpText: string | null | undefined = undefined;
       let config: unknown | null | undefined = undefined;
 
       if (item.kind === "contact") {
-        keyBase = item.key;
-        label = item.defaultLabel;
         placeholder = item.defaultPlaceholder ?? null;
         helpText = item.defaultHelpText ?? null;
       } else {
-        keyBase = item.keyBase;
-        label = item.defaultLabel;
         placeholder = item.defaultPlaceholder ?? null;
         helpText = item.defaultHelpText ?? null;
-        if (item.defaultConfig !== undefined) config = item.defaultConfig;
+        if (item.defaultConfig !== undefined) config = item.defaultConfig as unknown;
       }
 
       // ensure unique key
@@ -334,40 +341,43 @@ export default function BuilderShell({ formId }: { formId: string }) {
     [formId, showFlash]
   );
 
-  const onDragStart = React.useCallback((ev: any) => {
-    const d = ev?.active?.data?.current as unknown;
-    if (d && typeof d === "object" && d !== null && "kind" in d) {
-      const kind = (d as any).kind as string;
-      if (kind === "library") {
-        setActiveDrag({ kind: "library", item: (d as any).item as LibraryItem });
-        return;
-      }
-      if (kind === "field") {
-        setActiveDrag({ kind: "field", fieldId: String((d as any).fieldId || "") });
-        return;
-      }
+  const onDragStart = React.useCallback((ev: DragStartEvent) => {
+    const data = ev.active.data.current as ActiveData | undefined;
+    if (!data) {
+      setActiveDrag({ kind: "none" });
+      return;
     }
+
+    if (data.kind === "library") {
+      setActiveDrag({ kind: "library", item: data.item });
+      return;
+    }
+
+    if (data.kind === "field") {
+      setActiveDrag({ kind: "field", fieldId: data.fieldId });
+      return;
+    }
+
     setActiveDrag({ kind: "none" });
   }, []);
 
-  const onDragCancel = React.useCallback(() => {
+  const onDragCancel = React.useCallback((_ev: DragCancelEvent) => {
     setActiveDrag({ kind: "none" });
   }, []);
+
+  function idToString(id: UniqueIdentifier | null | undefined): string {
+    if (id === null || id === undefined) return "";
+    return String(id);
+  }
 
   const onDragEnd = React.useCallback(
-    async (ev: any) => {
-      const activeId = String(ev?.active?.id ?? "");
-      const overId = ev?.over?.id ? String(ev.over.id) : "";
+    async (ev: DragEndEvent) => {
+      const activeId = idToString(ev.active?.id);
+      const overId = idToString(ev.over?.id);
 
       // add from library
-      const d = ev?.active?.data?.current as unknown;
-      if (d && typeof d === "object" && d !== null && (d as any).kind === "library") {
-        const item = (d as any).item as LibraryItem;
-        if (!item) {
-          setActiveDrag({ kind: "none" });
-          return;
-        }
-
+      const data = ev.active.data.current as ActiveData | undefined;
+      if (data?.kind === "library") {
         if (!overId) {
           setActiveDrag({ kind: "none" });
           return;
@@ -379,7 +389,7 @@ export default function BuilderShell({ formId }: { formId: string }) {
           if (idx >= 0) insertIndex = idx;
         }
 
-        await addFromLibrary(item, insertIndex);
+        await addFromLibrary(data.item, insertIndex);
         setActiveDrag({ kind: "none" });
         return;
       }

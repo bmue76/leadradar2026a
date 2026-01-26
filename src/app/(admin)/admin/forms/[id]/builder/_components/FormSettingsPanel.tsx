@@ -1,7 +1,5 @@
 "use client";
 
-/* eslint-disable react-hooks/set-state-in-effect */
-
 import * as React from "react";
 import type { FormStatus } from "../builder.types";
 import { isRecord } from "../builder.types";

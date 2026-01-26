@@ -1,7 +1,5 @@
 "use client";
 
-/* eslint-disable react-hooks/refs */
-
 import * as React from "react";
 import { useDraggable } from "@dnd-kit/core";
 import type { LibraryItem, LibraryTab } from "../builder.types";
@@ -91,6 +89,7 @@ export const LIB_ITEMS: LibraryItem[] = [
     subtitle: "GDPR / marketing opt-in",
     defaultLabel: "Consent",
     keyBase: "consent",
+    defaultConfig: null,
     defaultHelpText: "I agree to be contacted.",
   },
 
@@ -110,7 +109,6 @@ export const LIB_ITEMS: LibraryItem[] = [
 
 export default function FieldLibrary(props: { items: LibraryItem[]; onQuickAdd: (it: LibraryItem) => void }) {
   const [tab, setTab] = React.useState<LibraryTab>("fields");
-
   const visible = props.items.filter((x) => x.tab === tab);
 
   return (
