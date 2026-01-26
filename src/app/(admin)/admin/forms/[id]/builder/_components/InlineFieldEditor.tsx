@@ -1,150 +1,168 @@
 "use client";
 
 import * as React from "react";
-import type { FieldType } from "@prisma/client";
-import { getOptionsFromConfig, setOptionsInConfig } from "./builder.types";
+import type { BuilderField, FieldType } from "../builder.types";
+import { getOptionsFromConfig, setOptionsInConfig } from "../builder.types";
 
-type Patch = Partial<{
-  label: string;
-  required: boolean;
-  isActive: boolean;
-  placeholder: string | null;
-  helpText: string | null;
-  config: unknown;
-}>;
+function linesToOptions(s: string): string[] {
+  return s
+    .split(/\r?\n/g)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
 
-function isSelectType(t: FieldType) {
-  return t === "SINGLE_SELECT" || t === "MULTI_SELECT";
+function optionsToLines(opts: string[]): string {
+  return opts.join("\n");
 }
 
 export default function InlineFieldEditor(props: {
-  type: FieldType;
-  label: string;
-  required: boolean;
-  isActive: boolean;
-  placeholder: string | null;
-  helpText: string | null;
-  config: unknown;
-  onPatch: (patch: Patch) => void;
-  disabled?: boolean;
+  field: BuilderField;
+  isSystem: boolean;
+  onPatch: (
+    patch: Partial<{
+      key: string;
+      label: string;
+      type: FieldType;
+      required: boolean;
+      isActive: boolean;
+      placeholder: string | null;
+      helpText: string | null;
+      config: unknown | null;
+    }>
+  ) => void;
 }) {
-  // avoid setState-in-effect lint: component remounts via key=field.id in parent
-  const [label, setLabel] = React.useState(props.label ?? "");
-  const [placeholder, setPlaceholder] = React.useState(props.placeholder ?? "");
-  const [helpText, setHelpText] = React.useState(props.helpText ?? "");
+  const f = props.field;
 
-  const options = React.useMemo(() => getOptionsFromConfig(props.config), [props.config]);
-  const [optionsText, setOptionsText] = React.useState(options.join("\n"));
+  const [label, setLabel] = React.useState(f.label);
+  const [key, setKey] = React.useState(f.key);
+  const [placeholder, setPlaceholder] = React.useState(f.placeholder ?? "");
+  const [helpText, setHelpText] = React.useState(f.helpText ?? "");
+  const [required, setRequired] = React.useState(Boolean(f.required));
+  const [isActive, setIsActive] = React.useState(Boolean(f.isActive));
 
-  const disabled = Boolean(props.disabled);
+  const isSelect = f.type === "SINGLE_SELECT" || f.type === "MULTI_SELECT";
+  const [optionsText, setOptionsText] = React.useState(() => optionsToLines(getOptionsFromConfig(f.config)));
 
-  const commitLabel = () => {
-    const v = label.trim();
-    if (v && v !== props.label) props.onPatch({ label: v });
-  };
-
-  const commitPlaceholder = () => {
-    const v = placeholder.trim();
-    const next = v ? v : null;
-    if (next !== props.placeholder) props.onPatch({ placeholder: next });
-  };
-
-  const commitHelpText = () => {
-    const v = helpText.trim();
-    const next = v ? v : null;
-    if (next !== props.helpText) props.onPatch({ helpText: next });
-  };
-
-  const commitOptions = () => {
-    if (!isSelectType(props.type)) return;
-    const next = optionsText
-      .split(/\r?\n/g)
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    // backend requires at least 1 option for SELECT types
-    const safe = next.length > 0 ? next : ["Option 1"];
-    const current = getOptionsFromConfig(props.config);
-    const same =
-      current.length === safe.length && current.every((v, i) => v === safe[i]);
-
-    if (!same) {
-      props.onPatch({ config: setOptionsInConfig(props.config, safe) });
-    }
-  };
+  React.useEffect(() => {
+    setLabel(f.label);
+    setKey(f.key);
+    setPlaceholder(f.placeholder ?? "");
+    setHelpText(f.helpText ?? "");
+    setRequired(Boolean(f.required));
+    setIsActive(Boolean(f.isActive));
+    setOptionsText(optionsToLines(getOptionsFromConfig(f.config)));
+  }, [f.id, f.label, f.key, f.placeholder, f.helpText, f.required, f.isActive, f.type, f.config]);
 
   return (
-    <div className="mt-2 rounded-xl border border-slate-200 bg-white p-3">
-      <div className="grid grid-cols-1 gap-3">
-        <label className="grid gap-1">
-          <span className="text-xs font-semibold text-slate-600">Label</span>
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <div className="text-xs font-semibold text-slate-600">Label</div>
           <input
-            className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm"
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
-            onBlur={commitLabel}
-            disabled={disabled}
+            onBlur={() => {
+              if (props.isSystem) return;
+              const v = label.trim();
+              if (v && v !== f.label) props.onPatch({ label: v });
+            }}
+            disabled={props.isSystem}
           />
-        </label>
-
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              checked={props.required}
-              onChange={(e) => props.onPatch({ required: e.target.checked })}
-              disabled={disabled}
-            />
-            Required
-          </label>
-
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              checked={props.isActive}
-              onChange={(e) => props.onPatch({ isActive: e.target.checked })}
-              disabled={disabled}
-            />
-            Active
-          </label>
         </div>
 
-        <label className="grid gap-1">
-          <span className="text-xs font-semibold text-slate-600">Placeholder</span>
+        <div>
+          <div className="text-xs font-semibold text-slate-600">Key</div>
           <input
-            className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm"
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-mono"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            onBlur={() => {
+              if (props.isSystem) return;
+              const v = key.trim();
+              if (v && v !== f.key) props.onPatch({ key: v });
+            }}
+            disabled={props.isSystem}
+          />
+          {props.isSystem ? <div className="mt-1 text-[11px] text-slate-500">System fields are locked.</div> : null}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={required}
+            onChange={(e) => {
+              setRequired(e.target.checked);
+              props.onPatch({ required: e.target.checked });
+            }}
+            disabled={props.isSystem}
+          />
+          Required
+        </label>
+
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={isActive}
+            onChange={(e) => {
+              setIsActive(e.target.checked);
+              props.onPatch({ isActive: e.target.checked });
+            }}
+          />
+          Active
+        </label>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <div className="text-xs font-semibold text-slate-600">Placeholder</div>
+          <input
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
             value={placeholder}
             onChange={(e) => setPlaceholder(e.target.value)}
-            onBlur={commitPlaceholder}
-            disabled={disabled}
+            onBlur={() => {
+              const v = placeholder.trim();
+              const next = v.length ? v : null;
+              if ((f.placeholder ?? null) !== next) props.onPatch({ placeholder: next });
+            }}
           />
-        </label>
+        </div>
 
-        <label className="grid gap-1">
-          <span className="text-xs font-semibold text-slate-600">Help text</span>
+        <div>
+          <div className="text-xs font-semibold text-slate-600">Help text</div>
           <input
-            className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm"
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
             value={helpText}
             onChange={(e) => setHelpText(e.target.value)}
-            onBlur={commitHelpText}
-            disabled={disabled}
+            onBlur={() => {
+              const v = helpText.trim();
+              const next = v.length ? v : null;
+              if ((f.helpText ?? null) !== next) props.onPatch({ helpText: next });
+            }}
           />
-        </label>
-
-        {isSelectType(props.type) ? (
-          <label className="grid gap-1">
-            <span className="text-xs font-semibold text-slate-600">Options (one per line)</span>
-            <textarea
-              className="min-h-[96px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
-              value={optionsText}
-              onChange={(e) => setOptionsText(e.target.value)}
-              onBlur={commitOptions}
-              disabled={disabled}
-            />
-            <div className="text-xs text-slate-500">At least one option is required.</div>
-          </label>
-        ) : null}
+        </div>
       </div>
+
+      {isSelect ? (
+        <div>
+          <div className="text-xs font-semibold text-slate-600">Options (one per line)</div>
+          <textarea
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+            value={optionsText}
+            onChange={(e) => setOptionsText(e.target.value)}
+            rows={5}
+            onBlur={() => {
+              const opts = linesToOptions(optionsText);
+              if (opts.length < 1) return; // API enforces >= 1
+              const nextConfig = setOptionsInConfig(f.config, opts);
+              props.onPatch({ config: nextConfig });
+            }}
+          />
+          <div className="mt-1 text-[11px] text-slate-500">Minimum 1 option.</div>
+        </div>
+      ) : null}
     </div>
   );
 }

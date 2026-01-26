@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { adminFetchJson } from "../_lib/adminFetch";
 import type { FormListItem, FormStatus } from "./forms.types";
 import { formatFormStatus, formatUpdatedAt, normalizeFormsListPayload } from "./forms.types";
 import { CreateFormModal } from "./CreateFormModal";
@@ -9,7 +10,6 @@ import { Button, ButtonLink } from "../_ui/Button";
 import { Chip } from "../_ui/Chip";
 import { EmptyState } from "../_ui/EmptyState";
 import { Table, TableBody, TableCell, TableHead, TableHeadCell, TableHeadRow, TableRow } from "../_ui/Table";
-import { adminFetchJson } from "../_lib/adminFetch";
 
 type StatusFilter = "ALL" | FormStatus;
 
@@ -96,12 +96,11 @@ export function FormsListClient() {
   }, [fetchForms]);
 
   const onCreated = React.useCallback(
-    (formId: string, _opts?: { openBuilder?: boolean }) => {
+    (formId: string) => {
       setFlash("Form created.");
       void fetchForms();
       window.setTimeout(() => setFlash(null), 2200);
 
-      // Builder-first UX: new forms open directly in Builder mode.
       router.push(`/admin/forms/${formId}/builder`);
     },
     [fetchForms, router]

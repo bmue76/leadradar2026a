@@ -1,151 +1,151 @@
 "use client";
 
+/* eslint-disable react-hooks/refs */
+
 import * as React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { FormFieldDto } from "./builder.types";
-import { isSystemField } from "./builder.types";
+import type { BuilderField, FieldType } from "../builder.types";
+import { isSystemField } from "../builder.types";
 import InlineFieldEditor from "./InlineFieldEditor";
 
-function useDndKitRef<T extends HTMLElement>(setNodeRef: (el: T | null) => void) {
-  const ref = React.useRef<T | null>(null);
-  React.useEffect(() => {
-    setNodeRef(ref.current);
-    return () => setNodeRef(null);
-  }, [setNodeRef]);
-  return ref;
+function typeLabel(t: FieldType): string {
+  switch (t) {
+    case "TEXT":
+      return "Text";
+    case "TEXTAREA":
+      return "Textarea";
+    case "EMAIL":
+      return "Email";
+    case "PHONE":
+      return "Phone";
+    case "CHECKBOX":
+      return "Checkbox";
+    case "SINGLE_SELECT":
+      return "Single select";
+    case "MULTI_SELECT":
+      return "Multi select";
+    default:
+      return t;
+  }
+}
+
+function IconGrip() {
+  return <span aria-hidden="true" className="text-slate-400">⋮⋮</span>;
 }
 
 export default function FieldCard(props: {
-  field: FormFieldDto;
+  field: BuilderField;
   isOpen: boolean;
-
   onToggleOpen: () => void;
-  onDelete: () => void;
   onDuplicate: () => void;
-  onPatch: (patch: Partial<FormFieldDto>) => void;
+  onDelete: () => void;
+  onPatch: (
+    patch: Partial<{
+      key: string;
+      label: string;
+      type: FieldType;
+      required: boolean;
+      isActive: boolean;
+      placeholder: string | null;
+      helpText: string | null;
+      config: unknown | null;
+    }>
+  ) => void;
 }) {
-  const f = props.field;
-  const system = isSystemField(f);
-
-  const s = useSortable({ id: f.id });
-  const ref = useDndKitRef<HTMLDivElement>(s.setNodeRef);
+  const s = useSortable({
+    id: props.field.id,
+    data: { kind: "field", fieldId: props.field.id },
+  });
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(s.transform),
     transition: s.transition,
-    opacity: s.isDragging ? 0.6 : 1,
   };
 
-  return (
-    <div ref={ref} style={style} className="group rounded-2xl border border-slate-200 bg-white p-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <div className="truncate text-sm font-semibold text-slate-900">
-              {f.label}
-            </div>
+  const system = isSystemField(props.field);
 
+  return (
+    <div ref={s.setNodeRef} style={style} className={["rounded-xl border border-slate-200 bg-white"].join(" ")}>
+      <div className="flex items-start gap-2 px-3 py-2">
+        <div
+          className="mt-1 cursor-grab select-none"
+          {...s.attributes}
+          {...s.listeners}
+          aria-label="Drag handle"
+          title="Drag to reorder"
+        >
+          <IconGrip />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <div className={["truncate text-sm font-semibold", props.field.isActive ? "text-slate-900" : "text-slate-400"].join(" ")}>
+              {props.field.label}
+            </div>
             {system ? (
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+              <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
                 System
               </span>
             ) : null}
-
-            {!f.isActive ? (
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
-                Inactive
-              </span>
-            ) : null}
-
-            {f.required ? (
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+            {props.field.required ? (
+              <span className="rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600">
                 Required
               </span>
             ) : null}
-
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
-              {f.type}
-            </span>
           </div>
 
-          {f.placeholder ? (
-            <div className="mt-1 truncate text-xs text-slate-500">Placeholder: {f.placeholder}</div>
-          ) : null}
-          {f.helpText ? (
-            <div className="mt-0.5 truncate text-xs text-slate-500">Help: {f.helpText}</div>
-          ) : null}
+          <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
+            <span>{typeLabel(props.field.type)}</span>
+            <span className="text-slate-300">•</span>
+            <span className="lr-mono">{props.field.key}</span>
+            {!props.field.isActive ? (
+              <>
+                <span className="text-slate-300">•</span>
+                <span>Inactive</span>
+              </>
+            ) : null}
+          </div>
         </div>
 
-        <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-            title="Drag"
-            aria-label="Drag"
-            style={{ cursor: "grab" }}
-            {...s.attributes}
-            {...s.listeners}
-          >
-            ⠿
-          </button>
-
-          <button
-            type="button"
-            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold hover:bg-slate-50"
             onClick={props.onToggleOpen}
-            title="Settings"
-            aria-label="Settings"
+            title="Field settings"
           >
-            ⚙️
+            ⚙︎
           </button>
 
           <button
             type="button"
-            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold hover:bg-slate-50"
             onClick={props.onDuplicate}
             title="Duplicate"
-            aria-label="Duplicate"
-            disabled={system}
           >
-            ⧉
+            ⎘
           </button>
 
           <button
             type="button"
-            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-            onClick={props.onDelete}
+            className={[
+              "rounded-lg border px-2 py-1 text-xs font-semibold",
+              system ? "border-slate-200 bg-slate-50 text-slate-300 cursor-not-allowed" : "border-slate-200 bg-white hover:bg-slate-50",
+            ].join(" ")}
+            onClick={system ? undefined : props.onDelete}
             title={system ? "System fields cannot be deleted" : "Delete"}
-            aria-label="Delete"
             disabled={system}
           >
-            🗑️
+            🗑
           </button>
         </div>
       </div>
 
       {props.isOpen ? (
-        <InlineFieldEditor
-          key={f.id}
-          type={f.type}
-          label={f.label}
-          required={f.required}
-          isActive={f.isActive}
-          placeholder={f.placeholder}
-          helpText={f.helpText}
-          config={f.config}
-          disabled={system}
-          onPatch={(p) => {
-            props.onPatch({
-              ...("label" in p ? { label: p.label as string } : {}),
-              ...("required" in p ? { required: Boolean(p.required) } : {}),
-              ...("isActive" in p ? { isActive: Boolean(p.isActive) } : {}),
-              ...("placeholder" in p ? { placeholder: (p.placeholder ?? null) as string | null } : {}),
-              ...("helpText" in p ? { helpText: (p.helpText ?? null) as string | null } : {}),
-              ...("config" in p ? { config: p.config } : {}),
-            });
-          }}
-        />
+        <div className="border-t border-slate-200 px-3 py-3">
+          <InlineFieldEditor field={props.field} onPatch={props.onPatch} isSystem={system} />
+        </div>
       ) : null}
     </div>
   );

@@ -1,418 +1,484 @@
 "use client";
 
+/* eslint-disable react-hooks/refs */
+/* eslint-disable react-hooks/set-state-in-effect */
+
 import * as React from "react";
-import type { FieldType } from "@prisma/client";
 import {
   DndContext,
   DragOverlay,
-  PointerSensor,
   KeyboardSensor,
+  PointerSensor,
+  closestCenter,
   useSensor,
   useSensors,
-  type DragStartEvent,
-  type DragEndEvent,
 } from "@dnd-kit/core";
-import { sortableKeyboardCoordinates, arrayMove } from "@dnd-kit/sortable";
+import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 
-import FieldLibrary, { LIB_PREFIX } from "./FieldLibrary";
-import Canvas, { CANVAS_ID } from "./Canvas";
-import type { FormDto, FormFieldDto } from "./builder.types";
-import { isRecord } from "./builder.types";
-import { loadForm, createField, deleteField, patchField, reorderFields } from "../builder.persist";
+import type { BuilderField, LibraryItem, LibraryTab } from "../builder.types";
+import { CONTACT_KEYS, isSystemField } from "../builder.types";
+import { loadForm, createField, deleteField, patchField, reorderFields, patchFormBasics, patchFormStatus } from "../builder.persist";
+
+import FieldLibrary, { LIB_ITEMS } from "./FieldLibrary";
+import Canvas from "./Canvas";
+import FormSettingsPanel from "./FormSettingsPanel";
 
 type LoadState =
   | { status: "loading" }
-  | { status: "error"; message: string; traceId: string }
-  | { status: "ready"; form: FormDto; fields: FormFieldDto[] };
+  | { status: "ready" }
+  | { status: "error"; message: string; traceId: string };
 
-function fieldLabelForType(t: FieldType): string {
-  switch (t) {
-    case "TEXT":
-      return "Text";
-    case "TEXTAREA":
-      return "Text area";
-    case "EMAIL":
-      return "E-mail";
-    case "PHONE":
-      return "Phone";
-    case "CHECKBOX":
-      return "Checkbox";
-    case "SINGLE_SELECT":
-      return "Single select";
-    case "MULTI_SELECT":
-      return "Multi select";
-    default:
-      return String(t);
+function safeTraceId(v: unknown): string {
+  if (typeof v === "string" && v.trim()) return v.trim();
+  return "—";
+}
+
+function uniqKey(base: string, used: Set<string>): string {
+  const clean = base.trim().replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_]/g, "");
+  const start = clean.length ? clean : "field";
+  if (!used.has(start)) return start;
+
+  for (let i = 2; i < 200; i++) {
+    const k = `${start}_${i}`;
+    if (!used.has(k)) return k;
   }
+  return `${start}_${Date.now()}`;
 }
 
-function keyPrefixForType(t: FieldType): string {
-  switch (t) {
-    case "TEXT":
-      return "text";
-    case "TEXTAREA":
-      return "textarea";
-    case "EMAIL":
-      return "email";
-    case "PHONE":
-      return "phone";
-    case "CHECKBOX":
-      return "checkbox";
-    case "SINGLE_SELECT":
-      return "select";
-    case "MULTI_SELECT":
-      return "multiselect";
-    default:
-      return "field";
-  }
+function insertAt<T>(arr: T[], idx: number, item: T): T[] {
+  const clamped = Math.max(0, Math.min(idx, arr.length));
+  return [...arr.slice(0, clamped), item, ...arr.slice(clamped)];
 }
 
-function makeUniqueKey(t: FieldType, existingKeys: Set<string>): string {
-  const base = keyPrefixForType(t);
-  let i = 1;
-  while (i < 5000) {
-    const k = `${base}_${i}`;
-    if (!existingKeys.has(k)) return k;
-    i += 1;
-  }
-  const k = `${base}_${Date.now()}`;
-  return existingKeys.has(k) ? `${base}_${Date.now()}_${Math.floor(Math.random() * 1000)}` : k;
+function arrayMove<T>(arr: T[], from: number, to: number): T[] {
+  const copy = [...arr];
+  const [it] = copy.splice(from, 1);
+  copy.splice(to, 0, it);
+  return copy;
 }
 
-function cloneJson(v: unknown): unknown {
-  try {
-    return JSON.parse(JSON.stringify(v));
-  } catch {
-    return isRecord(v) ? { ...v } : v;
-  }
-}
+type ActiveDrag =
+  | { kind: "none" }
+  | { kind: "library"; item: LibraryItem }
+  | { kind: "field"; fieldId: string };
 
-function errToState(res: { message?: string; traceId?: string } | null | undefined): { status: "error"; message: string; traceId: string } {
-  const message = String(res?.message ?? "Unexpected error.");
-  const traceId = String(res?.traceId ?? "—");
-  return { status: "error", message, traceId };
-}
-
-export default function BuilderShell(props: { formId: string }) {
+export default function BuilderShell({ formId }: { formId: string }) {
   const [state, setState] = React.useState<LoadState>({ status: "loading" });
+
+  const [formName, setFormName] = React.useState<string>("");
+  const [formDescription, setFormDescription] = React.useState<string | null>(null);
+  const [formStatus, setFormStatus] = React.useState<"DRAFT" | "ACTIVE" | "ARCHIVED">("DRAFT");
+  const [formConfig, setFormConfig] = React.useState<unknown | null>(null);
+
+  const [fields, setFields] = React.useState<BuilderField[]>([]);
   const [openFieldId, setOpenFieldId] = React.useState<string | null>(null);
-  const [activeDragLabel, setActiveDragLabel] = React.useState<string | null>(null);
+
+  const [flash, setFlash] = React.useState<string | null>(null);
+  const [activeDrag, setActiveDrag] = React.useState<ActiveDrag>({ kind: "none" });
+
+  const reqSeq = React.useRef(0);
+  const saveSeq = React.useRef(0);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
-  // Debounced reorder (avoid spamming)
-  const reorderTimer = React.useRef<number | null>(null);
-  const queueReorder = React.useCallback((formId: string, orderedIds: string[]) => {
-    if (reorderTimer.current) window.clearTimeout(reorderTimer.current);
-    reorderTimer.current = window.setTimeout(() => {
-      void reorderFields(formId, orderedIds);
-    }, 500);
-  }, []);
+  const load = React.useCallback(async () => {
+    const seq = ++reqSeq.current;
+    setState({ status: "loading" });
 
-  React.useEffect(() => {
-    let alive = true;
-
-    const run = async () => {
-      const res = await loadForm(props.formId);
-      if (!alive) return;
-
-      if (!res.ok) {
-        setState(errToState(res));
-        return;
-      }
-
-      const form = res.data;
-      const ordered = [...(form.fields ?? [])].sort((a, b) => {
-        const ao = Number(a.sortOrder ?? 0);
-        const bo = Number(b.sortOrder ?? 0);
-        if (ao !== bo) return ao - bo;
-        return String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? ""));
-      });
-
-      setState({ status: "ready", form, fields: ordered });
-      setOpenFieldId(null);
-    };
-
-    void run();
-    return () => {
-      alive = false;
-    };
-  }, [props.formId]);
-
-  const applyLocalPatch = React.useCallback((fieldId: string, patch: Partial<FormFieldDto>) => {
-    setState((prev) => {
-      if (prev.status !== "ready") return prev;
-      const next = prev.fields.map((f) => (f.id === fieldId ? { ...f, ...patch } : f));
-      return { ...prev, fields: next };
-    });
-  }, []);
-
-  const doPatchField = React.useCallback(async (formId: string, fieldId: string, patch: Partial<FormFieldDto>) => {
-    const res = await patchField(formId, fieldId, {
-      key: patch.key,
-      label: patch.label,
-      required: patch.required,
-      isActive: patch.isActive,
-      placeholder: patch.placeholder === undefined ? undefined : patch.placeholder,
-      helpText: patch.helpText === undefined ? undefined : patch.helpText,
-      config: patch.config === undefined ? undefined : patch.config,
-    });
+    const res = await loadForm(formId);
+    if (seq !== reqSeq.current) return;
 
     if (!res.ok) {
-      const reload = await loadForm(formId);
-      if (reload.ok) {
-        const form = reload.data;
-        const ordered = [...(form.fields ?? [])].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
-        setState({ status: "ready", form, fields: ordered });
-      } else {
-        setState(errToState(res));
-      }
+      setFields([]);
+      setState({
+        status: "error",
+        message: res.message || "Not found.",
+        traceId: safeTraceId(res.traceId),
+      });
+      return;
     }
+
+    setFormName(res.data.name);
+    setFormDescription(res.data.description ?? null);
+    setFormStatus(res.data.status);
+    setFormConfig(res.data.config ?? null);
+
+    setFields(res.data.fields);
+    setOpenFieldId(null);
+    setState({ status: "ready" });
+  }, [formId]);
+
+  React.useEffect(() => {
+    void load();
+  }, [load]);
+
+  const showFlash = React.useCallback((msg: string) => {
+    setFlash(msg);
+    window.setTimeout(() => setFlash(null), 1600);
   }, []);
 
-  const existingKeys = React.useMemo(() => {
-    if (state.status !== "ready") return new Set<string>();
-    return new Set(state.fields.map((f) => f.key));
-  }, [state]);
+  const persistOrder = React.useCallback(
+    async (nextFields: BuilderField[]) => {
+      const seq = ++saveSeq.current;
+      const orderedIds = nextFields.map((f) => f.id);
 
-  const addField = React.useCallback(
-    async (t: FieldType, insertIndex: number | null) => {
-      if (state.status !== "ready") return;
+      const r = await reorderFields(formId, orderedIds);
+      if (seq !== saveSeq.current) return;
 
-      const formId = state.form.id;
-      const k = makeUniqueKey(t, existingKeys);
-
-      const res = await createField(formId, {
-        key: k,
-        label: fieldLabelForType(t),
-        type: t,
-        required: false,
-        isActive: true,
-        placeholder: null,
-        helpText: null,
-        config: undefined,
-      });
-
-      if (!res.ok) {
-        setState(errToState(res));
-        return;
-      }
-
-      const created = res.data;
-      setState((prev) => {
-        if (prev.status !== "ready") return prev;
-        const next = [...prev.fields];
-        const idx = insertIndex === null ? next.length : Math.max(0, Math.min(next.length, insertIndex));
-        next.splice(idx, 0, created);
-        return { ...prev, fields: next };
-      });
-
-      // Persist order immediately (permutation contract)
-      const nextIds = (() => {
-        const fields = state.status === "ready" ? state.fields : [];
-        const after = [...fields];
-        const idx = insertIndex === null ? after.length : Math.max(0, Math.min(after.length, insertIndex));
-        after.splice(idx, 0, created);
-        return after.map((f) => f.id);
-      })();
-
-      const r = await reorderFields(formId, nextIds);
       if (!r.ok) {
-        setState(errToState(r));
+        setState({ status: "error", message: r.message || "Couldn’t save order.", traceId: safeTraceId(r.traceId) });
         return;
       }
     },
-    [existingKeys, state]
+    [formId]
   );
 
-  const onQuickAdd = React.useCallback(
-    (t: FieldType) => {
-      void addField(t, null);
+  const addFromLibrary = React.useCallback(
+    async (item: LibraryItem, insertIndex: number) => {
+      // contact fields: if key already exists -> open existing instead of creating duplicate
+      if (item.kind === "contact") {
+        const existing = fields.find((f) => f.key === item.key);
+        if (existing) {
+          setOpenFieldId(existing.id);
+          showFlash("Contact field already exists.");
+          return;
+        }
+      }
+
+      const used = new Set(fields.map((f) => f.key));
+
+      let keyBase = "field";
+      let label = "Field";
+      let type = item.kind === "contact" ? item.type : item.type;
+
+      let placeholder: string | null | undefined = undefined;
+      let helpText: string | null | undefined = undefined;
+      let config: unknown | null | undefined = undefined;
+
+      if (item.kind === "contact") {
+        keyBase = item.key;
+        label = item.defaultLabel;
+        placeholder = item.defaultPlaceholder ?? null;
+        helpText = item.defaultHelpText ?? null;
+      } else {
+        keyBase = item.keyBase;
+        label = item.defaultLabel;
+        placeholder = item.defaultPlaceholder ?? null;
+        helpText = item.defaultHelpText ?? null;
+        if (item.defaultConfig !== undefined) config = item.defaultConfig;
+      }
+
+      // ensure unique key
+      let key = uniqKey(keyBase, used);
+
+      // retry on 409 key conflict (race)
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const created = await createField(formId, {
+          key,
+          label,
+          type,
+          required: false,
+          isActive: true,
+          placeholder,
+          helpText,
+          config,
+        });
+
+        if (created.ok) {
+          const next = insertAt(fields, insertIndex, created.data);
+          setFields(next);
+          setOpenFieldId(created.data.id);
+
+          await persistOrder(next);
+          showFlash("Field added.");
+          return;
+        }
+
+        if ((created.status === 409 || created.code === "KEY_CONFLICT") && attempt < 4) {
+          used.add(key);
+          key = uniqKey(keyBase, used);
+          continue;
+        }
+
+        setState({
+          status: "error",
+          message: created.message || "Couldn’t create field.",
+          traceId: safeTraceId(created.traceId),
+        });
+        return;
+      }
     },
-    [addField]
+    [fields, formId, persistOrder, showFlash]
+  );
+
+  const onReorder = React.useCallback(
+    async (fromId: string, toId: string) => {
+      const fromIdx = fields.findIndex((f) => f.id === fromId);
+      const toIdx = fields.findIndex((f) => f.id === toId);
+      if (fromIdx < 0 || toIdx < 0) return;
+
+      const next = arrayMove(fields, fromIdx, toIdx);
+      setFields(next);
+      await persistOrder(next);
+    },
+    [fields, persistOrder]
   );
 
   const onToggleOpen = React.useCallback((fieldId: string) => {
     setOpenFieldId((cur) => (cur === fieldId ? null : fieldId));
   }, []);
 
-  const onDelete = React.useCallback(
-    async (fieldId: string) => {
-      if (state.status !== "ready") return;
-      const formId = state.form.id;
-
-      const nextFields = state.fields.filter((f) => f.id !== fieldId);
-      setState({ ...state, fields: nextFields });
-      if (openFieldId === fieldId) setOpenFieldId(null);
-
-      const del = await deleteField(formId, fieldId);
-      if (!del.ok) {
-        setState(errToState(del));
-        return;
-      }
-
-      const ids = nextFields.map((f) => f.id);
-      const r = await reorderFields(formId, ids);
-      if (!r.ok) {
-        setState(errToState(r));
-        return;
-      }
-    },
-    [openFieldId, state]
-  );
-
   const onDuplicate = React.useCallback(
     async (fieldId: string) => {
-      if (state.status !== "ready") return;
-      const formId = state.form.id;
-      const idx = state.fields.findIndex((f) => f.id === fieldId);
-      if (idx < 0) return;
+      const src = fields.find((f) => f.id === fieldId);
+      if (!src) return;
 
-      const src = state.fields[idx];
-      const k = makeUniqueKey(src.type, existingKeys);
+      const used = new Set(fields.map((f) => f.key));
+      const base = `${src.key}_copy`;
+      const key = uniqKey(base, used);
 
-      const res = await createField(formId, {
-        key: k,
-        label: `${src.label} (Copy)`,
+      const idx = fields.findIndex((f) => f.id === fieldId);
+      const insertIndex = idx >= 0 ? idx + 1 : fields.length;
+
+      const created = await createField(formId, {
+        key,
+        label: `${src.label} (copy)`,
         type: src.type,
         required: src.required,
         isActive: src.isActive,
         placeholder: src.placeholder,
         helpText: src.helpText,
-        config: cloneJson(src.config),
+        config: src.config,
       });
 
+      if (!created.ok) {
+        setState({ status: "error", message: created.message || "Couldn’t duplicate.", traceId: safeTraceId(created.traceId) });
+        return;
+      }
+
+      const next = insertAt(fields, insertIndex, created.data);
+      setFields(next);
+      setOpenFieldId(created.data.id);
+      await persistOrder(next);
+      showFlash("Field duplicated.");
+    },
+    [fields, formId, persistOrder, showFlash]
+  );
+
+  const onDelete = React.useCallback(
+    async (fieldId: string) => {
+      const f = fields.find((x) => x.id === fieldId);
+      if (!f) return;
+      if (isSystemField(f)) return;
+
+      const del = await deleteField(formId, fieldId);
+      if (!del.ok) {
+        setState({ status: "error", message: del.message || "Couldn’t delete.", traceId: safeTraceId(del.traceId) });
+        return;
+      }
+
+      const next = fields.filter((x) => x.id !== fieldId);
+      setFields(next);
+      if (openFieldId === fieldId) setOpenFieldId(null);
+
+      await persistOrder(next);
+      showFlash("Field deleted.");
+    },
+    [fields, formId, openFieldId, persistOrder, showFlash]
+  );
+
+  const onPatchField = React.useCallback(
+    async (fieldId: string, patch: Parameters<typeof patchField>[2]) => {
+      const res = await patchField(formId, fieldId, patch);
       if (!res.ok) {
-        setState(errToState(res));
+        setState({ status: "error", message: res.message || "Couldn’t save.", traceId: safeTraceId(res.traceId) });
         return;
       }
 
-      const created = res.data;
-      const nextFields = [...state.fields];
-      nextFields.splice(idx + 1, 0, created);
-      setState({ ...state, fields: nextFields });
+      setFields((cur) => cur.map((f) => (f.id === fieldId ? res.data : f)));
+    },
+    [formId]
+  );
 
-      const r = await reorderFields(formId, nextFields.map((f) => f.id));
-      if (!r.ok) {
-        setState(errToState(r));
+  const onPatchFormBasics = React.useCallback(
+    async (body: { name?: string; description?: string | null; configPatch?: Record<string, unknown> }) => {
+      const res = await patchFormBasics(formId, body);
+      if (!res.ok) {
+        setState({ status: "error", message: res.message || "Couldn’t save form.", traceId: safeTraceId(res.traceId) });
         return;
       }
+
+      setFormName(res.data.name);
+      setFormDescription(res.data.description ?? null);
+      setFormStatus(res.data.status);
+      setFormConfig(res.data.config ?? null);
+      setFields(res.data.fields);
+      showFlash("Saved.");
     },
-    [existingKeys, state]
+    [formId, showFlash]
   );
 
-  const onPatch = React.useCallback(
-    (fieldId: string, patch: Partial<FormFieldDto>) => {
-      if (state.status !== "ready") return;
-      applyLocalPatch(fieldId, patch);
-      void doPatchField(state.form.id, fieldId, patch);
+  const onPatchFormStatus = React.useCallback(
+    async (status: "DRAFT" | "ACTIVE" | "ARCHIVED") => {
+      const res = await patchFormStatus(formId, status);
+      if (!res.ok) {
+        setState({ status: "error", message: res.message || "Couldn’t update status.", traceId: safeTraceId(res.traceId) });
+        return;
+      }
+      setFormStatus(res.data.status);
+      showFlash("Status updated.");
     },
-    [applyLocalPatch, doPatchField, state]
+    [formId, showFlash]
   );
 
-  const onDragStart = React.useCallback((ev: DragStartEvent) => {
-    const id = String(ev.active.id);
-    if (id.startsWith(LIB_PREFIX)) {
-      const t = id.slice(LIB_PREFIX.length) as FieldType;
-      setActiveDragLabel(`Add: ${fieldLabelForType(t)}`);
-      return;
+  const onDragStart = React.useCallback((ev: any) => {
+    const d = ev?.active?.data?.current as unknown;
+    if (d && typeof d === "object" && d !== null && "kind" in d) {
+      const kind = (d as any).kind as string;
+      if (kind === "library") {
+        setActiveDrag({ kind: "library", item: (d as any).item as LibraryItem });
+        return;
+      }
+      if (kind === "field") {
+        setActiveDrag({ kind: "field", fieldId: String((d as any).fieldId || "") });
+        return;
+      }
     }
-    setActiveDragLabel("Move field");
+    setActiveDrag({ kind: "none" });
+  }, []);
+
+  const onDragCancel = React.useCallback(() => {
+    setActiveDrag({ kind: "none" });
   }, []);
 
   const onDragEnd = React.useCallback(
-    (ev: DragEndEvent) => {
-      setActiveDragLabel(null);
+    async (ev: any) => {
+      const activeId = String(ev?.active?.id ?? "");
+      const overId = ev?.over?.id ? String(ev.over.id) : "";
 
-      if (state.status !== "ready") return;
-
-      const activeId = String(ev.active.id);
-      const overId = ev.over ? String(ev.over.id) : null;
-
-      // Drag from library -> create field
-      if (activeId.startsWith(LIB_PREFIX)) {
-        const t = activeId.slice(LIB_PREFIX.length) as FieldType;
-        if (!overId) return;
-
-        if (overId === CANVAS_ID) {
-          void addField(t, null);
+      // add from library
+      const d = ev?.active?.data?.current as unknown;
+      if (d && typeof d === "object" && d !== null && (d as any).kind === "library") {
+        const item = (d as any).item as LibraryItem;
+        if (!item) {
+          setActiveDrag({ kind: "none" });
           return;
         }
 
-        const idx = state.fields.findIndex((f) => f.id === overId);
-        if (idx >= 0) void addField(t, idx);
+        if (!overId) {
+          setActiveDrag({ kind: "none" });
+          return;
+        }
+
+        let insertIndex = fields.length;
+        if (overId !== "canvas") {
+          const idx = fields.findIndex((f) => f.id === overId);
+          if (idx >= 0) insertIndex = idx;
+        }
+
+        await addFromLibrary(item, insertIndex);
+        setActiveDrag({ kind: "none" });
         return;
       }
 
-      // Reorder existing fields
-      if (!overId) return;
-      if (overId === CANVAS_ID) return;
+      // reorder fields
+      if (activeId && overId && activeId !== overId) {
+        const aIdx = fields.findIndex((f) => f.id === activeId);
+        const oIdx = fields.findIndex((f) => f.id === overId);
+        if (aIdx >= 0 && oIdx >= 0) {
+          await onReorder(activeId, overId);
+        }
+      }
 
-      const oldIndex = state.fields.findIndex((f) => f.id === activeId);
-      const newIndex = state.fields.findIndex((f) => f.id === overId);
-      if (oldIndex < 0 || newIndex < 0) return;
-      if (oldIndex === newIndex) return;
-
-      const next = arrayMove(state.fields, oldIndex, newIndex);
-      setState({ ...state, fields: next });
-
-      queueReorder(state.form.id, next.map((f) => f.id));
+      setActiveDrag({ kind: "none" });
     },
-    [addField, queueReorder, state]
+    [addFromLibrary, fields, onReorder]
   );
 
   if (state.status === "loading") {
-    return (
-      <div className="lr-page">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="h-4 w-40 animate-pulse rounded bg-slate-100" />
-          <div className="mt-3 h-3 w-64 animate-pulse rounded bg-slate-100" />
-          <div className="mt-6 h-40 animate-pulse rounded bg-slate-100" />
-        </div>
-      </div>
-    );
+    return <div className="lr-muted">Loading builder…</div>;
   }
 
   if (state.status === "error") {
     return (
       <div className="lr-page">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="text-sm font-semibold text-slate-900">Error</div>
-          <div className="mt-1 text-sm text-slate-600">{state.message}</div>
-          <div className="mt-2 text-xs text-slate-500">traceId: {state.traceId}</div>
-          <div className="mt-4">
-            <a className="lr-btnSecondary" href={`/admin/forms/${props.formId}/builder`}>
+        <div className="lr-pageHeader">
+          <h1 className="lr-h1">Builder</h1>
+          <p className="lr-muted">
+            {state.message}{" "}
+            <span className="lr-meta">
+              Trace: <span className="lr-mono">{state.traceId}</span>
+            </span>
+          </p>
+          <div className="lr-actions">
+            <button className="lr-btnSecondary" onClick={() => void load()}>
               Retry
-            </a>
+            </button>
           </div>
         </div>
       </div>
     );
   }
 
+  const draggingLabel =
+    activeDrag.kind === "library"
+      ? activeDrag.item.title
+      : activeDrag.kind === "field"
+      ? fields.find((f) => f.id === activeDrag.fieldId)?.label ?? "Field"
+      : null;
+
   return (
-    <div className="lr-page">
-      <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
-        <div className="flex items-start gap-4">
-          <FieldLibrary onQuickAdd={onQuickAdd} />
-          <Canvas
-            formName={state.form.name}
-            fields={state.fields}
-            openFieldId={openFieldId}
-            onToggleOpen={onToggleOpen}
-            onDelete={(id) => void onDelete(id)}
-            onDuplicate={(id) => void onDuplicate(id)}
-            onPatch={onPatch}
-          />
+    <div className="lr-page" style={{ gap: 12 }}>
+      {flash ? (
+        <div className="lr-flash" role="status" aria-live="polite">
+          {flash}
+        </div>
+      ) : null}
+
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={onDragStart}
+        onDragCancel={onDragCancel}
+        onDragEnd={onDragEnd}
+      >
+        <div className="flex gap-3" style={{ minHeight: "70vh" }}>
+          <div className="w-[320px] shrink-0">
+            <FieldLibrary items={LIB_ITEMS} onQuickAdd={(it) => void addFromLibrary(it, fields.length)} />
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <Canvas
+              formId={formId}
+              fields={fields}
+              openFieldId={openFieldId}
+              onToggleOpen={onToggleOpen}
+              onDuplicate={(id) => void onDuplicate(id)}
+              onDelete={(id) => void onDelete(id)}
+              onPatchField={(id, patch) => void onPatchField(id, patch)}
+            />
+          </div>
+
+          <div className="w-[340px] shrink-0">
+            <FormSettingsPanel
+              formId={formId}
+              name={formName}
+              description={formDescription}
+              status={formStatus}
+              config={formConfig}
+              onPatchBasics={(b) => void onPatchFormBasics(b)}
+              onPatchStatus={(s) => void onPatchFormStatus(s)}
+            />
+          </div>
         </div>
 
         <DragOverlay>
-          {activeDragLabel ? (
-            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-800">
-              {activeDragLabel}
+          {draggingLabel ? (
+            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold">
+              {draggingLabel}
             </div>
           ) : null}
         </DragOverlay>

@@ -1,53 +1,56 @@
 "use client";
 
+/* eslint-disable react-hooks/refs */
+
 import * as React from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import type { FormFieldDto } from "./builder.types";
+import type { BuilderField, FieldType } from "../builder.types";
 import FieldCard from "./FieldCard";
 
-const CANVAS_ID = "canvas";
-
-function useDndKitRef<T extends HTMLElement>(setNodeRef: (el: T | null) => void) {
-  const ref = React.useRef<T | null>(null);
-  React.useEffect(() => {
-    setNodeRef(ref.current);
-    return () => setNodeRef(null);
-  }, [setNodeRef]);
-  return ref;
-}
-
 export default function Canvas(props: {
-  formName: string;
-  fields: FormFieldDto[];
+  formId: string;
+  fields: BuilderField[];
   openFieldId: string | null;
-
   onToggleOpen: (fieldId: string) => void;
-  onDelete: (fieldId: string) => void;
   onDuplicate: (fieldId: string) => void;
-  onPatch: (fieldId: string, patch: Partial<FormFieldDto>) => void;
+  onDelete: (fieldId: string) => void;
+  onPatchField: (
+    fieldId: string,
+    patch: Partial<{
+      key: string;
+      label: string;
+      type: FieldType;
+      required: boolean;
+      isActive: boolean;
+      placeholder: string | null;
+      helpText: string | null;
+      config: unknown | null;
+    }>
+  ) => void;
 }) {
-  const droppable = useDroppable({ id: CANVAS_ID });
-  const ref = useDndKitRef<HTMLDivElement>(droppable.setNodeRef);
+  const droppable = useDroppable({ id: "canvas" });
 
   return (
-    <section className="min-w-0 flex-1">
-      <div className="mb-3">
-        <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Builder</div>
-        <div className="mt-1 text-lg font-bold text-slate-900">{props.formName}</div>
+    <div className="rounded-xl border border-slate-200 bg-white p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <div className="text-sm font-bold">Canvas</div>
+          <div className="text-xs text-slate-500">Drag fields to reorder. Click ⚙︎ for settings.</div>
+        </div>
+        <div className="text-xs text-slate-500">{props.fields.length} field(s)</div>
       </div>
 
       <div
-        ref={ref}
+        ref={droppable.setNodeRef}
         className={[
-          "rounded-2xl border border-slate-200 bg-white p-3",
+          "mt-3 min-h-[320px] rounded-xl border border-slate-200 bg-white p-2",
           droppable.isOver ? "ring-2 ring-slate-200" : "",
         ].join(" ")}
       >
         {props.fields.length === 0 ? (
-          <div className="rounded-xl bg-slate-50 p-6 text-center">
-            <div className="text-sm font-semibold text-slate-900">Empty form</div>
-            <div className="mt-1 text-sm text-slate-600">Drag a field here from the library.</div>
+          <div className="flex h-[320px] items-center justify-center rounded-xl border border-dashed border-slate-200 text-sm text-slate-500">
+            Drag a field here
           </div>
         ) : (
           <SortableContext items={props.fields.map((f) => f.id)} strategy={verticalListSortingStrategy}>
@@ -58,17 +61,15 @@ export default function Canvas(props: {
                   field={f}
                   isOpen={props.openFieldId === f.id}
                   onToggleOpen={() => props.onToggleOpen(f.id)}
-                  onDelete={() => props.onDelete(f.id)}
                   onDuplicate={() => props.onDuplicate(f.id)}
-                  onPatch={(patch) => props.onPatch(f.id, patch)}
+                  onDelete={() => props.onDelete(f.id)}
+                  onPatch={(patch) => props.onPatchField(f.id, patch)}
                 />
               ))}
             </div>
           </SortableContext>
         )}
       </div>
-    </section>
+    </div>
   );
 }
-
-export { CANVAS_ID };

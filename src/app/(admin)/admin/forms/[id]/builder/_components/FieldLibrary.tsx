@@ -1,82 +1,141 @@
 "use client";
 
+/* eslint-disable react-hooks/refs */
+
 import * as React from "react";
-import type { FieldType } from "@prisma/client";
 import { useDraggable } from "@dnd-kit/core";
+import type { LibraryItem, LibraryTab } from "../builder.types";
 
-const LIB_PREFIX = "lib:";
-
-type LibraryItem = {
-  type: FieldType;
-  label: string;
-  hint?: string;
-};
-
-const ITEMS: LibraryItem[] = [
-  { type: "TEXT", label: "Text" },
-  { type: "TEXTAREA", label: "Text area" },
-  { type: "EMAIL", label: "E-mail" },
-  { type: "PHONE", label: "Phone" },
-  { type: "CHECKBOX", label: "Checkbox" },
-  { type: "SINGLE_SELECT", label: "Single select" },
-  { type: "MULTI_SELECT", label: "Multi select" },
-];
-
-function useDndKitRef<T extends HTMLElement>(setNodeRef: (el: T | null) => void) {
-  const ref = React.useRef<T | null>(null);
-  React.useEffect(() => {
-    setNodeRef(ref.current);
-    return () => setNodeRef(null);
-  }, [setNodeRef]);
-  return ref;
-}
-
-function DraggableLibraryRow(props: { item: LibraryItem; onQuickAdd: (t: FieldType) => void }) {
-  const id = `${LIB_PREFIX}${props.item.type}`;
-  const d = useDraggable({ id, data: { kind: "library", fieldType: props.item.type } });
-
-  const ref = useDndKitRef<HTMLButtonElement>(d.setNodeRef);
-
+function TabButton(props: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       type="button"
-      ref={ref}
-      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-left hover:bg-slate-50 active:bg-slate-100"
-      onClick={() => props.onQuickAdd(props.item.type)}
-      aria-label={`Add ${props.item.label}`}
-      title="Drag onto canvas or click to add"
-      style={{
-        opacity: d.isDragging ? 0.6 : 1,
-        cursor: d.isDragging ? "grabbing" : "grab",
-      }}
-      {...d.listeners}
-      {...d.attributes}
+      onClick={props.onClick}
+      className={[
+        "h-9 rounded-lg px-3 text-sm font-semibold",
+        props.active ? "bg-slate-900 text-white" : "bg-white text-slate-700 border border-slate-200 hover:bg-slate-50",
+      ].join(" ")}
     >
-      <div className="text-sm font-semibold text-slate-900">{props.item.label}</div>
-      {props.item.hint ? <div className="mt-0.5 text-xs text-slate-500">{props.item.hint}</div> : null}
+      {props.children}
     </button>
   );
 }
 
-export default function FieldLibrary(props: { onQuickAdd: (t: FieldType) => void }) {
-  return (
-    <aside className="w-[280px] shrink-0">
-      <div className="sticky top-[72px]">
-        <div className="rounded-2xl border border-slate-200 bg-white p-3">
-          <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Field Library</div>
-          <div className="mt-3 flex flex-col gap-2">
-            {ITEMS.map((it) => (
-              <DraggableLibraryRow key={it.type} item={it} onQuickAdd={props.onQuickAdd} />
-            ))}
-          </div>
+function DraggableItem(props: { item: LibraryItem; onQuickAdd: (it: LibraryItem) => void }) {
+  const id = `lib:${props.item.id}`;
 
-          <div className="mt-4 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
-            Drag a field onto the canvas or click to add.
-          </div>
-        </div>
-      </div>
-    </aside>
+  const d = useDraggable({
+    id,
+    data: { kind: "library", item: props.item },
+  });
+
+  return (
+    <button
+      type="button"
+      ref={d.setNodeRef}
+      {...d.listeners}
+      {...d.attributes}
+      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-left hover:bg-slate-50 active:bg-slate-100"
+      onClick={() => props.onQuickAdd(props.item)}
+      title="Drag onto canvas or click to add"
+    >
+      <div className="text-sm font-semibold">{props.item.title}</div>
+      {props.item.subtitle ? <div className="mt-0.5 text-xs text-slate-500">{props.item.subtitle}</div> : null}
+    </button>
   );
 }
 
-export { LIB_PREFIX };
+export const LIB_ITEMS: LibraryItem[] = [
+  // ---- Form fields tab
+  { id: "text", tab: "fields", kind: "type", type: "TEXT", title: "Text", subtitle: "Single line", defaultLabel: "Text", keyBase: "text", defaultPlaceholder: "" },
+  { id: "textarea", tab: "fields", kind: "type", type: "TEXTAREA", title: "Textarea", subtitle: "Multi line", defaultLabel: "Notes", keyBase: "notes", defaultPlaceholder: "Notes / context" },
+  { id: "email", tab: "fields", kind: "type", type: "EMAIL", title: "Email", subtitle: "Validation + keyboard", defaultLabel: "Email", keyBase: "email2", defaultPlaceholder: "name@company.com" },
+  { id: "phone", tab: "fields", kind: "type", type: "PHONE", title: "Phone", subtitle: "Tel input", defaultLabel: "Phone", keyBase: "phone2", defaultPlaceholder: "+41 ..." },
+  { id: "checkbox", tab: "fields", kind: "type", type: "CHECKBOX", title: "Checkbox", subtitle: "True / False", defaultLabel: "Checkbox", keyBase: "checkbox" },
+
+  { id: "single_select", tab: "fields", kind: "type", type: "SINGLE_SELECT", title: "Single Select", subtitle: "Choose one", defaultLabel: "Select", keyBase: "select", defaultConfig: { options: ["Option 1"] } },
+  { id: "multi_select", tab: "fields", kind: "type", type: "MULTI_SELECT", title: "Multi Select", subtitle: "Choose many", defaultLabel: "Multi Select", keyBase: "multiselect", defaultConfig: { options: ["Option 1"] } },
+
+  // Rating preset (no new FieldType; mapped to SINGLE_SELECT options)
+  {
+    id: "rating_1_5",
+    tab: "fields",
+    kind: "preset",
+    type: "SINGLE_SELECT",
+    title: "Rating (1–5)",
+    subtitle: "Preset: 1..5",
+    defaultLabel: "Rating",
+    keyBase: "rating",
+    defaultConfig: { options: ["1", "2", "3", "4", "5"] },
+    defaultHelpText: "Preset rating (Phase 1: stored as single select).",
+  },
+
+  // useful presets
+  {
+    id: "yes_no",
+    tab: "fields",
+    kind: "preset",
+    type: "SINGLE_SELECT",
+    title: "Yes / No",
+    subtitle: "Preset: yes, no",
+    defaultLabel: "Yes / No",
+    keyBase: "yesNo",
+    defaultConfig: { options: ["Yes", "No"] },
+  },
+  {
+    id: "consent",
+    tab: "fields",
+    kind: "preset",
+    type: "CHECKBOX",
+    title: "Consent",
+    subtitle: "GDPR / marketing opt-in",
+    defaultLabel: "Consent",
+    keyBase: "consent",
+    defaultHelpText: "I agree to be contacted.",
+  },
+
+  // ---- Contact fields tab
+  { id: "c_firstName", tab: "contacts", kind: "contact", type: "TEXT", title: "First name", defaultLabel: "First name", key: "firstName", defaultPlaceholder: "First name" },
+  { id: "c_lastName", tab: "contacts", kind: "contact", type: "TEXT", title: "Last name", defaultLabel: "Last name", key: "lastName", defaultPlaceholder: "Last name" },
+  { id: "c_company", tab: "contacts", kind: "contact", type: "TEXT", title: "Company", defaultLabel: "Company", key: "company", defaultPlaceholder: "Company" },
+  { id: "c_email", tab: "contacts", kind: "contact", type: "EMAIL", title: "E-mail", defaultLabel: "E-mail", key: "email", defaultPlaceholder: "name@company.com" },
+  { id: "c_phone", tab: "contacts", kind: "contact", type: "PHONE", title: "Phone", defaultLabel: "Phone", key: "phone", defaultPlaceholder: "+41 ..." },
+  { id: "c_jobTitle", tab: "contacts", kind: "contact", type: "TEXT", title: "Job title", defaultLabel: "Job title", key: "jobTitle", defaultPlaceholder: "Role / function" },
+  { id: "c_street", tab: "contacts", kind: "contact", type: "TEXT", title: "Street", defaultLabel: "Street", key: "street", defaultPlaceholder: "Street / no." },
+  { id: "c_zip", tab: "contacts", kind: "contact", type: "TEXT", title: "ZIP", defaultLabel: "ZIP", key: "zip", defaultPlaceholder: "ZIP" },
+  { id: "c_city", tab: "contacts", kind: "contact", type: "TEXT", title: "City", defaultLabel: "City", key: "city", defaultPlaceholder: "City" },
+  { id: "c_country", tab: "contacts", kind: "contact", type: "TEXT", title: "Country", defaultLabel: "Country", key: "country", defaultPlaceholder: "Country" },
+  { id: "c_website", tab: "contacts", kind: "contact", type: "TEXT", title: "Website", defaultLabel: "Website", key: "website", defaultPlaceholder: "https://..." },
+];
+
+export default function FieldLibrary(props: { items: LibraryItem[]; onQuickAdd: (it: LibraryItem) => void }) {
+  const [tab, setTab] = React.useState<LibraryTab>("fields");
+
+  const visible = props.items.filter((x) => x.tab === tab);
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-sm font-bold">Field library</div>
+        <div className="flex gap-2">
+          <TabButton active={tab === "fields"} onClick={() => setTab("fields")}>
+            Form fields
+          </TabButton>
+          <TabButton active={tab === "contacts"} onClick={() => setTab("contacts")}>
+            Contact fields
+          </TabButton>
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-col gap-2">
+        {visible.map((it) => (
+          <DraggableItem key={it.id} item={it} onQuickAdd={props.onQuickAdd} />
+        ))}
+      </div>
+
+      <div className="mt-3 text-xs text-slate-500">
+        Tip: drag onto the canvas or click to add. Contact fields are de-duped by key.
+      </div>
+    </div>
+  );
+}
