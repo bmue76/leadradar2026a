@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import type { DragCancelEvent, DragEndEvent, DragStartEvent } from "@dnd-kit/core";
+import type { DragEndEvent, DragStartEvent, UniqueIdentifier } from "@dnd-kit/core";
 import {
   DndContext,
   DragOverlay,
@@ -28,7 +28,6 @@ import {
 import FieldLibrary, { LIB_ITEMS } from "./FieldLibrary";
 import Canvas from "./Canvas";
 import FormSettingsPanel from "./FormSettingsPanel";
-import type { UniqueIdentifier } from "@dnd-kit/core";
 
 type LoadState =
   | { status: "loading" }
@@ -140,12 +139,50 @@ export default function BuilderShell({ formId }: { formId: string }) {
       if (seq !== saveSeq.current) return;
 
       if (!r.ok) {
-        setState({ status: "error", message: r.message || "Couldn’t save order.", traceId: safeTraceId(r.traceId) });
+        setState({
+          status: "error",
+          message: r.message || "Couldn’t save order.",
+          traceId: safeTraceId(r.traceId),
+        });
         return;
       }
     },
     [formId]
   );
+
+  function itemToCreatePayload(item: LibraryItem): {
+    keyBase: string;
+    label: string;
+    type: LibraryItem["type"];
+    placeholder?: string | null;
+    helpText?: string | null;
+    config?: unknown | null;
+    isContact: boolean;
+    contactKey?: string;
+  } {
+    if (item.kind === "contact") {
+      return {
+        keyBase: item.key,
+        label: item.defaultLabel,
+        type: item.type,
+        placeholder: item.defaultPlaceholder ?? null,
+        helpText: item.defaultHelpText ?? null,
+        config: null,
+        isContact: true,
+        contactKey: item.key,
+      };
+    }
+
+    return {
+      keyBase: item.keyBase,
+      label: item.defaultLabel,
+      type: item.type,
+      placeholder: item.defaultPlaceholder ?? null,
+      helpText: item.defaultHelpText ?? null,
+      config: item.defaultConfig !== undefined ? (item.defaultConfig as unknown) : null,
+      isContact: false,
+    };
+  }
 
   const addFromLibrary = React.useCallback(
     async (item: LibraryItem, insertIndex: number) => {
@@ -160,38 +197,22 @@ export default function BuilderShell({ formId }: { formId: string }) {
       }
 
       const used = new Set(fields.map((f) => f.key));
-
-      const keyBase = item.kind === "contact" ? item.key : item.keyBase;
-      const label = item.defaultLabel;
-      const type = item.type;
-
-      let placeholder: string | null | undefined = undefined;
-      let helpText: string | null | undefined = undefined;
-      let config: unknown | null | undefined = undefined;
-
-      if (item.kind === "contact") {
-        placeholder = item.defaultPlaceholder ?? null;
-        helpText = item.defaultHelpText ?? null;
-      } else {
-        placeholder = item.defaultPlaceholder ?? null;
-        helpText = item.defaultHelpText ?? null;
-        if (item.defaultConfig !== undefined) config = item.defaultConfig as unknown;
-      }
+      const payload = itemToCreatePayload(item);
 
       // ensure unique key
-      let key = uniqKey(keyBase, used);
+      let key = uniqKey(payload.keyBase, used);
 
       // retry on 409 key conflict (race)
       for (let attempt = 0; attempt < 5; attempt++) {
         const created = await createField(formId, {
           key,
-          label,
-          type,
+          label: payload.label,
+          type: payload.type,
           required: false,
           isActive: true,
-          placeholder,
-          helpText,
-          config,
+          placeholder: payload.placeholder ?? null,
+          helpText: payload.helpText ?? null,
+          config: payload.config ?? null,
         });
 
         if (created.ok) {
@@ -206,7 +227,7 @@ export default function BuilderShell({ formId }: { formId: string }) {
 
         if ((created.status === 409 || created.code === "KEY_CONFLICT") && attempt < 4) {
           used.add(key);
-          key = uniqKey(keyBase, used);
+          key = uniqKey(payload.keyBase, used);
           continue;
         }
 
@@ -217,6 +238,81 @@ export default function BuilderShell({ formId }: { formId: string }) {
         });
         return;
       }
+    },
+    [fields, formId, persistOrder, showFlash]
+  );
+
+  const addManyFromLibrary = React.useCallback(
+    async (items: LibraryItem[], insertIndex: number) => {
+      let cur = fields;
+      let idx = Math.max(0, Math.min(insertIndex, cur.length));
+      const used = new Set(cur.map((f) => f.key));
+
+      let added = 0;
+      let skipped = 0;
+      let lastOpened: string | null = null;
+
+      for (const item of items) {
+        // de-dupe contact fields by key
+        if (item.kind === "contact") {
+          const existing = cur.find((f) => f.key === item.key);
+          if (existing) {
+            skipped++;
+            lastOpened = existing.id;
+            continue;
+          }
+        }
+
+        const payload = itemToCreatePayload(item);
+        let key = uniqKey(payload.keyBase, used);
+
+        let createdOk = false;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const created = await createField(formId, {
+            key,
+            label: payload.label,
+            type: payload.type,
+            required: false,
+            isActive: true,
+            placeholder: payload.placeholder ?? null,
+            helpText: payload.helpText ?? null,
+            config: payload.config ?? null,
+          });
+
+          if (created.ok) {
+            cur = insertAt(cur, idx, created.data);
+            idx++;
+            used.add(key);
+            added++;
+            lastOpened = created.data.id;
+            createdOk = true;
+            break;
+          }
+
+          if ((created.status === 409 || created.code === "KEY_CONFLICT") && attempt < 4) {
+            used.add(key);
+            key = uniqKey(payload.keyBase, used);
+            continue;
+          }
+
+          setState({
+            status: "error",
+            message: created.message || "Couldn’t create field.",
+            traceId: safeTraceId(created.traceId),
+          });
+          return; // abort batch on hard error
+        }
+
+        if (!createdOk) return;
+      }
+
+      setFields(cur);
+      if (lastOpened) setOpenFieldId(lastOpened);
+      await persistOrder(cur);
+
+      if (added > 0 && skipped > 0) showFlash(`Added ${added} field(s). Skipped ${skipped} existing contact field(s).`);
+      else if (added > 0) showFlash(`Added ${added} field(s).`);
+      else showFlash("Nothing to add (all contact fields already exist).");
     },
     [fields, formId, persistOrder, showFlash]
   );
@@ -262,7 +358,11 @@ export default function BuilderShell({ formId }: { formId: string }) {
       });
 
       if (!created.ok) {
-        setState({ status: "error", message: created.message || "Couldn’t duplicate.", traceId: safeTraceId(created.traceId) });
+        setState({
+          status: "error",
+          message: created.message || "Couldn’t duplicate.",
+          traceId: safeTraceId(created.traceId),
+        });
         return;
       }
 
@@ -283,7 +383,11 @@ export default function BuilderShell({ formId }: { formId: string }) {
 
       const del = await deleteField(formId, fieldId);
       if (!del.ok) {
-        setState({ status: "error", message: del.message || "Couldn’t delete.", traceId: safeTraceId(del.traceId) });
+        setState({
+          status: "error",
+          message: del.message || "Couldn’t delete.",
+          traceId: safeTraceId(del.traceId),
+        });
         return;
       }
 
@@ -301,7 +405,11 @@ export default function BuilderShell({ formId }: { formId: string }) {
     async (fieldId: string, patch: Parameters<typeof patchField>[2]) => {
       const res = await patchField(formId, fieldId, patch);
       if (!res.ok) {
-        setState({ status: "error", message: res.message || "Couldn’t save.", traceId: safeTraceId(res.traceId) });
+        setState({
+          status: "error",
+          message: res.message || "Couldn’t save.",
+          traceId: safeTraceId(res.traceId),
+        });
         return;
       }
 
@@ -314,7 +422,11 @@ export default function BuilderShell({ formId }: { formId: string }) {
     async (body: { name?: string; description?: string | null; configPatch?: Record<string, unknown> }) => {
       const res = await patchFormBasics(formId, body);
       if (!res.ok) {
-        setState({ status: "error", message: res.message || "Couldn’t save form.", traceId: safeTraceId(res.traceId) });
+        setState({
+          status: "error",
+          message: res.message || "Couldn’t save form.",
+          traceId: safeTraceId(res.traceId),
+        });
         return;
       }
 
@@ -332,7 +444,11 @@ export default function BuilderShell({ formId }: { formId: string }) {
     async (status: "DRAFT" | "ACTIVE" | "ARCHIVED") => {
       const res = await patchFormStatus(formId, status);
       if (!res.ok) {
-        setState({ status: "error", message: res.message || "Couldn’t update status.", traceId: safeTraceId(res.traceId) });
+        setState({
+          status: "error",
+          message: res.message || "Couldn’t update status.",
+          traceId: safeTraceId(res.traceId),
+        });
         return;
       }
       setFormStatus(res.data.status);
@@ -457,7 +573,11 @@ export default function BuilderShell({ formId }: { formId: string }) {
       >
         <div className="flex gap-3" style={{ minHeight: "70vh" }}>
           <div className="w-[320px] shrink-0">
-            <FieldLibrary items={LIB_ITEMS} onQuickAdd={(it) => void addFromLibrary(it, fields.length)} />
+            <FieldLibrary
+              items={LIB_ITEMS}
+              onQuickAdd={(it) => void addFromLibrary(it, fields.length)}
+              onQuickAddMany={(its) => void addManyFromLibrary(its, fields.length)}
+            />
           </div>
 
           <div className="min-w-0 flex-1">
