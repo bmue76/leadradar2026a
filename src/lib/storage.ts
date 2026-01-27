@@ -122,6 +122,5 @@ export async function statFile(absPath: string): Promise<{ sizeBytes: number; mt
 export function streamFileWeb(absPath: string): ReadableStream<Uint8Array> {
   const nodeStream = fs.createReadStream(absPath);
   // Convert Node stream to Web stream (Node 18+)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return Readable.toWeb(nodeStream as any) as ReadableStream<Uint8Array>;
+  return Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
 }
