@@ -100,6 +100,17 @@ async function apiDownloadCsv(url: string): Promise<{ blob: Blob; filename: stri
   return { blob, filename };
 }
 
+function triggerBrowserDownload(blob: Blob, filename: string) {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
 function IconArrowDown() {
   return (
     <svg viewBox="0 0 24 24" width="44" height="44" fill="none" aria-hidden="true">
@@ -135,7 +146,8 @@ function Notice(props: { err: UiError; onRetry: () => void; onDismiss: () => voi
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
         <div>
           <div style={{ fontWeight: 600, color: "var(--lr-text)" }}>
-            {err.code ? `${err.code}: ` : ""}{err.message}
+            {err.code ? `${err.code}: ` : ""}
+            {err.message}
           </div>
           {err.traceId ? (
             <div className="lr-meta" style={{ marginTop: 6 }}>
@@ -145,8 +157,12 @@ function Notice(props: { err: UiError; onRetry: () => void; onDismiss: () => voi
         </div>
 
         <div style={{ display: "inline-flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <Button variant="ghost" onClick={onDismiss}>Dismiss</Button>
-          <Button variant="secondary" onClick={onRetry}>Retry</Button>
+          <Button variant="ghost" onClick={onDismiss}>
+            Dismiss
+          </Button>
+          <Button variant="secondary" onClick={onRetry}>
+            Retry
+          </Button>
         </div>
       </div>
     </div>
@@ -256,7 +272,7 @@ export default function ExportsClient() {
         <div className="lr-toolbar">
           <div>
             <h1 className="lr-h1">Exports</h1>
-            <p className="lr-muted">Create CSV exports and download the file.</p>
+            <p className="lr-muted">Download leads as CSV (with optional filters).</p>
           </div>
 
           <div className="lr-toolbarRight">
@@ -264,27 +280,25 @@ export default function ExportsClient() {
               Refresh
             </Button>
             <Button variant="primary" onClick={() => setModalOpen(true)} disabled={loading}>
-              Create export
+              Download CSV
             </Button>
           </div>
         </div>
         <div className="lr-divider" />
       </div>
 
-      {err ? (
-        <Notice err={err} onRetry={() => void loadAll()} onDismiss={() => setErr(null)} />
-      ) : null}
+      {err ? <Notice err={err} onRetry={() => void loadAll()} onDismiss={() => setErr(null)} /> : null}
 
       {loading ? (
         <div className="lr-muted">Loading…</div>
       ) : jobRows.length === 0 ? (
         <EmptyState
           icon={<IconArrowDown />}
-          title="No exports yet."
-          hint="Create an export to get started."
+          title="No export jobs yet."
+          hint="You can download a CSV anytime."
           cta={
             <Button variant="primary" onClick={() => setModalOpen(true)}>
-              Create export
+              Download CSV
             </Button>
           }
         />
@@ -323,38 +337,34 @@ export default function ExportsClient() {
                         size="sm"
                         onClick={() => startPolling(j.id)}
                         disabled={j.status === "DONE" || j.status === "FAILED"}
-                        title="Poll status now"
+                        title="Refresh status"
                       >
-                        Poll
+                        Refresh status
                       </Button>
                       <Button
                         variant="ghost"
                         size="sm"
                         disabled={j.status !== "DONE"}
+                        title={j.status === "DONE" ? "Download CSV" : "Wait until job is DONE"}
                         onClick={async () => {
                           setErr(null);
                           try {
                             const { blob, filename } = await apiDownloadCsv(`/api/admin/v1/exports/${j.id}/download`);
-                            const url = window.URL.createObjectURL(blob);
-                            const a = document.createElement("a");
-                            a.href = url;
-                            a.download = filename;
-                            document.body.appendChild(a);
-                            a.click();
-                            a.remove();
-                            window.URL.revokeObjectURL(url);
+                            triggerBrowserDownload(blob, filename);
                           } catch (e) {
                             setErr(e as UiError);
                           }
                         }}
                       >
-                        Download
+                        Download CSV
                       </Button>
                     </>
                   }
                 >
                   <TableCell>
-                    <div className="lr-mono" style={{ fontSize: "12px" }}>{j.id}</div>
+                    <div className="lr-mono" style={{ fontSize: "12px" }}>
+                      {j.id}
+                    </div>
                     <div className="lr-meta" style={{ marginTop: 6 }}>
                       type: {j.type} · {filterSummary}
                     </div>
