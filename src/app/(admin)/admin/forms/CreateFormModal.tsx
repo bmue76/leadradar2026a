@@ -6,7 +6,6 @@ import { adminFetchJson } from "../_lib/adminFetch";
 
 type FetchErr = { ok: false; code: string; message: string; traceId?: string; status?: number };
 type FetchOk<T> = { ok: true; data: T; traceId?: string };
-type FetchRes<T> = FetchOk<T> | FetchErr;
 
 type TemplateListItem = {
   id: string;
