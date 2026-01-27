@@ -100,20 +100,37 @@ async function apiDownloadCsv(url: string): Promise<{ blob: Blob; filename: stri
   return { blob, filename };
 }
 
-function triggerBrowserDownload(blob: Blob, filename: string) {
-  const url = window.URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  window.URL.revokeObjectURL(url);
-}
-
 function IconArrowDown() {
   return (
     <svg viewBox="0 0 24 24" width="44" height="44" fill="none" aria-hidden="true">
+      <path
+        d="M12 3.5v10.8m0 0 3.6-3.6M12 14.3 8.4 10.7M5.5 19.5h13"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function IconRefreshSmall() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true">
+      <path
+        d="M20 12a8 8 0 0 1-14.7 4.2M4 12a8 8 0 0 1 14.7-4.2M19 5v4h-4M5 19v-4h4"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function IconDownloadSmall() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true">
       <path
         d="M12 3.5v10.8m0 0 3.6-3.6M12 14.3 8.4 10.7M5.5 19.5h13"
         stroke="currentColor"
@@ -189,6 +206,22 @@ export default function ExportsClient() {
   const pollRef = useRef<number | null>(null);
   const pollingJobId = useRef<string | null>(null);
 
+  // Auto-download only for the *just created* export job.
+  const autoDownloadJobIdRef = useRef<string | null>(null);
+  const autoDownloadInFlightRef = useRef<boolean>(false);
+
+  const downloadJobCsv = useCallback(async (jobId: string) => {
+    const { blob, filename } = await apiDownloadCsv(`/api/admin/v1/exports/${jobId}/download`);
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  }, []);
+
   const loadAll = useCallback(async () => {
     setLoading(true);
     setErr(null);
@@ -210,40 +243,61 @@ export default function ExportsClient() {
     }
   }, []);
 
-  const startPolling = useCallback((jobId: string) => {
-    if (pollRef.current) window.clearInterval(pollRef.current);
-    pollingJobId.current = jobId;
+  const startPolling = useCallback(
+    (jobId: string) => {
+      if (pollRef.current) window.clearInterval(pollRef.current);
+      pollingJobId.current = jobId;
 
-    pollRef.current = window.setInterval(async () => {
-      const id = pollingJobId.current;
-      if (!id) return;
+      pollRef.current = window.setInterval(async () => {
+        const id = pollingJobId.current;
+        if (!id) return;
 
-      try {
-        const res = await apiJson<{ job: ExportJob }>(`/api/admin/v1/exports/${id}`);
-        const job = res.data.job;
+        try {
+          const res = await apiJson<{ job: ExportJob }>(`/api/admin/v1/exports/${id}`);
+          const job = res.data.job;
 
-        setJobs((prev) => {
-          const next = [...prev];
-          const idx = next.findIndex((j) => j.id === job.id);
-          if (idx >= 0) next[idx] = job;
-          else next.unshift(job);
-          next.sort((a, b) => (b.queuedAt || b.updatedAt).localeCompare(a.queuedAt || a.updatedAt));
-          return next;
-        });
+          setJobs((prev) => {
+            const next = [...prev];
+            const idx = next.findIndex((j) => j.id === job.id);
+            if (idx >= 0) next[idx] = job;
+            else next.unshift(job);
+            next.sort((a, b) => (b.queuedAt || b.updatedAt).localeCompare(a.queuedAt || a.updatedAt));
+            return next;
+          });
 
-        if (job.status === "DONE" || job.status === "FAILED") {
+          // Auto-download when the freshly created job finishes.
+          if (
+            job.status === "DONE" &&
+            autoDownloadJobIdRef.current &&
+            job.id === autoDownloadJobIdRef.current &&
+            !autoDownloadInFlightRef.current
+          ) {
+            autoDownloadInFlightRef.current = true;
+            try {
+              await downloadJobCsv(job.id);
+            } catch (e) {
+              setErr(e as UiError);
+            } finally {
+              autoDownloadJobIdRef.current = null;
+              autoDownloadInFlightRef.current = false;
+            }
+          }
+
+          if (job.status === "DONE" || job.status === "FAILED") {
+            if (pollRef.current) window.clearInterval(pollRef.current);
+            pollRef.current = null;
+            pollingJobId.current = null;
+          }
+        } catch (e) {
+          setErr(e as UiError);
           if (pollRef.current) window.clearInterval(pollRef.current);
           pollRef.current = null;
           pollingJobId.current = null;
         }
-      } catch (e) {
-        setErr(e as UiError);
-        if (pollRef.current) window.clearInterval(pollRef.current);
-        pollRef.current = null;
-        pollingJobId.current = null;
-      }
-    }, 1200);
-  }, []);
+      }, 1200);
+    },
+    [downloadJobCsv]
+  );
 
   useEffect(() => {
     void loadAll();
@@ -272,7 +326,7 @@ export default function ExportsClient() {
         <div className="lr-toolbar">
           <div>
             <h1 className="lr-h1">Exports</h1>
-            <p className="lr-muted">Download leads as CSV (with optional filters).</p>
+            <p className="lr-muted">Create CSV exports and download the file.</p>
           </div>
 
           <div className="lr-toolbarRight">
@@ -280,7 +334,7 @@ export default function ExportsClient() {
               Refresh
             </Button>
             <Button variant="primary" onClick={() => setModalOpen(true)} disabled={loading}>
-              Download CSV
+              Create export
             </Button>
           </div>
         </div>
@@ -294,11 +348,11 @@ export default function ExportsClient() {
       ) : jobRows.length === 0 ? (
         <EmptyState
           icon={<IconArrowDown />}
-          title="No export jobs yet."
-          hint="You can download a CSV anytime."
+          title="No exports yet."
+          hint="Create an export to get started."
           cta={
             <Button variant="primary" onClick={() => setModalOpen(true)}>
-              Download CSV
+              Create export
             </Button>
           }
         />
@@ -327,6 +381,9 @@ export default function ExportsClient() {
               if (p.includeDeleted) filters.push("Include deleted");
               const filterSummary = filters.length ? filters.join(" · ") : "All leads";
 
+              const canPoll = j.status !== "DONE" && j.status !== "FAILED";
+              const canDownload = j.status === "DONE";
+
               return (
                 <TableRow
                   key={j.id}
@@ -336,27 +393,33 @@ export default function ExportsClient() {
                         variant="ghost"
                         size="sm"
                         onClick={() => startPolling(j.id)}
-                        disabled={j.status === "DONE" || j.status === "FAILED"}
-                        title="Refresh status"
+                        disabled={!canPoll}
+                        title={canPoll ? "Check the job status now" : "Job is finished"}
                       >
-                        Refresh status
+                        <span className="inline-flex items-center gap-2">
+                          <IconRefreshSmall />
+                          Check status
+                        </span>
                       </Button>
+
                       <Button
                         variant="ghost"
                         size="sm"
-                        disabled={j.status !== "DONE"}
-                        title={j.status === "DONE" ? "Download CSV" : "Wait until job is DONE"}
+                        disabled={!canDownload}
+                        title={canDownload ? "Download CSV" : "Available when status is DONE"}
                         onClick={async () => {
                           setErr(null);
                           try {
-                            const { blob, filename } = await apiDownloadCsv(`/api/admin/v1/exports/${j.id}/download`);
-                            triggerBrowserDownload(blob, filename);
+                            await downloadJobCsv(j.id);
                           } catch (e) {
                             setErr(e as UiError);
                           }
                         }}
                       >
-                        Download CSV
+                        <span className="inline-flex items-center gap-2">
+                          <IconDownloadSmall />
+                          Download CSV
+                        </span>
                       </Button>
                     </>
                   }
@@ -416,6 +479,10 @@ export default function ExportsClient() {
 
               const created = res.data.job;
               setJobs((prev) => [created, ...prev]);
+
+              // enable auto-download for the newly created export
+              autoDownloadJobIdRef.current = created.id;
+
               startPolling(created.id);
             } catch (e) {
               setErr(e as UiError);
