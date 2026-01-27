@@ -4,9 +4,6 @@ import * as React from "react";
 import { Button } from "../_ui/Button";
 import { adminFetchJson } from "../_lib/adminFetch";
 
-type FetchErr = { ok: false; code: string; message: string; traceId?: string; status?: number };
-type FetchOk<T> = { ok: true; data: T; traceId?: string };
-
 type TemplateListItem = {
   id: string;
   name: string;
@@ -57,7 +54,13 @@ function extractCreatedFormId(dto: unknown): string | null {
 
 function normalizeTemplatesPayload(dto: unknown): TemplateListItem[] {
   const arr =
-    Array.isArray(dto) ? dto : isRecord(dto) && Array.isArray(dto.items) ? dto.items : isRecord(dto) && Array.isArray(dto.templates) ? dto.templates : null;
+    Array.isArray(dto)
+      ? dto
+      : isRecord(dto) && Array.isArray(dto.items)
+      ? dto.items
+      : isRecord(dto) && Array.isArray(dto.templates)
+      ? dto.templates
+      : null;
 
   if (!arr) return [];
 
@@ -72,8 +75,7 @@ function normalizeTemplatesPayload(dto: unknown): TemplateListItem[] {
 
     // accept either `fieldsCount` or Prisma `_count.fields`
     const fieldsCount =
-      toNumOrNull(row.fieldsCount) ??
-      (isRecord(row._count) ? toNumOrNull(row._count.fields) : null);
+      toNumOrNull(row.fieldsCount) ?? (isRecord(row._count) ? toNumOrNull(row._count.fields) : null);
 
     out.push({
       id,
