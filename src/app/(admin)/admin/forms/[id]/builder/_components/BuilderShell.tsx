@@ -156,79 +156,79 @@ export default function BuilderShell({ formId }: { formId: string }) {
     [formId]
   );
 
-  async function createFromLibraryItem(opts: {
-    item: LibraryItem;
-    insertIndex: number;
-    currentFields: BuilderField[];
-    openExistingOnDuplicate: boolean;
-  }): Promise<
-    | { ok: true; nextFields: BuilderField[]; created?: BuilderField; duplicateExistingId?: string }
-    | { ok: false; message: string; traceId?: string; status?: number; code?: string }
-  > {
-    const { item, insertIndex, currentFields, openExistingOnDuplicate } = opts;
+  const createFromLibraryItem = React.useCallback(
+    async (opts: {
+      item: LibraryItem;
+      insertIndex: number;
+      currentFields: BuilderField[];
+      openExistingOnDuplicate: boolean;
+    }): Promise<
+      | { ok: true; nextFields: BuilderField[]; created?: BuilderField; duplicateExistingId?: string }
+      | { ok: false; message: string; traceId?: string; status?: number; code?: string }
+    > => {
+      const { item, insertIndex, currentFields, openExistingOnDuplicate } = opts;
 
-    // contact fields: if key already exists -> optionally open existing, else skip
-    if (item.kind === "contact") {
-      const existing = currentFields.find((f) => f.key === item.key);
-      if (existing) {
-        return openExistingOnDuplicate
-          ? { ok: true, nextFields: currentFields, duplicateExistingId: existing.id }
-          : { ok: true, nextFields: currentFields };
-      }
-    }
-
-    const used = new Set(currentFields.map((f) => f.key));
-
-    const keyBase = item.kind === "contact" ? item.key : item.keyBase;
-    const label = item.defaultLabel;
-    const type = item.type;
-
-    const placeholder = item.defaultPlaceholder ?? null;
-    const helpText = item.defaultHelpText ?? null;
-
-    let config: unknown | null | undefined = undefined;
-    if (item.kind !== "contact") {
-      if (item.defaultConfig !== undefined) config = item.defaultConfig as unknown;
-    }
-
-    // ensure unique key
-    let key = uniqKey(keyBase, used);
-
-    // retry on 409 key conflict (race)
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const created = await createField(formId, {
-        key,
-        label,
-        type,
-        required: false,
-        isActive: true,
-        placeholder,
-        helpText,
-        config,
-      });
-
-      if (created.ok) {
-        const nextFields = insertAt(currentFields, insertIndex, created.data);
-        return { ok: true, nextFields, created: created.data };
+      if (item.kind === "contact") {
+        const existing = currentFields.find((f) => f.key === item.key);
+        if (existing) {
+          return openExistingOnDuplicate
+            ? { ok: true, nextFields: currentFields, duplicateExistingId: existing.id }
+            : { ok: true, nextFields: currentFields };
+        }
       }
 
-      if ((created.status === 409 || created.code === "KEY_CONFLICT") && attempt < 4) {
-        used.add(key);
-        key = uniqKey(keyBase, used);
-        continue;
+      const used = new Set(currentFields.map((f) => f.key));
+
+      const keyBase = item.kind === "contact" ? item.key : item.keyBase;
+      const label = item.defaultLabel;
+      const type = item.type;
+
+      const placeholder = item.defaultPlaceholder ?? null;
+      const helpText = item.defaultHelpText ?? null;
+
+      let config: unknown | null | undefined = undefined;
+      if (item.kind !== "contact") {
+        if (item.defaultConfig !== undefined) config = item.defaultConfig as unknown;
       }
 
-      return {
-        ok: false,
-        message: created.message || "Couldn’t create field.",
-        traceId: created.traceId,
-        status: created.status,
-        code: created.code,
-      };
-    }
+      let key = uniqKey(keyBase, used);
 
-    return { ok: false, message: "Couldn’t create field." };
-  }
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const created = await createField(formId, {
+          key,
+          label,
+          type,
+          required: false,
+          isActive: true,
+          placeholder,
+          helpText,
+          config,
+        });
+
+        if (created.ok) {
+          const nextFields = insertAt(currentFields, insertIndex, created.data);
+          return { ok: true, nextFields, created: created.data };
+        }
+
+        if ((created.status === 409 || created.code === "KEY_CONFLICT") && attempt < 4) {
+          used.add(key);
+          key = uniqKey(keyBase, used);
+          continue;
+        }
+
+        return {
+          ok: false,
+          message: created.message || "Couldn’t create field.",
+          traceId: created.traceId,
+          status: created.status,
+          code: created.code,
+        };
+      }
+
+      return { ok: false, message: "Couldn’t create field." };
+    },
+    [formId]
+  );
 
   const addManyFromLibrary = React.useCallback(
     async (items: LibraryItem[], insertIndex: number) => {
@@ -244,7 +244,7 @@ export default function BuilderShell({ formId }: { formId: string }) {
           item,
           insertIndex: insertAtIdx,
           currentFields: next,
-          openExistingOnDuplicate: items.length === 1, // only for single add: open existing
+          openExistingOnDuplicate: items.length === 1,
         });
 
         if (!r.ok) {
@@ -283,7 +283,7 @@ export default function BuilderShell({ formId }: { formId: string }) {
       await persistOrder(next);
       showFlash(createdCount === 1 ? "Field added." : `${createdCount} fields added.`);
     },
-    [fields, persistOrder, showFlash, formId]
+    [fields, createFromLibraryItem, persistOrder, showFlash]
   );
 
   const addFromLibrary = React.useCallback(
@@ -442,7 +442,6 @@ export default function BuilderShell({ formId }: { formId: string }) {
       const activeId = idToString(ev.active?.id);
       const overId = idToString(ev.over?.id);
 
-      // add from library
       const data = ev.active.data.current as ActiveData | undefined;
       if (data?.kind === "library") {
         if (!overId) {
@@ -461,7 +460,6 @@ export default function BuilderShell({ formId }: { formId: string }) {
         return;
       }
 
-      // reorder fields
       if (activeId && overId && activeId !== overId) {
         const aIdx = fields.findIndex((f) => f.id === activeId);
         const oIdx = fields.findIndex((f) => f.id === overId);

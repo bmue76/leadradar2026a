@@ -137,6 +137,11 @@ function pickContactItems(all: LibraryItem[], keys: readonly string[]): LibraryI
   return out;
 }
 
+function summarize(items: LibraryItem[]): string {
+  // show titles in the defined order
+  return items.map((x) => x.title).join(" · ");
+}
+
 export default function FieldLibrary(props: {
   items: LibraryItem[];
   onQuickAdd: (it: LibraryItem) => void;
@@ -172,6 +177,7 @@ export default function FieldLibrary(props: {
           >
             ➕ Add contact essentials ({essentials.length})
           </ActionButton>
+          <div className="px-1 text-xs text-slate-500">Includes: {summarize(essentials)}</div>
 
           <ActionButton
             onClick={() => props.onQuickAddMany?.(fullBlock)}
@@ -179,10 +185,9 @@ export default function FieldLibrary(props: {
           >
             ➕ Add full contact block ({fullBlock.length})
           </ActionButton>
+          <div className="px-1 text-xs text-slate-500">Includes: {summarize(fullBlock)}</div>
 
-          {!canBatch ? (
-            <div className="text-xs text-slate-500">Batch add is not available.</div>
-          ) : null}
+          {!canBatch ? <div className="text-xs text-slate-500">Batch add is not available.</div> : null}
 
           <div className="h-px w-full bg-slate-100" />
         </div>
@@ -194,9 +199,7 @@ export default function FieldLibrary(props: {
         ))}
       </div>
 
-      <div className="mt-3 text-xs text-slate-500">
-        Tip: drag onto the canvas or click to add. Contact fields are de-duped by key.
-      </div>
+      <div className="mt-3 text-xs text-slate-500">Tip: drag onto the canvas or click to add. Contact fields are de-duped by key.</div>
     </div>
   );
 }
