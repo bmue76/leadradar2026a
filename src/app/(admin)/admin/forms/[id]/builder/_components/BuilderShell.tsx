@@ -29,11 +29,14 @@ import {
 import FieldLibrary, { LIB_ITEMS } from "./FieldLibrary";
 import Canvas from "./Canvas";
 import FormSettingsPanel from "./FormSettingsPanel";
+import FormPreview from "./FormPreview";
 
 type LoadState =
   | { status: "loading" }
   | { status: "ready" }
   | { status: "error"; message: string; traceId: string };
+
+type ViewMode = "build" | "preview";
 
 function safeTraceId(v: unknown): string {
   if (typeof v === "string" && v.trim()) return v.trim();
@@ -78,6 +81,21 @@ function idToString(id: UniqueIdentifier | null | undefined): string {
   return String(id);
 }
 
+function SegButton(props: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      className={[
+        "h-9 rounded-lg px-3 text-sm font-semibold",
+        props.active ? "bg-slate-900 text-white" : "bg-white text-slate-700 hover:bg-slate-50",
+      ].join(" ")}
+    >
+      {props.children}
+    </button>
+  );
+}
+
 export default function BuilderShell({ formId }: { formId: string }) {
   const [state, setState] = React.useState<LoadState>({ status: "loading" });
 
@@ -92,6 +110,8 @@ export default function BuilderShell({ formId }: { formId: string }) {
   const [flash, setFlash] = React.useState<string | null>(null);
   const [activeDrag, setActiveDrag] = React.useState<ActiveDrag>({ kind: "none" });
 
+  const [viewMode, setViewMode] = React.useState<ViewMode>("build");
+
   const reqSeq = React.useRef(0);
   const saveSeq = React.useRef(0);
 
@@ -99,6 +119,13 @@ export default function BuilderShell({ formId }: { formId: string }) {
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
+
+  React.useEffect(() => {
+    // When switching forms, always start in build mode.
+    setViewMode("build");
+    setActiveDrag({ kind: "none" });
+    setOpenFieldId(null);
+  }, [formId]);
 
   const load = React.useCallback(async () => {
     const seq = ++reqSeq.current;
@@ -505,6 +532,62 @@ export default function BuilderShell({ formId }: { formId: string }) {
       ? fields.find((f) => f.id === activeDrag.fieldId)?.label ?? "Field"
       : null;
 
+  const buildLayout = (
+    <div className="flex gap-3" style={{ minHeight: "70vh" }}>
+      <div className="w-[320px] shrink-0">
+        <FieldLibrary
+          items={LIB_ITEMS}
+          onQuickAdd={(it) => void addFromLibrary(it, fields.length)}
+          onQuickAddMany={(many) => void addManyFromLibrary(many, fields.length)}
+        />
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <Canvas
+          formId={formId}
+          fields={fields}
+          openFieldId={openFieldId}
+          onToggleOpen={onToggleOpen}
+          onDuplicate={(id) => void onDuplicate(id)}
+          onDelete={(id) => void onDelete(id)}
+          onPatchField={(id, patch) => void onPatchField(id, patch)}
+        />
+      </div>
+
+      <div className="w-[340px] shrink-0">
+        <FormSettingsPanel
+          formId={formId}
+          name={formName}
+          description={formDescription}
+          status={formStatus}
+          config={formConfig}
+          onPatchBasics={(b) => void onPatchFormBasics(b)}
+          onPatchStatus={(s) => void onPatchFormStatus(s)}
+        />
+      </div>
+    </div>
+  );
+
+  const previewLayout = (
+    <div className="flex gap-3" style={{ minHeight: "70vh" }}>
+      <div className="min-w-0 flex-1">
+        <FormPreview name={formName} description={formDescription} fields={fields} />
+      </div>
+
+      <div className="w-[340px] shrink-0">
+        <FormSettingsPanel
+          formId={formId}
+          name={formName}
+          description={formDescription}
+          status={formStatus}
+          config={formConfig}
+          onPatchBasics={(b) => void onPatchFormBasics(b)}
+          onPatchStatus={(s) => void onPatchFormStatus(s)}
+        />
+      </div>
+    </div>
+  );
+
   return (
     <div className="lr-page" style={{ gap: 12 }}>
       {flash ? (
@@ -513,55 +596,58 @@ export default function BuilderShell({ formId }: { formId: string }) {
         </div>
       ) : null}
 
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragStart={onDragStart}
-        onDragCancel={onDragCancel}
-        onDragEnd={onDragEnd}
-      >
-        <div className="flex gap-3" style={{ minHeight: "70vh" }}>
-          <div className="w-[320px] shrink-0">
-            <FieldLibrary
-              items={LIB_ITEMS}
-              onQuickAdd={(it) => void addFromLibrary(it, fields.length)}
-              onQuickAddMany={(many) => void addManyFromLibrary(many, fields.length)}
-            />
-          </div>
-
-          <div className="min-w-0 flex-1">
-            <Canvas
-              formId={formId}
-              fields={fields}
-              openFieldId={openFieldId}
-              onToggleOpen={onToggleOpen}
-              onDuplicate={(id) => void onDuplicate(id)}
-              onDelete={(id) => void onDelete(id)}
-              onPatchField={(id, patch) => void onPatchField(id, patch)}
-            />
-          </div>
-
-          <div className="w-[340px] shrink-0">
-            <FormSettingsPanel
-              formId={formId}
-              name={formName}
-              description={formDescription}
-              status={formStatus}
-              config={formConfig}
-              onPatchBasics={(b) => void onPatchFormBasics(b)}
-              onPatchStatus={(s) => void onPatchFormStatus(s)}
-            />
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-bold text-slate-900 truncate">{formName || "Builder"}</div>
+          <div className="mt-0.5 text-xs text-slate-500">
+            Mode: <span className="font-semibold text-slate-700">{viewMode === "build" ? "Build" : "Preview"}</span>
           </div>
         </div>
 
-        <DragOverlay>
-          {draggingLabel ? (
-            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold">
-              {draggingLabel}
-            </div>
-          ) : null}
-        </DragOverlay>
-      </DndContext>
+        <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-1">
+          <SegButton
+            active={viewMode === "build"}
+            onClick={() => {
+              setViewMode("build");
+              setActiveDrag({ kind: "none" });
+            }}
+          >
+            Build
+          </SegButton>
+          <SegButton
+            active={viewMode === "preview"}
+            onClick={() => {
+              setViewMode("preview");
+              setActiveDrag({ kind: "none" });
+              setOpenFieldId(null);
+            }}
+          >
+            Preview
+          </SegButton>
+        </div>
+      </div>
+
+      {viewMode === "build" ? (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragStart={onDragStart}
+          onDragCancel={onDragCancel}
+          onDragEnd={onDragEnd}
+        >
+          {buildLayout}
+
+          <DragOverlay>
+            {draggingLabel ? (
+              <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold">
+                {draggingLabel}
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
+      ) : (
+        previewLayout
+      )}
     </div>
   );
 }
