@@ -11,7 +11,7 @@ export const runtime = "nodejs";
 
 const DeleteLeadBodySchema = z.object({
   reason: z
-    .preprocess((v) => (typeof v === "string" ? v.trim() : v), z.string().min(1).max(256))
+    .preprocess((v: unknown) => (typeof v === "string" ? v.trim() : v), z.string().min(1).max(256))
     .optional(),
 });
 
