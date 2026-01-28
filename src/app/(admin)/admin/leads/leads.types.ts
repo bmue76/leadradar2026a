@@ -9,6 +9,7 @@ export type ApiResponse<T> = ApiOk<T> | ApiErr;
 export type AdminLeadListItem = {
   id: string;
   formId: string;
+  eventId?: string | null; // optional for list views / filters
   capturedAt: string; // ISO
   isDeleted: boolean;
   preview?: string | null; // optional server-provided
@@ -35,24 +36,38 @@ export type AdminFormsListData = {
   forms?: AdminFormListItem[];
 };
 
+export type AdminLeadFormRef = {
+  id: string;
+  name: string;
+};
+
 export type AdminLeadAttachment = {
   id: string;
   type: string; // IMAGE|PDF|OTHER (contract-driven)
   filename: string;
   mimeType?: string | null;
   sizeBytes?: number | null;
-  createdAt?: string;
+  createdAt?: string | null;
   storageKey?: string | null;
 };
 
 export type AdminLeadDetail = {
   id: string;
   formId: string;
+  eventId?: string | null;
+
   capturedAt: string; // ISO
+  createdAt?: string | null; // API currently mirrors capturedAt
+  updatedAt?: string | null; // API currently mirrors capturedAt
+
   isDeleted: boolean;
   deletedAt?: string | null;
   deletedReason?: string | null;
+  deletedByUserId?: string | null;
+
   values: Record<string, unknown> | null;
   meta?: Record<string, unknown> | null;
+
+  form?: AdminLeadFormRef | null;
   attachments?: AdminLeadAttachment[];
 };

@@ -1,13 +1,38 @@
 # LeadRadar2026A – Admin UI Screens
 
-Stand: 2026-01-13  
-Design: Apple-clean (reduziert, robust, klare States) — Notion-Elemente nur wo nötig.
+Stand: 2026-01-27  
+Design: Apple-clean (reduziert, robust, klare States).  
+Referenzen: **SumUp (Listen/Filter)** · **Square (Dashboard/Progress/Akzent)** · **Jotform (Builder Mode)**.
+
+---
+
+## Admin UI Design-Leitplanken (v1)
+
+**One-liner (verbindlich):**  
+LeadRadar Admin UI orientiert sich strukturell an SumUp, im Dashboard an Square und im Formbuilder an Jotform – mit maximaler Ruhe, wenig Farbe und klarer Trennung von Navigation und Workspace.
+
+### Non-negotiables
+- **Listen first, Details second**: primär Listen/Tables; Details per Klick (Detailseite oder Drawer).
+- **Navigation ≠ Workspace**:
+  - Sidebar navigiert zwischen Domänen.
+  - Workspaces (Editoren) dürfen eigenen Modus haben (Builder Mode).
+- **Farbe ist funktional**:
+  - 1 Akzentfarbe (Tenant-Accent möglich), nur für Primary CTA, aktive Navigation, Selection/Progress.
+  - Keine bunten Icons/Flächen ohne Bedeutung.
+- **Ruhe schlägt Dekoration**:
+  - Weißraum statt Rahmen/Schatten.
+  - Linien nur dort, wo sie Orientierung schaffen.
+  - States sind Pflicht: Loading (Skeleton), Empty (1 Satz + 1 CTA), Error (TraceId + Retry).
+
+### Standard Screen Pattern (immer gleich)
+1) Title + 1 Zeile Hilfe  
+2) Toolbar: Search, Filter, Clear, Refresh  
+3) List/Table: Finder-like, ruhige Rows, Actions nur bei Hover/Focus  
+4) Detail: Seite oder Drawer (kontextabhängig)
 
 ---
 
 ## Design System light (TP 2.2)
-
-Ziel: Konsistente, ruhige Admin-UI ohne neue Features.
 
 Quelle (Spec):
 - `docs/LeadRadar2026A/06_UX_SPEC.md`
@@ -16,7 +41,7 @@ Technik:
 - Tokens: `src/app/(admin)/admin/_styles/tokens.css`
 - UI-Basics: `src/app/(admin)/admin/_ui/`
   - `Table` (Finder-like: ohne Gridlines/Rahmen, Row Hover, Actions nur bei Hover/Focus)
-  - `Button` (Primary/Secondary/Ghost; Primary = LeadRadar Rot)
+  - `Button` (Primary/Secondary/Ghost; Primary = Tenant Accent / LeadRadar default)
   - `Chip` (ruhige Status-Chips)
   - `EmptyState` (Icon + 1 Satz + 1 CTA)
 
@@ -28,17 +53,140 @@ Global Admin-Prinzipien:
 
 ---
 
+## Sidebar (Backend)
+
+Ziel: ruhig, konsistent, nicht dominant.
+
+Empfohlene Gruppen (MVP):
+- Home: Dashboard
+- Setup: Templates, Forms
+- Operate: Leads, Exports, Recipients
+- Billing: Packages, Orders, Licenses
+- Admin: Users, Settings
+
+Phase 2 (visible, disabled):
+- Analytics: KPIs
+- Ops & Security: Audit, Support
+- Offline: Sync
+
+---
+
+## Screen: Dashboard (`/admin/dashboard`) — Square-Style (Orientierung)
+
+Ziel:
+- Orientierung, kein KPI-Monster
+- “Readiness” sichtbar machen
+
+Inhalt (MVP):
+- Setup/Readiness Cards:
+  - “Form active”
+  - “Active event”
+  - “License valid”
+  - “Devices online”
+- Kleine Kennzahlen (Sekundär): Leads heute, pending uploads
+- Quick actions: Create form, Open active event, Create export
+
+States:
+- Loading skeleton
+- Empty: “No data yet.” + CTA
+- Error: TraceId + Retry
+
+---
+
+## Screen: Templates (`/admin/templates`) — TP 4.x
+
+Ziel:
+- Templates browsen/previewen
+- “Create form from template”
+
+UX Notes:
+- List/Table, Search, Category Filter
+- Preview (Drawer oder separate Detailseite)
+- Primary CTA: “Create from template”
+
+---
+
 ## Screen: Forms (`/admin/forms`) — TP 1.3 + TP 2.2
 
 Ziel:
 - Forms auflisten, filtern, öffnen
 - Primary CTA: Form erstellen
 
-UX Notes:
+UX Notes (Soll-Zustand):
 - Toolbar: Search + Status Filter + Clear + Refresh
-- Table: Finder-like, Actions (Open) nur bei Hover/Focus
+- Table: Finder-like, Actions (Open/Builder/Duplicate) nur bei Hover/Focus
+- Row: Name, Description (optional), Status Chip, Updated
 - Empty: “No forms yet.” + Primary CTA
 - Error: “Couldn’t load forms.” + Trace + Retry
+
+### Challenge: aktueller `/admin/forms` Screen (gegen Leitplanken)
+
+Basierend auf dem aktuellen Screenshot:
+- **Doppelte Überschrift** (“Forms” im Header + nochmals “Forms” als H1) → **reduzieren auf 1**.
+- **Template-Controls dominieren** (Reload templates / Choose template / Create from template) → gehören als **sekundäre Aktion** in die Toolbar oder in ein **„Create“ Dropdown/Modal**, nicht als eigener “Block” oben.
+- **Zu viel vertikale Fläche** für “Meta-Header” (Demo Admin, Logo, etc.) → Header sollte ruhig bleiben; Inhalt soll dominieren.
+- **Liste wirkt wie Card-Stack** → besser: **Finder-like Table** (SumUp-Pattern), damit Scanbarkeit steigt.
+- **Primary CTA** “Create form” ok, aber: nur 1 Primary CTA pro Screen → “Create from template” sollte Secondary/Ghost oder in “Create” Menü.
+
+Konkreter Soll-Aufbau:
+1) Title + 1 Satz Hilfe (einmal)
+2) Toolbar:
+   - Search
+   - Status Filter
+   - (Optional) Template Dropdown + “Create from template” (Secondary)
+   - Refresh (Ghost)
+   - Primary: “Create form”
+3) Table/List:
+   - Name
+   - Status chip
+   - Updated
+   - Actions nur bei Hover/Focus
+
+---
+
+## Screen: Form Overview (`/admin/forms/:id`) — ruhig, verwaltend
+
+Ziel:
+- Meta-Infos (Name, Beschreibung, Status)
+- Links in den Builder
+- Keine Feld-Bearbeitung “zwischen Tür und Angel”
+
+UX Notes:
+- Primary CTA: “Open Builder”
+- Secondary: Duplicate, Delete
+- Status Toggle sichtbar (DRAFT/ACTIVE/ARCHIVED)
+
+---
+
+## Screen: Form Builder (`/admin/forms/:id/builder`) — Builder Mode (Jotform-lite)
+
+Ziel:
+- Benutzerfreundliches Drag & Drop Formbuilding (Canvas-first)
+
+Verbindliches Konzept:
+- **Builder Mode** = eigener Arbeitsmodus
+- Globale Sidebar im Builder:
+  - minimiert (Icons only) ODER gedimmt
+- Workspace Layout:
+  1) Feldbibliothek (links)
+  2) Canvas (mitte) – Single Source of Truth
+  3) Properties (rechts) – kontextabhängig
+
+MVP Features:
+- Drag & Drop: Add aus Bibliothek + Reorder im Canvas
+- Drop-Indicator sichtbar
+- Select Feld → Properties rechts
+- Actions am Feld (ruhig): Duplicate / Delete / Active toggle
+
+Nicht im MVP:
+- Mehrspaltig
+- Pages/Steps
+- Conditional Logic
+- Theme Builder
+
+OCR-Felder:
+- als Systemfelder kennzeichnen
+- Policy: nicht frei löschbar (ggf. label/required eingeschränkt)
 
 ---
 
@@ -64,7 +212,6 @@ Sektionen:
 4) Attachments (TP 3.5)
 
 #### Attachments Section (TP 3.5)
-
 - Zeigt Liste von Attachments (filename, type, mimeType, size)
 - Für `BUSINESS_CARD_IMAGE` und `image/*`:
   - Preview/Thumbnail via `?inline=1` Download-Endpoint
@@ -114,6 +261,34 @@ UX Notes:
 
 ---
 
+## Screen: Recipients (`/admin/recipients`) — MVP
+
+Ziel:
+- Recipient Lists + Entries verwalten (für Export/Forwarding)
+
+UX Notes:
+- List der Listen (Name, count, updated)
+- Detailseite/List Drawer für Entries
+- Primary CTA: “Create list”
+
+---
+
+## Screen: Billing – Packages/Orders/Licenses (`/admin/billing/*`) — MVP
+
+Ziel:
+- Kauf-/Lizenz-Workflow administrierbar machen (MVP: DEV mark-paid; später Stripe)
+
+Screens:
+- `/admin/billing/packages` – Pakete (30/365), Auswahl + Buy
+- `/admin/billing/orders` – Orders, pending/paid, mark-paid (DEV)
+- `/admin/billing/licenses` – License Keys, expiresAt, device binding, revoke
+
+UX Notes:
+- Tabellen/Listen, Status Chips, klare Primary CTA pro Screen
+- Keine “Payment UI” im MVP, nur Workflow-Transparenz
+
+---
+
 ## Screen: Events (`/admin/events`) — TP 3.3 + TP 3.7 + TP 3.8
 
 Ziel:
@@ -154,7 +329,7 @@ TP 3.7 Guardrails (UX):
 - Wenn versucht wird, ein nicht-ACTIVE Event zu binden: API liefert 409 `EVENT_NOT_ACTIVE`.
 
 TP 3.9 Konsistenz: Active Event Single Source + Hint States
-- Mobile Ops verwendet **nicht** mehr eine Event-Liste, sondern **/api/admin/v1/events/active** als Single Source.
+- Mobile Ops verwendet nicht mehr eine Event-Liste, sondern `/api/admin/v1/events/active` als Single Source.
 - Active Event “Dropdown” ist effektiv 2 Optionen:
   - “Kein Event” → setzt `activeEventId = null`
   - “<Aktives Event>” → setzt `activeEventId = <activeEvent.id>`
@@ -165,3 +340,29 @@ TP 3.9 Konsistenz: Active Event Single Source + Hint States
 - Edge Case (Ops Hint):
   - Wenn ein Device noch auf ein nicht-aktives Event gebunden ist, wird dies als Warn-Option angezeigt:
     - “⚠︎ bound to non-ACTIVE event (evt_…)”
+
+---
+
+## Screen: Users (`/admin/users`) — MVP
+
+Ziel:
+- Tenant-User anzeigen/rollenbasiert verwalten (Owner/Admin minimal)
+
+UX Notes:
+- Liste + Detail (Drawer)
+- Primary CTA: “Invite user” (später), im MVP ggf. read-only
+
+---
+
+## Screen: Settings (`/admin/settings`) — MVP
+
+Ziel:
+- Tenant Settings bündeln: Branding, Limits, Security, Mobile Hinweise
+
+Empfohlene Sektionen:
+- General (Tenant Name, Slug read-only)
+- Branding (Accent color, Logo)
+- Data/Retention (Retention days, Export TTL)
+- Mobile (Info, Links zu Mobile Ops)
+- Security (Owner-only, audit hooks später)
+
