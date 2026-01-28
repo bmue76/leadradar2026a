@@ -1,3 +1,4 @@
+// src/app/(admin)/admin/leads/LeadDetailDrawer.tsx
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -267,6 +268,26 @@ function sanitizeDraft(d: OcrContact): OcrContact {
   };
 }
 
+function sameOcrContact(a: OcrContact | null, b: OcrContact | null): boolean {
+  const aa = a ?? {};
+  const bb = b ?? {};
+  const keys: Array<keyof OcrContact> = [
+    "firstName",
+    "lastName",
+    "email",
+    "phone",
+    "mobile",
+    "company",
+    "title",
+    "website",
+    "street",
+    "zip",
+    "city",
+    "country",
+  ];
+  return keys.every((k) => (aa[k] ?? null) === (bb[k] ?? null));
+}
+
 export default function LeadDetailDrawer(props: {
   open: boolean;
   leadId: string | null;
@@ -287,6 +308,8 @@ export default function LeadDetailDrawer(props: {
   const [ocrPanel, setOcrPanel] = useState<OcrPanelData>({ attachment: null, ocr: null });
   const [ocrTraceId, setOcrTraceId] = useState<string | null>(null);
   const [ocrErrorMessage, setOcrErrorMessage] = useState<string>("");
+  const [ocrBusySave, setOcrBusySave] = useState<boolean>(false);
+  const [ocrBusyApply, setOcrBusyApply] = useState<boolean>(false);
 
   const [correctionDraft, setCorrectionDraft] = useState<OcrContact>({
     firstName: null,
@@ -414,33 +437,33 @@ export default function LeadDetailDrawer(props: {
     [leadId, resetOcrErrors]
   );
 
+  // Load lead detail when drawer opens or leadId changes
   useEffect(() => {
     if (!open) return;
-    const t = setTimeout(() => {
-      void loadDetail();
-    }, 0);
-    return () => clearTimeout(t);
-  }, [open, loadDetail]);
+    if (!leadId) return;
+    void loadDetail();
+  }, [open, leadId, loadDetail]);
 
+  // Load OCR once lead is loaded (and attachment available)
   useEffect(() => {
     if (!open) return;
     if (!leadId) return;
     if (!lead) return;
 
+    resetOcrErrors();
+    setRawExpanded(false);
+
     const fallback = businessCardAttachment;
     if (!fallback) {
-      const t = setTimeout(() => {
-        setTimeout(() => {
-        setOcrPanel({ attachment: null, ocr: null });
-        setOcrState("idle");
-      }, 0);
-      }, 0);
-      return () => clearTimeout(t);
+      setOcrPanel({ attachment: null, ocr: null });
+      setOcrState("idle");
+      return;
     }
 
-    setTimeout(() => { void loadOcr(fallback); }, 0);  }, [open, leadId, lead, businessCardAttachment, loadOcr]);
+    void loadOcr(fallback);
+  }, [open, leadId, lead, businessCardAttachment, loadOcr, resetOcrErrors]);
 
-const doDelete = useCallback(async () => {
+  const doDelete = useCallback(async () => {
     if (!leadId) return;
     const ok = window.confirm("Soft-delete this lead? (You can restore only if restore is enabled.)");
     if (!ok) return;
@@ -497,6 +520,17 @@ const doDelete = useCallback(async () => {
     }
   }, [leadId, loadDetail, onMutated, resetLocalErrors]);
 
+  const effectiveContact = useMemo(() => {
+    const ocr = ocrPanel.ocr;
+    return (ocr?.correctedContact ?? ocr?.parsedContact ?? null) as OcrContact | null;
+  }, [ocrPanel.ocr]);
+
+  const isDraftDirty = useMemo(() => {
+    const base = sanitizeDraft(effectiveContact ?? {});
+    const draft = sanitizeDraft(correctionDraft);
+    return !sameOcrContact(base, draft);
+  }, [correctionDraft, effectiveContact]);
+
   const doSaveCorrection = useCallback(async () => {
     if (!leadId) return;
 
@@ -507,6 +541,7 @@ const doDelete = useCallback(async () => {
     }
 
     resetOcrErrors();
+    setOcrBusySave(true);
 
     try {
       const body = {
@@ -529,6 +564,8 @@ const doDelete = useCallback(async () => {
       await loadOcr(businessCardAttachment);
     } catch (e) {
       setOcrErrorMessage(e instanceof Error ? e.message : "Save correction failed.");
+    } finally {
+      setOcrBusySave(false);
     }
   }, [leadId, ocrPanel.ocr?.id, correctionDraft, loadOcr, businessCardAttachment, resetOcrErrors]);
 
@@ -546,6 +583,7 @@ const doDelete = useCallback(async () => {
 
     resetOcrErrors();
     resetLocalErrors();
+    setOcrBusyApply(true);
 
     try {
       const res = (await adminFetchJson<ApiResponse<unknown>>(`/api/admin/v1/leads/${leadId}/ocr/apply`, {
@@ -565,11 +603,13 @@ const doDelete = useCallback(async () => {
       await loadOcr(businessCardAttachment);
     } catch (e) {
       setOcrErrorMessage(e instanceof Error ? e.message : "Apply failed.");
+    } finally {
+      setOcrBusyApply(false);
     }
   }, [leadId, ocrPanel.ocr?.id, onMutated, loadDetail, loadOcr, businessCardAttachment, resetOcrErrors, resetLocalErrors]);
 
   const doResetDraft = useCallback(() => {
-    const effective = ocrPanel.ocr?.correctedContact ?? ocrPanel.ocr?.parsedContact ?? null;
+    const effective = effectiveContact;
     if (effective) setCorrectionDraft({ ...effective });
     else {
       setCorrectionDraft({
@@ -587,7 +627,7 @@ const doDelete = useCallback(async () => {
         country: null,
       });
     }
-  }, [ocrPanel.ocr?.correctedContact, ocrPanel.ocr?.parsedContact]);
+  }, [effectiveContact]);
 
   if (!open) return null;
 
@@ -613,8 +653,14 @@ const doDelete = useCallback(async () => {
   const ocrHasAttachment = Boolean(ocrPanel.attachment?.id);
   const ocrAttachment = ocrPanel.attachment;
 
-  const inlineUrl = leadId && ocrAttachment?.id ? `/api/admin/v1/leads/${leadId}/attachments/${ocrAttachment.id}/download?disposition=inline` : "#";
-  const downloadUrl = leadId && ocrAttachment?.id ? `/api/admin/v1/leads/${leadId}/attachments/${ocrAttachment.id}/download` : "#";
+  const inlineUrl =
+    leadId && ocrAttachment?.id ? `/api/admin/v1/leads/${leadId}/attachments/${ocrAttachment.id}/download?disposition=inline` : "#";
+  const downloadUrl =
+    leadId && ocrAttachment?.id ? `/api/admin/v1/leads/${leadId}/attachments/${ocrAttachment.id}/download` : "#";
+
+  const canReload = ocrHasAttachment && ocrState !== "loading" && !ocrBusyApply && !ocrBusySave;
+  const canApply = Boolean(ocr?.id) && String(ocr?.status || "").toUpperCase() === "COMPLETED" && !ocrBusyApply && !ocrBusySave;
+  const canSave = Boolean(ocr?.id) && isDraftDirty && !ocrBusyApply && !ocrBusySave;
 
   return (
     <div className="fixed inset-0 z-50">
@@ -786,9 +832,7 @@ const doDelete = useCallback(async () => {
                   ))}
                 </div>
 
-                <div className="mt-3 text-xs text-black/40">
-                  Contact fields are exported as contact_* (stable columns).
-                </div>
+                <div className="mt-3 text-xs text-black/40">Contact fields are exported as contact_* (stable columns).</div>
               </section>
 
               <section className="mt-4 rounded-xl border bg-white p-4">
@@ -799,9 +843,13 @@ const doDelete = useCallback(async () => {
                       <span className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium ${pillClass(ocrPill.kind)}`}>
                         {ocrPill.label}
                       </span>
+                      {ocrState === "loading" ? (
+                        <span className="text-xs text-black/40">Loading…</span>
+                      ) : null}
                     </div>
                     <div className="mt-1 text-xs text-black/50">
-                      engine: {ocr?.engine || "—"} {ocr?.engineVersion ? `· ${ocr.engineVersion}` : ""} {ocr?.mode ? `· ${ocr.mode}` : ""}
+                      engine: {ocr?.engine || "—"} {ocr?.engineVersion ? `· ${ocr.engineVersion}` : ""}{" "}
+                      {ocr?.mode ? `· ${ocr.mode}` : ""}
                       {typeof ocr?.confidence === "number" ? ` · conf ${Math.round(ocr.confidence * 100)}%` : ""}
                     </div>
                   </div>
@@ -811,7 +859,7 @@ const doDelete = useCallback(async () => {
                       type="button"
                       className="rounded-md border px-3 py-1.5 text-sm hover:bg-black/5 disabled:opacity-50"
                       onClick={() => void loadOcr(businessCardAttachment)}
-                      disabled={!ocrHasAttachment || ocrState === "loading"}
+                      disabled={!canReload}
                       title={!ocrHasAttachment ? "No business card attachment available" : "Reload OCR"}
                     >
                       Reload
@@ -819,12 +867,18 @@ const doDelete = useCallback(async () => {
 
                     <button
                       type="button"
-                      className="rounded-md border border-black/10 bg-black text-white px-3 py-1.5 text-sm hover:bg-black/90 disabled:opacity-50"
+                      className="rounded-md border border-black/10 bg-black px-3 py-1.5 text-sm text-white hover:bg-black/90 disabled:opacity-50"
                       onClick={() => void doApplyOcrToContact()}
-                      disabled={!ocr?.id || String(ocr?.status || "").toUpperCase() !== "COMPLETED"}
-                      title={!ocr?.id ? "No OCR result" : String(ocr?.status || "").toUpperCase() !== "COMPLETED" ? "OCR must be completed" : "Apply to lead contact"}
+                      disabled={!canApply}
+                      title={
+                        !ocr?.id
+                          ? "No OCR result"
+                          : String(ocr?.status || "").toUpperCase() !== "COMPLETED"
+                            ? "OCR must be completed"
+                            : "Apply to lead contact"
+                      }
                     >
-                      Apply
+                      {ocrBusyApply ? "Applying…" : "Apply"}
                     </button>
                   </div>
                 </div>
@@ -850,6 +904,10 @@ const doDelete = useCallback(async () => {
 
                 {!ocrHasAttachment ? (
                   <div className="text-sm text-black/60">No business card image attachment found for this lead.</div>
+                ) : !ocr?.id ? (
+                  <div className="rounded-lg border bg-black/[0.02] p-3 text-sm text-black/60">
+                    No OCR result yet. Try <span className="font-medium">Reload</span>.
+                  </div>
                 ) : (
                   <div className="grid grid-cols-12 gap-4">
                     <div className="col-span-5">
@@ -882,13 +940,14 @@ const doDelete = useCallback(async () => {
                           <div className="text-xs font-medium text-black/70">Raw text</div>
                           <button
                             type="button"
-                            className="text-xs text-black/60 underline hover:text-black"
+                            className="text-xs text-black/60 underline hover:text-black disabled:opacity-50"
                             onClick={() => setRawExpanded((v) => !v)}
                             disabled={!ocr?.rawText}
                           >
                             {rawExpanded ? "Collapse" : "Expand"}
                           </button>
                         </div>
+
                         {ocrState === "loading" ? (
                           <div className="mt-2 text-sm text-black/50">Loading…</div>
                         ) : ocr?.rawText ? (
@@ -904,7 +963,8 @@ const doDelete = useCallback(async () => {
                         )}
 
                         <div className="mt-2 text-xs text-black/40">
-                          created: {compactDate(ocr?.createdAt)} · updated: {compactDate(ocr?.updatedAt)} · completed: {compactDate(ocr?.completedAt)}
+                          created: {compactDate(ocr?.createdAt)} · updated: {compactDate(ocr?.updatedAt)} · completed:{" "}
+                          {compactDate(ocr?.completedAt)}
                         </div>
                         {ocr?.errorCode || ocr?.errorMessage ? (
                           <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-800">
@@ -920,9 +980,7 @@ const doDelete = useCallback(async () => {
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
                             <div className="text-xs font-medium text-black/70">Parsed / corrected contact</div>
-                            <div className="mt-1 text-xs text-black/50">
-                              Uses correctedContact if present; otherwise parsedContact.
-                            </div>
+                            <div className="mt-1 text-xs text-black/50">Uses correctedContact if present; otherwise parsedContact.</div>
                           </div>
 
                           <div className="flex shrink-0 items-center gap-2">
@@ -930,7 +988,7 @@ const doDelete = useCallback(async () => {
                               type="button"
                               className="rounded-md border px-2 py-1 text-xs hover:bg-black/5 disabled:opacity-50"
                               onClick={() => doResetDraft()}
-                              disabled={!ocr?.id}
+                              disabled={!ocr?.id || ocrBusyApply || ocrBusySave}
                             >
                               Reset
                             </button>
@@ -938,9 +996,10 @@ const doDelete = useCallback(async () => {
                               type="button"
                               className="rounded-md border px-2 py-1 text-xs hover:bg-black/5 disabled:opacity-50"
                               onClick={() => void doSaveCorrection()}
-                              disabled={!ocr?.id}
+                              disabled={!canSave}
+                              title={!isDraftDirty ? "No changes to save" : "Save correction"}
                             >
-                              Save
+                              {ocrBusySave ? "Saving…" : "Save"}
                             </button>
                           </div>
                         </div>
@@ -988,8 +1047,7 @@ const doDelete = useCallback(async () => {
                     {lead.attachments.map((a) => {
                       const item = a as unknown as LeadAttachmentListItem;
                       const img = isImageAttachment(item);
-                      const inlineUrl2 =
-                        leadId ? `/api/admin/v1/leads/${leadId}/attachments/${item.id}/download?disposition=inline` : "#";
+                      const inlineUrl2 = leadId ? `/api/admin/v1/leads/${leadId}/attachments/${item.id}/download?disposition=inline` : "#";
                       const downloadUrl2 = leadId ? `/api/admin/v1/leads/${leadId}/attachments/${item.id}/download` : "#";
 
                       return (
@@ -1028,9 +1086,7 @@ const doDelete = useCallback(async () => {
                         </div>
                       );
                     })}
-                    <div className="text-xs text-black/40">
-                      Thumbnails are served inline. Download uses Content-Disposition: attachment.
-                    </div>
+                    <div className="text-xs text-black/40">Thumbnails are served inline. Download uses Content-Disposition: attachment.</div>
                   </div>
                 ) : (
                   <div className="text-sm text-black/60">No attachments.</div>
