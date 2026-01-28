@@ -211,6 +211,39 @@ Sektionen:
 3) Values: Key/Value Grid
 4) Attachments (TP 3.5)
 
+## B) `docs/LeadRadar2026A/04_ADMIN_UI.md` – Ergänzung (Lead Drawer OCR Panel)
+
+👉 In `04_ADMIN_UI.md` im Bereich **Lead Detail Drawer** (oder direkt unter “Leads”) diesen Block ergänzen:
+
+```md
+### Lead Detail Drawer — OCR Review Panel (TP 4.11)
+
+Ziel:
+- Business-Card OCR direkt im Lead Drawer reviewen
+- Korrektur speichern (correctedContactJson)
+- Apply schreibt contact_* Felder am Lead (stable export columns)
+
+UI Bestandteile:
+- Status Pill: Pending / Completed / Failed
+- Engine Meta: engine, version, mode, confidence
+- Attachment Preview (inline) + Download
+- Raw Text (Expand/Collapse)
+- Editable Contact Form (parsed/corrected)
+  - Reset: setzt Draft auf correctedContact (fallback parsedContact)
+  - Save: PATCH `/api/admin/v1/leads/:id/ocr`
+  - Apply: POST `/api/admin/v1/leads/:id/ocr/apply` (nur wenn status=COMPLETED)
+
+States:
+- Kein Attachment: „No business card image attachment found…“
+- Attachment da, OCR null: „No OCR result yet. Try Reload.“
+- Loading: „Loading…“
+- Error: zeigt traceId + Copy + Retry/Reload
+
+Guardrails:
+- Save nur aktiv, wenn Draft geändert (dirty)
+- Apply nur wenn OCR status=COMPLETED
+- Busy States disable Reload/Save/Apply während Requests laufen
+
 #### Attachments Section (TP 3.5)
 - Zeigt Liste von Attachments (filename, type, mimeType, size)
 - Für `BUSINESS_CARD_IMAGE` und `image/*`:

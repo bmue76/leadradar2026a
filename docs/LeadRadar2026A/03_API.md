@@ -541,3 +541,131 @@ POST /api/admin/v1/exports/csv
 Optional: eventId, formId, date range
 falscher Tenant/ID => 404 NOT_FOUND (leak-safe)
 
+## Admin API v1 (session protected)
+
+Alle Admin Endpoints nutzen Session-Cookie Auth (Login via `/api/auth/*`) und sind **tenant-scoped + leak-safe**:
+- falscher Tenant / fremde ID => **404 NOT_FOUND**
+- Standard Response `{ ok, data|error, traceId }` + Header `x-trace-id`
+
+### Leads – OCR Review (Business Card) — TP 4.11
+
+Ziel:
+- Admin kann OCR Result pro Lead einsehen
+- Parsed Contact korrigieren und speichern (correctedContactJson)
+- Korrigierten (oder parsed) Contact auf `lead.contact_*` anwenden
+
+#### GET /api/admin/v1/leads/:id/ocr
+
+Semantik:
+- Liefert OCR Panel Daten für den Lead:
+  - **attachment**: primär `BUSINESS_CARD_IMAGE`, fallback erstes `image/*`
+  - **ocr**: OCR Result inkl. rawText + parsedContactJson + correctedContactJson
+- Wenn kein Business-Card Attachment vorhanden: `attachment=null`, `ocr=null` (ok=true)
+- Leak-safe: falsche LeadId / fremder Tenant => 404
+
+Errors: 401, 404, 429, 500
+
+Response (200):
+```json
+{
+  "ok": true,
+  "data": {
+    "attachment": {
+      "id": "att_...",
+      "type": "BUSINESS_CARD_IMAGE",
+      "filename": "card.jpg",
+      "mimeType": "image/jpeg",
+      "sizeBytes": 12345
+    },
+    "ocr": {
+      "id": "ocr_...",
+      "status": "COMPLETED",
+      "engine": "MLKIT",
+      "engineVersion": "x.y.z",
+      "mode": "BUSINESS_CARD",
+      "confidence": 0.87,
+      "rawText": "…",
+      "parsedContactJson": { "firstName": "…", "email": "…" },
+      "correctedContactJson": { "firstName": "…", "email": "…" },
+      "createdAt": "…",
+      "updatedAt": "…",
+      "completedAt": "…",
+      "errorCode": null,
+      "errorMessage": null
+    }
+  },
+  "traceId": "..."
+}
+Response (200) wenn kein Attachment:
+
+json
+Code kopieren
+{ "ok": true, "data": { "attachment": null, "ocr": null }, "traceId": "..." }
+PATCH /api/admin/v1/leads/:id/ocr
+Semantik:
+
+Speichert Admin-Korrekturen (correctedContactJson) zu einem OCR Result.
+
+UI nutzt dies für „Save“ im OCR Panel.
+
+Body:
+
+json
+Code kopieren
+{
+  "ocrResultId": "ocr_...",
+  "correctedContact": {
+    "firstName": "…",
+    "lastName": "…",
+    "email": "…",
+    "phone": "…",
+    "mobile": "…",
+    "company": "…",
+    "title": "…",
+    "website": "…",
+    "street": "…",
+    "zip": "…",
+    "city": "…",
+    "country": "…"
+  }
+}
+Hinweise:
+
+leere Strings werden serverseitig als null normalisiert (empfohlen)
+
+correctedAt/correctedByUserId werden gesetzt
+
+Errors: 400, 401, 404, 429, 500
+
+Response (200):
+
+json
+Code kopieren
+{ "ok": true, "data": { "id": "ocr_..." }, "traceId": "..." }
+POST /api/admin/v1/leads/:id/ocr/apply
+Semantik:
+
+Schreibt OCR Contact nach lead.contact_*:
+
+Quelle: correctedContactJson falls vorhanden, sonst parsedContactJson
+
+Setzt Export-Meta:
+
+contactSource = "OCR"
+
+contactUpdatedAt = now
+
+contactOcrResultId = ocrResultId
+
+Body:
+
+json
+Code kopieren
+{ "ocrResultId": "ocr_..." }
+Errors: 400, 401, 404, 409, 429, 500
+
+Response (200):
+
+json
+Code kopieren
+{ "ok": true, "data": { "id": "lead_..." }, "traceId": "..." }
