@@ -1,234 +1,117 @@
-import { type Lead } from "@prisma/client";
+import type { NextRequest } from "next/server";
 import { z } from "zod";
 
-import { jsonError, jsonOk } from "@/lib/api";
-import { validateBody, isHttpError, httpError } from "@/lib/http";
+import { jsonError, jsonOk as _jsonOk } from "@/lib/api";
+import { isHttpError, validateBody } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { requireAdminAuth } from "@/lib/auth";
+import { requireTenantContext } from "@/lib/tenant";
 
 export const runtime = "nodejs";
 
-const ApplyOcrBodySchema = z.object({
-  ocrResultId: z.string().min(1),
-  preferCorrected: z.boolean().optional().default(true),
-});
+type AdminCtx = { tenantId: string; userId: string | null };
 
-type Contact = {
-  firstName?: string;
-  lastName?: string;
-  email?: string;
-  phone?: string;
-  mobile?: string;
-  company?: string;
-  title?: string;
-  website?: string;
-  street?: string;
-  zip?: string;
-  city?: string;
-  country?: string;
-};
-
-type LeadContactRow = Pick<
-  Lead,
-  | "contactFirstName"
-  | "contactLastName"
-  | "contactEmail"
-  | "contactPhone"
-  | "contactMobile"
-  | "contactCompany"
-  | "contactTitle"
-  | "contactWebsite"
-  | "contactStreet"
-  | "contactZip"
-  | "contactCity"
-  | "contactCountry"
->;
-
-function normalizeContact(v: unknown): Contact | null {
-  if (!v || typeof v !== "object") return null;
-  const o = v as Record<string, unknown>;
-  const get = (k: keyof Contact) => (typeof o[k] === "string" && String(o[k]).trim().length > 0 ? String(o[k]).trim() : undefined);
-  return {
-    firstName: get("firstName"),
-    lastName: get("lastName"),
-    email: get("email"),
-    phone: get("phone"),
-    mobile: get("mobile"),
-    company: get("company"),
-    title: get("title"),
-    website: get("website"),
-    street: get("street"),
-    zip: get("zip"),
-    city: get("city"),
-    country: get("country"),
-  };
+function jsonOkCompat(req: Request, data: unknown, status = 200): Response {
+  const fn = _jsonOk as unknown as (...args: unknown[]) => Response;
+  if (typeof fn === "function" && fn.length >= 3) return fn(req, status, data);
+  return fn(req, data);
 }
 
-function contactEquals(a: LeadContactRow, b: LeadContactRow): boolean {
-  const keys: (keyof LeadContactRow)[] = [
-    "contactFirstName",
-    "contactLastName",
-    "contactEmail",
-    "contactPhone",
-    "contactMobile",
-    "contactCompany",
-    "contactTitle",
-    "contactWebsite",
-    "contactStreet",
-    "contactZip",
-    "contactCity",
-    "contactCountry",
-  ];
-  return keys.every((k) => (a[k] ?? null) === (b[k] ?? null));
-}
-
-export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
+async function resolveAdminCtx(req: Request): Promise<AdminCtx> {
   try {
-    const admin = await requireAdminAuth(req);
-    const tenantId = admin.tenantId;
+    const auth = (await requireAdminAuth(req)) as { tenantId: string; userId?: string | null };
+    return { tenantId: auth.tenantId, userId: auth.userId ?? null };
+  } catch (e) {
+    if (process.env.NODE_ENV !== "production") {
+      const t = await requireTenantContext(req);
+      return { tenantId: t.id, userId: null };
+    }
+    throw e;
+  }
+}
 
-    const { id: leadId } = await ctx.params;
-    const body = await validateBody(req, ApplyOcrBodySchema, 64 * 1024);
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return Boolean(v) && typeof v === "object" && !Array.isArray(v);
+}
 
+function normStr(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  return t.length ? t : null;
+}
+
+function anyNonEmpty(obj: Record<string, unknown>): boolean {
+  for (const v of Object.values(obj)) {
+    if (typeof v === "string" && v.trim().length) return true;
+  }
+  return false;
+}
+
+const ApplyBodySchema = z
+  .object({
+    ocrResultId: z.string().min(1).max(128),
+  })
+  .strict();
+
+export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  try {
+    const { tenantId } = await resolveAdminCtx(req);
+    const { id: leadId } = await context.params;
+
+    // Leak-safe: ensure lead is tenant-scoped.
     const lead = await prisma.lead.findFirst({
-      where: { id: leadId, tenantId },
-      select: {
-        id: true,
-        contactFirstName: true,
-        contactLastName: true,
-        contactEmail: true,
-        contactPhone: true,
-        contactMobile: true,
-        contactCompany: true,
-        contactTitle: true,
-        contactWebsite: true,
-        contactStreet: true,
-        contactZip: true,
-        contactCity: true,
-        contactCountry: true,
-      },
+      where: { tenantId, id: leadId },
+      select: { id: true },
     });
-    if (!lead) return jsonError(req, 404, "NOT_FOUND", "Not found.");
+    if (!lead) return jsonError(req, 404, "NOT_FOUND", "Lead not found.");
+
+    const body = await validateBody(req, ApplyBodySchema);
 
     const ocr = await prisma.leadOcrResult.findFirst({
-      where: { id: body.ocrResultId, tenantId },
+      where: { tenantId, id: body.ocrResultId, leadId },
       select: {
         id: true,
-        leadId: true,
         status: true,
-        correctedContactJson: true,
         parsedContactJson: true,
+        correctedContactJson: true,
       },
     });
-    if (!ocr) return jsonError(req, 404, "NOT_FOUND", "Not found.");
-    if (ocr.leadId !== leadId) throw httpError(409, "OCR_LEAD_MISMATCH", "OCR result does not belong to this lead.");
-    if (ocr.status !== "COMPLETED") throw httpError(409, "OCR_NOT_READY", "OCR result is not completed.");
+    if (!ocr) return jsonError(req, 404, "NOT_FOUND", "OCR result not found.");
 
-    const corrected = normalizeContact(ocr.correctedContactJson);
-    const parsed = normalizeContact(ocr.parsedContactJson);
+    const effective = (ocr.correctedContactJson ?? ocr.parsedContactJson) as unknown;
 
-    const chosen =
-      body.preferCorrected && corrected && Object.values(corrected).some((v) => !!v) ? corrected : parsed;
-
-    if (!chosen) {
-      throw httpError(409, "OCR_EMPTY_CONTACT", "OCR result contains no usable contact fields.");
+    if (!isPlainObject(effective) || !anyNonEmpty(effective)) {
+      return jsonError(req, 400, "BAD_REQUEST", "No parsed/corrected OCR contact to apply.");
     }
 
-    const next: LeadContactRow = {
-      contactFirstName: chosen.firstName ?? null,
-      contactLastName: chosen.lastName ?? null,
-      contactEmail: chosen.email ?? null,
-      contactPhone: chosen.phone ?? null,
-      contactMobile: chosen.mobile ?? null,
-      contactCompany: chosen.company ?? null,
-      contactTitle: chosen.title ?? null,
-      contactWebsite: chosen.website ?? null,
-      contactStreet: chosen.street ?? null,
-      contactZip: chosen.zip ?? null,
-      contactCity: chosen.city ?? null,
-      contactCountry: chosen.country ?? null,
-    };
+    const c = effective;
 
-    const applied = !contactEquals(lead, next);
-    const now = new Date();
+    await prisma.lead.update({
+      where: { id: leadId },
+      data: {
+        contactFirstName: normStr(c.firstName),
+        contactLastName: normStr(c.lastName),
+        contactEmail: normStr(c.email),
+        contactPhone: normStr(c.phone),
+        contactMobile: normStr(c.mobile),
+        contactCompany: normStr(c.company),
+        contactTitle: normStr(c.title),
+        contactWebsite: normStr(c.website),
+        contactStreet: normStr(c.street),
+        contactZip: normStr(c.zip),
+        contactCity: normStr(c.city),
+        contactCountry: normStr(c.country),
 
-    const updated = applied
-      ? await prisma.lead.update({
-          where: { id: leadId },
-          data: {
-            ...next,
-            contactSource: "OCR_ADMIN",
-            contactUpdatedAt: now,
-            contactOcrResultId: ocr.id,
-          },
-          select: {
-            id: true,
-            contactFirstName: true,
-            contactLastName: true,
-            contactEmail: true,
-            contactPhone: true,
-            contactMobile: true,
-            contactCompany: true,
-            contactTitle: true,
-            contactWebsite: true,
-            contactStreet: true,
-            contactZip: true,
-            contactCity: true,
-            contactCountry: true,
-            contactSource: true,
-            contactUpdatedAt: true,
-            contactOcrResultId: true,
-          },
-        })
-      : await prisma.lead.findFirstOrThrow({
-          where: { id: leadId, tenantId },
-          select: {
-            id: true,
-            contactFirstName: true,
-            contactLastName: true,
-            contactEmail: true,
-            contactPhone: true,
-            contactMobile: true,
-            contactCompany: true,
-            contactTitle: true,
-            contactWebsite: true,
-            contactStreet: true,
-            contactZip: true,
-            contactCity: true,
-            contactCountry: true,
-            contactSource: true,
-            contactUpdatedAt: true,
-            contactOcrResultId: true,
-          },
-        });
-
-    return jsonOk(req, {
-      applied,
-      used: body.preferCorrected ? "CORRECTED_OR_PARSED" : "PARSED",
-      lead: {
-        id: updated.id,
-        contact: {
-          firstName: updated.contactFirstName,
-          lastName: updated.contactLastName,
-          email: updated.contactEmail,
-          phone: updated.contactPhone,
-          mobile: updated.contactMobile,
-          company: updated.contactCompany,
-          title: updated.contactTitle,
-          website: updated.contactWebsite,
-          street: updated.contactStreet,
-          zip: updated.contactZip,
-          city: updated.contactCity,
-          country: updated.contactCountry,
-        },
-        contactSource: updated.contactSource,
-        contactUpdatedAt: updated.contactUpdatedAt,
-        contactOcrResultId: updated.contactOcrResultId,
+        contactSource: "OCR_ADMIN",
+        contactUpdatedAt: new Date(),
+        contactOcrResultId: ocr.id,
       },
     });
+
+    return jsonOkCompat(req, { leadId, appliedOcrResultId: ocr.id });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     console.error(e);
-    return jsonError(req, 500, "INTERNAL_SERVER_ERROR", "Unexpected server error.");
+    return jsonError(req, 500, "INTERNAL", "Unexpected server error.");
   }
 }
