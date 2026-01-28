@@ -24,7 +24,7 @@ export default function RootLayout() {
           borderTopColor: UI.border,
         },
         tabBarItemStyle: {
-          flex: 1, // verteilt schön über die ganze Breite (kein “linkslastig”)
+          flex: 1,
         },
         tabBarLabelStyle: {
           fontSize: 11,
@@ -69,7 +69,7 @@ export default function RootLayout() {
         }}
       />
 
-      {/* Hidden Routes (must not appear in Tab Bar) */}
+      {/* Hidden Routes */}
       <Tabs.Screen name="provision" options={{ href: null }} />
       <Tabs.Screen name="forms/[id]" options={{ href: null }} />
     </Tabs>

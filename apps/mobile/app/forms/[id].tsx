@@ -214,6 +214,28 @@ function confirmAsync(title: string, message: string, confirmLabel: string): Pro
   });
 }
 
+async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  let t: any;
+  const timeout = new Promise<T>((_, reject) => {
+    t = setTimeout(() => reject(new Error("TIMEOUT")), ms);
+  });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function seemsWeakText(rawText: string): boolean {
+  const t = (rawText || "").trim();
+  if (!t) return true;
+  const alnum = t.replace(/[^a-zA-Z0-9]/g, "");
+  const lines = t.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  if (alnum.length < 28) return true;
+  if (lines.length < 2) return true;
+  return false;
+}
+
 export default function CaptureScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ id?: string }>();
@@ -394,7 +416,8 @@ export default function CaptureScreen() {
       const fileUri = manipulated.uri;
       const fileName = `business-card-${Date.now()}.jpg`;
 
-      const ocr = await recognizeTextFromBusinessCard({ imagePath: fileUri });
+      // IMPORTANT: Timeout, damit es nie endlos hängt (Android/MLKit edge cases)
+      const ocr = await withTimeout(recognizeTextFromBusinessCard({ imagePath: fileUri }), 12000);
       const parsed = parseBusinessCard({ rawText: ocr.rawText, blocks: ocr.blocks });
 
       setCardUri(fileUri);
@@ -407,9 +430,14 @@ export default function CaptureScreen() {
       setContactDraft(parsed.suggestions || {});
       setContactApplied(false);
       setRawExpanded(false);
+
+      if (seemsWeakText(ocr.rawText || "")) {
+        setOcrError("Wir konnten kaum Text erkennen. Bitte näher ran und ruhig halten.");
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "OCR fehlgeschlagen.";
-      setOcrError(msg);
+      if (msg === "TIMEOUT") setOcrError("Das Lesen dauert zu lange. Bitte nochmals versuchen.");
+      else setOcrError(msg || "OCR fehlgeschlagen.");
     } finally {
       setOcrBusy(false);
     }
@@ -419,7 +447,7 @@ export default function CaptureScreen() {
     const next = applyContactToValues(fields, values, contactDraft);
     setValues(next);
     setContactApplied(true);
-    Alert.alert("Übernommen", "Kontaktvorschläge wurden in das Formular übernommen.");
+    Alert.alert("OK", "Kontakt übernommen.");
   }, [contactDraft, fields, values]);
 
   const onSubmit = useCallback(async () => {
@@ -647,7 +675,7 @@ export default function CaptureScreen() {
                     disabled={ocrBusy || submitBusy}
                     style={{ paddingVertical: 9, paddingHorizontal: 12, borderRadius: 12, backgroundColor: (ocrBusy || submitBusy) ? "rgba(17,24,39,0.35)" : UI.text }}
                   >
-                    <Text style={{ color: "white", fontWeight: "900" }}>{ocrBusy ? "Scanne…" : "Neu scannen"}</Text>
+                    <Text style={{ color: "white", fontWeight: "900" }}>{ocrBusy ? "Wir lesen …" : "Neu scannen"}</Text>
                   </Pressable>
 
                   <Pressable
@@ -679,13 +707,13 @@ export default function CaptureScreen() {
                 alignItems: "center",
               }}
             >
-              <Text style={{ color: "white", fontWeight: "900" }}>{ocrBusy ? "Scanne…" : "Visitenkarte scannen"}</Text>
+              <Text style={{ color: "white", fontWeight: "900" }}>{ocrBusy ? "Wir lesen …" : "Visitenkarte scannen"}</Text>
             </Pressable>
           )}
 
           {ocrError ? (
             <View style={{ padding: 10, borderRadius: 12, borderWidth: 1, borderColor: "rgba(220,38,38,0.25)", backgroundColor: "rgba(220,38,38,0.06)" }}>
-              <Text style={{ fontWeight: "900", color: "rgba(153,27,27,0.95)" }}>OCR Fehler</Text>
+              <Text style={{ fontWeight: "900", color: "rgba(153,27,27,0.95)" }}>Hinweis</Text>
               <Text style={{ color: "rgba(153,27,27,0.95)", marginTop: 6 }}>{ocrError}</Text>
             </View>
           ) : null}
@@ -693,7 +721,7 @@ export default function CaptureScreen() {
           {hasOcr ? (
             <View style={{ gap: 10 }}>
               <View style={{ padding: 10, borderRadius: 12, borderWidth: 1, borderColor: UI.border, backgroundColor: "rgba(17,24,39,0.03)" }}>
-                <Text style={{ fontWeight: "900", marginBottom: 6, color: UI.text }}>OCR Vorschau</Text>
+                <Text style={{ fontWeight: "900", marginBottom: 6, color: UI.text }}>Erkannter Text</Text>
                 <Text style={{ fontFamily: "monospace", opacity: 0.85, lineHeight: 18, color: UI.text }}>{rawPreview || "—"}</Text>
                 <Pressable onPress={() => setRawExpanded((p) => !p)} style={{ marginTop: 8 }}>
                   <Text style={{ fontWeight: "900", color: UI.text }}>{rawExpanded ? "Weniger" : "Mehr"}</Text>
