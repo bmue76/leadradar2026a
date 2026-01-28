@@ -24,12 +24,14 @@ import {
   reorderFields,
   patchFormBasics,
   patchFormStatus,
+  saveTemplateFromForm,
 } from "../builder.persist";
 
 import FieldLibrary, { LIB_ITEMS } from "./FieldLibrary";
 import Canvas from "./Canvas";
 import FormSettingsPanel from "./FormSettingsPanel";
 import FormPreview from "./FormPreview";
+import SaveTemplateModal from "./SaveTemplateModal";
 
 type LoadState =
   | { status: "loading" }
@@ -96,6 +98,22 @@ function SegButton(props: { active: boolean; onClick: () => void; children: Reac
   );
 }
 
+function ActionButton(props: { onClick: () => void; disabled?: boolean; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      disabled={props.disabled}
+      className={[
+        "h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50",
+        "disabled:opacity-50 disabled:hover:bg-white",
+      ].join(" ")}
+    >
+      {props.children}
+    </button>
+  );
+}
+
 export default function BuilderShell({ formId }: { formId: string }) {
   const [state, setState] = React.useState<LoadState>({ status: "loading" });
 
@@ -112,6 +130,8 @@ export default function BuilderShell({ formId }: { formId: string }) {
 
   const [viewMode, setViewMode] = React.useState<ViewMode>("build");
 
+  const [saveTplOpen, setSaveTplOpen] = React.useState(false);
+
   const reqSeq = React.useRef(0);
   const saveSeq = React.useRef(0);
 
@@ -125,6 +145,7 @@ export default function BuilderShell({ formId }: { formId: string }) {
     setViewMode("build");
     setActiveDrag({ kind: "none" });
     setOpenFieldId(null);
+    setSaveTplOpen(false);
   }, [formId]);
 
   const load = React.useCallback(async () => {
@@ -361,7 +382,11 @@ export default function BuilderShell({ formId }: { formId: string }) {
       });
 
       if (!created.ok) {
-        setState({ status: "error", message: created.message || "Couldn’t duplicate.", traceId: safeTraceId(created.traceId) });
+        setState({
+          status: "error",
+          message: created.message || "Couldn’t duplicate.",
+          traceId: safeTraceId(created.traceId),
+        });
         return;
       }
 
@@ -436,6 +461,16 @@ export default function BuilderShell({ formId }: { formId: string }) {
       }
       setFormStatus(res.data.status);
       showFlash("Status updated.");
+    },
+    [formId, showFlash]
+  );
+
+  const onSaveTemplate = React.useCallback(
+    async (body: { name: string; category?: string }) => {
+      const res = await saveTemplateFromForm(formId, body);
+      if (!res.ok) return res;
+      showFlash("Template saved.");
+      return res;
     },
     [formId, showFlash]
   );
@@ -604,28 +639,44 @@ export default function BuilderShell({ formId }: { formId: string }) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-1">
-          <SegButton
-            active={viewMode === "build"}
-            onClick={() => {
-              setViewMode("build");
-              setActiveDrag({ kind: "none" });
-            }}
+        <div className="flex items-center gap-2">
+          <ActionButton
+            onClick={() => setSaveTplOpen(true)}
+            disabled={activeDrag.kind !== "none"}
           >
-            Build
-          </SegButton>
-          <SegButton
-            active={viewMode === "preview"}
-            onClick={() => {
-              setViewMode("preview");
-              setActiveDrag({ kind: "none" });
-              setOpenFieldId(null);
-            }}
-          >
-            Preview
-          </SegButton>
+            Save template
+          </ActionButton>
+
+          <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-1">
+            <SegButton
+              active={viewMode === "build"}
+              onClick={() => {
+                setViewMode("build");
+                setActiveDrag({ kind: "none" });
+              }}
+            >
+              Build
+            </SegButton>
+            <SegButton
+              active={viewMode === "preview"}
+              onClick={() => {
+                setViewMode("preview");
+                setActiveDrag({ kind: "none" });
+                setOpenFieldId(null);
+              }}
+            >
+              Preview
+            </SegButton>
+          </div>
         </div>
       </div>
+
+      <SaveTemplateModal
+        open={saveTplOpen}
+        onClose={() => setSaveTplOpen(false)}
+        defaultName={formName || "Template"}
+        onSave={onSaveTemplate}
+      />
 
       {viewMode === "build" ? (
         <DndContext

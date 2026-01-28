@@ -1,3 +1,4 @@
+// src/app/(admin)/admin/forms/[id]/builder/_components/SaveTemplateModal.tsx
 "use client";
 
 import * as React from "react";
@@ -58,7 +59,9 @@ export default function SaveTemplateModal(props: {
   defaultName: string;
   onSave: (body: { name: string; category?: string }) => Promise<FetchRes<{ templateId: string }>>;
 }) {
-  const [name, setName] = React.useState(props.defaultName);
+  const { open, onClose, defaultName, onSave } = props;
+
+  const [name, setName] = React.useState(defaultName);
   const [category, setCategory] = React.useState("");
 
   const [busy, setBusy] = React.useState(false);
@@ -68,16 +71,16 @@ export default function SaveTemplateModal(props: {
   const nameRef = React.useRef<HTMLInputElement | null>(null);
 
   React.useEffect(() => {
-    if (!props.open) return;
+    if (!open) return;
 
-    setName(props.defaultName);
+    setName(defaultName);
     setCategory("");
     setBusy(false);
     setErrorMsg(null);
     setErrorTraceId(null);
 
     window.setTimeout(() => nameRef.current?.focus(), 0);
-  }, [props.open, props.defaultName]);
+  }, [open, defaultName]);
 
   const canSave = name.trim().length > 0 && !busy;
 
@@ -91,7 +94,7 @@ export default function SaveTemplateModal(props: {
     setErrorMsg(null);
     setErrorTraceId(null);
 
-    const res = await props.onSave({ name: n, category: c.length ? c : undefined });
+    const res = await onSave({ name: n, category: c.length ? c : undefined });
 
     if (!res.ok) {
       setBusy(false);
@@ -101,11 +104,11 @@ export default function SaveTemplateModal(props: {
     }
 
     setBusy(false);
-    props.onClose();
-  }, [name, category, props]);
+    onClose();
+  }, [name, category, onSave, onClose]);
 
   return (
-    <ModalShell open={props.open} onClose={props.onClose} title="Save as template">
+    <ModalShell open={open} onClose={onClose} title="Save as template">
       {errorMsg ? (
         <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
           <div className="font-semibold">Error</div>
@@ -154,7 +157,7 @@ export default function SaveTemplateModal(props: {
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-slate-200 pt-4">
-          <Button variant="ghost" onClick={props.onClose} disabled={busy}>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button variant="primary" onClick={() => void onSubmit()} disabled={!canSave}>

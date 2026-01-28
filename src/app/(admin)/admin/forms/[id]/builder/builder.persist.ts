@@ -192,3 +192,41 @@ export async function patchFormStatus(formId: string, status: FormStatus): Promi
   const s = (typeof res.data.status === "string" ? res.data.status : status) as FormStatus;
   return { ok: true, data: { status: s }, traceId: res.traceId };
 }
+
+/** TP 4.9 — Save current form as template */
+function extractTemplateId(dto: unknown): string | null {
+  if (!isRecord(dto)) return null;
+  const id = toStringOrNull(dto.id);
+  if (id) return id;
+
+  const tid = toStringOrNull(dto.templateId);
+  if (tid) return tid;
+
+  const tpl = dto.template;
+  if (isRecord(tpl)) {
+    const tid2 = toStringOrNull(tpl.id);
+    if (tid2) return tid2;
+  }
+  return null;
+}
+
+export async function saveTemplateFromForm(
+  formId: string,
+  body: { name: string; category?: string }
+): Promise<FetchRes<{ templateId: string }>> {
+  const payload: Record<string, unknown> = { formId, name: body.name };
+  const cat = (body.category ?? "").trim();
+  if (cat.length) payload.category = cat;
+
+  const res = await adminFetchJson<unknown>(`/api/admin/v1/templates`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) return res;
+
+  const templateId = extractTemplateId(res.data);
+  if (!templateId) {
+    return { ok: false, code: "BAD_RESPONSE", message: "Unexpected response.", traceId: res.traceId, status: 500 };
+  }
+  return { ok: true, data: { templateId }, traceId: res.traceId };
+}
