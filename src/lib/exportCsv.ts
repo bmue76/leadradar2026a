@@ -1,7 +1,7 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { csvLine, withUtf8Bom } from "@/lib/csv";
 import { putTextFile } from "@/lib/storage";
+import { buildLeadsCsvContract, type CsvDelimiter, type CsvFieldKey, type LeadForCsv } from "@/lib/csvContract";
 
 export type CsvExportParams = {
   eventId?: string | null;
@@ -10,13 +10,13 @@ export type CsvExportParams = {
   from?: string | null; // ISO or YYYY-MM-DD
   to?: string | null; // ISO or YYYY-MM-DD
   limit?: number | null;
-  delimiter?: ";" | ",";
+  delimiter?: CsvDelimiter;
 };
 
 export type CsvExportResult = {
   relativeStorageKey: string; // "<tenantId>/<jobId>.csv"
   rowCount: number;
-  delimiter: ";" | ",";
+  delimiter: CsvDelimiter;
 };
 
 function parseDateMaybe(s: string | null | undefined, mode: "from" | "to"): Date | null {
@@ -24,7 +24,6 @@ function parseDateMaybe(s: string | null | undefined, mode: "from" | "to"): Date
   const trimmed = s.trim();
   if (!trimmed) return null;
 
-  // If date-only, treat "to" as end-of-day UTC to be more intuitive for filters.
   const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(trimmed);
   if (dateOnly) {
     if (mode === "from") return new Date(trimmed + "T00:00:00.000Z");
@@ -36,20 +35,75 @@ function parseDateMaybe(s: string | null | undefined, mode: "from" | "to"): Date
   return d;
 }
 
-export async function buildLeadsCsv(opts: {
+function clampLimit(v: number | null | undefined, fallback: number): number {
+  const n = typeof v === "number" && Number.isFinite(v) ? v : fallback;
+  return Math.min(Math.max(n, 1), 100000);
+}
+
+async function resolveTenantSlug(tenantId: string): Promise<string> {
+  const t = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
+  return t?.slug ?? "";
+}
+
+const LeadCsvSelect = Prisma.validator<Prisma.LeadSelect>()({
+  id: true,
+  formId: true,
+  eventId: true,
+  capturedAt: true,
+  values: true,
+
+  contactFirstName: true,
+  contactLastName: true,
+  contactEmail: true,
+  contactPhone: true,
+  contactMobile: true,
+  contactCompany: true,
+  contactTitle: true,
+  contactWebsite: true,
+  contactStreet: true,
+  contactZip: true,
+  contactCity: true,
+  contactCountry: true,
+
+  contactSource: true,
+  contactUpdatedAt: true,
+
+  form: { select: { name: true } },
+  event: { select: { name: true } },
+
+  attachments: {
+    where: { type: "BUSINESS_CARD_IMAGE" },
+    take: 1,
+    select: { id: true },
+  },
+
+  ocrResults: {
+    where: { kind: "BUSINESS_CARD" },
+    orderBy: { updatedAt: "desc" },
+    take: 1,
+    select: {
+      status: true,
+      confidence: true,
+      errorCode: true,
+      correctedAt: true,
+    },
+  },
+});
+
+type LeadCsvRow = Prisma.LeadGetPayload<{ select: typeof LeadCsvSelect }>;
+
+export async function buildLeadsCsvTextForTenant(opts: {
   tenantId: string;
   params: CsvExportParams;
-}): Promise<{ csvText: string; rowCount: number; delimiter: ";" | "," }> {
-  const delimiter: ";" | "," = opts.params.delimiter ?? ";";
+}): Promise<{ csvText: string; rowCount: number; delimiter: CsvDelimiter }> {
+  const delimiter: CsvDelimiter = opts.params.delimiter ?? ";";
   const includeDeleted = opts.params.includeDeleted ?? false;
-  const limit = opts.params.limit ?? 10000;
+  const limit = clampLimit(opts.params.limit ?? null, 10000);
 
   const fromDate = parseDateMaybe(opts.params.from, "from");
   const toDate = parseDateMaybe(opts.params.to, "to");
 
-  const where: Prisma.LeadWhereInput = {
-    tenantId: opts.tenantId,
-  };
+  const where: Prisma.LeadWhereInput = { tenantId: opts.tenantId };
 
   if (opts.params.eventId) where.eventId = opts.params.eventId;
   if (opts.params.formId) where.formId = opts.params.formId;
@@ -62,51 +116,39 @@ export async function buildLeadsCsv(opts: {
     };
   }
 
-  const leads = await prisma.lead.findMany({
+  const leads = (await prisma.lead.findMany({
     where,
     orderBy: { capturedAt: "asc" },
-    take: Math.min(Math.max(limit, 1), 100000),
-    select: {
-      id: true,
-      eventId: true,
-      formId: true,
-      capturedAt: true,
-      isDeleted: true,
-      deletedAt: true,
-      deletedReason: true,
-      values: true,
-    },
-  });
+    take: limit,
+    select: LeadCsvSelect,
+  })) as LeadCsvRow[];
 
-  // Stable deterministic columns (TP 3.4)
-  const header = csvLine(
-    ["leadId", "eventId", "formId", "capturedAt", "isDeleted", "deletedAt", "deletedReason", "values_json"],
-    delimiter
-  );
+  // field keys: Option A (current schema)
+  const formIds =
+    opts.params.formId && typeof opts.params.formId === "string" && opts.params.formId.trim().length > 0
+      ? [opts.params.formId]
+      : Array.from(new Set(leads.map((l) => l.formId)));
 
-  const lines: string[] = [header];
-
-  for (const l of leads) {
-    const valuesJson = JSON.stringify(l.values ?? {});
-    lines.push(
-      csvLine(
-        [
-          l.id,
-          l.eventId ?? "",
-          l.formId,
-          l.capturedAt?.toISOString() ?? "",
-          l.isDeleted ? "true" : "false",
-          l.deletedAt ? l.deletedAt.toISOString() : "",
-          l.deletedReason ?? "",
-          valuesJson,
-        ],
-        delimiter
-      )
-    );
+  let fieldKeys: CsvFieldKey[] = [];
+  if (formIds.length > 0) {
+    fieldKeys = await prisma.formField.findMany({
+      where: { tenantId: opts.tenantId, formId: { in: formIds }, isActive: true },
+      select: { formId: true, key: true },
+      orderBy: [{ formId: "asc" }, { sortOrder: "asc" }, { key: "asc" }],
+    });
   }
 
-  const csvText = withUtf8Bom(lines.join("\n") + "\n");
-  return { csvText, rowCount: leads.length, delimiter };
+  const tenantSlug = await resolveTenantSlug(opts.tenantId);
+
+  const csvBuilt = buildLeadsCsvContract({
+    tenantSlug,
+    leads: leads as unknown as LeadForCsv[],
+    fieldKeys,
+    delimiter,
+    includeBom: true,
+  });
+
+  return { csvText: csvBuilt.csvText, rowCount: csvBuilt.rowCount, delimiter: csvBuilt.delimiter };
 }
 
 export async function writeLeadsCsvToDevStorage(opts: {
@@ -129,7 +171,7 @@ export async function runCsvExport(opts: {
   jobId: string;
   params: CsvExportParams;
 }): Promise<CsvExportResult> {
-  const built = await buildLeadsCsv({ tenantId: opts.tenantId, params: opts.params });
+  const built = await buildLeadsCsvTextForTenant({ tenantId: opts.tenantId, params: opts.params });
   const relativeStorageKey = await writeLeadsCsvToDevStorage({
     tenantId: opts.tenantId,
     jobId: opts.jobId,
