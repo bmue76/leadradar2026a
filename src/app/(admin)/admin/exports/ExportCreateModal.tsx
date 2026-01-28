@@ -20,6 +20,30 @@ export type ExportCreateValues = {
   to?: string;
 };
 
+function shortDate(iso?: string | null): string | null {
+  if (!iso) return null;
+  // ISO -> YYYY-MM-DD
+  return iso.slice(0, 10);
+}
+
+function eventLabel(ev: EventListItem): string {
+  const parts: string[] = [];
+  parts.push(ev.name);
+
+  // Status
+  parts.push(ev.status);
+
+  // Date range (if present)
+  const s = shortDate(ev.startsAt);
+  const e = shortDate(ev.endsAt);
+  if (s || e) parts.push([s ?? "—", e ?? "—"].join("–"));
+
+  // Location
+  if (ev.location) parts.push(ev.location);
+
+  return parts.join(" · ");
+}
+
 export function ExportCreateModal(props: {
   forms: FormListItem[];
   events: EventListItem[];
@@ -45,6 +69,14 @@ export function ExportCreateModal(props: {
     return items;
   }, [props.events]);
 
+  const dateError = useMemo(() => {
+    // YYYY-MM-DD strings are lexicographically comparable
+    if (from && to && from > to) return '"From" must be before or equal to "To".';
+    return null;
+  }, [from, to]);
+
+  const canSubmit = !props.busy && !dateError;
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -69,7 +101,7 @@ export function ExportCreateModal(props: {
         <div className="p-6">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-lg font-semibold">Create CSV Export</h2>
+              <h2 className="text-lg font-semibold">Download CSV</h2>
               <p className="text-sm text-neutral-500 mt-1">
                 Scope: Leads (stable columns + values_json). Delimiter: <span className="font-medium">;</span>
               </p>
@@ -95,11 +127,11 @@ export function ExportCreateModal(props: {
                 <option value="">All events</option>
                 {eventOptions.map((ev) => (
                   <option key={ev.id} value={ev.id}>
-                    {ev.name}
+                    {eventLabel(ev)}
                   </option>
                 ))}
               </select>
-              <div className="text-xs text-neutral-500 mt-1">Source: ACTIVE events.</div>
+              <div className="text-xs text-neutral-500 mt-1">Tip: pick an event to reduce the export size.</div>
             </div>
 
             <div>
@@ -142,6 +174,8 @@ export function ExportCreateModal(props: {
               </div>
             </div>
 
+            {dateError ? <div className="text-sm text-red-600">{dateError}</div> : null}
+
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -164,7 +198,7 @@ export function ExportCreateModal(props: {
             </button>
             <button
               className="rounded-xl px-4 py-2 text-sm bg-black text-white hover:bg-black/90 disabled:bg-black/40"
-              disabled={props.busy}
+              disabled={!canSubmit}
               onClick={async () => {
                 await props.onSubmit({
                   eventId: eventId || undefined,
@@ -174,8 +208,9 @@ export function ExportCreateModal(props: {
                   to: to || undefined,
                 });
               }}
+              title={dateError ?? undefined}
             >
-              {props.busy ? "Creating..." : "Create Export"}
+              {props.busy ? "Preparing…" : "Download CSV"}
             </button>
           </div>
         </div>
