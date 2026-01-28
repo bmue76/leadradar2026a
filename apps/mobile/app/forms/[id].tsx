@@ -215,22 +215,22 @@ function confirmAsync(title: string, message: string, confirmLabel: string): Pro
 }
 
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  let t: any;
+  let t: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<T>((_, reject) => {
     t = setTimeout(() => reject(new Error("TIMEOUT")), ms);
   });
   try {
     return await Promise.race([p, timeout]);
   } finally {
-    clearTimeout(t);
+    if (t) clearTimeout(t);
   }
 }
 
 function seemsWeakText(rawText: string): boolean {
-  const t = (rawText || "").trim();
-  if (!t) return true;
-  const alnum = t.replace(/[^a-zA-Z0-9]/g, "");
-  const lines = t.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  const txt = (rawText || "").trim();
+  if (!txt) return true;
+  const alnum = txt.replace(/[^a-zA-Z0-9]/g, "");
+  const lines = txt.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
   if (alnum.length < 28) return true;
   if (lines.length < 2) return true;
   return false;
@@ -416,7 +416,6 @@ export default function CaptureScreen() {
       const fileUri = manipulated.uri;
       const fileName = `business-card-${Date.now()}.jpg`;
 
-      // IMPORTANT: Timeout, damit es nie endlos hängt (Android/MLKit edge cases)
       const ocr = await withTimeout(recognizeTextFromBusinessCard({ imagePath: fileUri }), 12000);
       const parsed = parseBusinessCard({ rawText: ocr.rawText, blocks: ocr.blocks });
 
