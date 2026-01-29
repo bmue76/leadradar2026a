@@ -1,11 +1,5 @@
 import { z } from "zod";
-import {
-  Prisma,
-  AttachmentType,
-  ExportJobStatus,
-  FormStatus,
-  MobileDeviceStatus,
-} from "@prisma/client";
+import { Prisma, AttachmentType, ExportJobStatus, FormStatus, MobileDeviceStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { jsonError, jsonOk } from "@/lib/api";
@@ -31,10 +25,15 @@ type ActivityType =
   | "EVENT_ACTIVATED"
   | "FORM_ASSIGNED";
 
-// Pref: only firstName
-function pickGivenName(user: { firstName?: string | null }): string | null {
+function pickGivenName(user: { firstName?: string | null; name?: string | null }): string | null {
   const direct = (user.firstName ?? "").trim();
-  return direct || null;
+  if (direct) return direct;
+
+  const n = (user.name ?? "").trim();
+  if (!n) return null;
+
+  const first = n.split(/\s+/).filter(Boolean)[0] ?? "";
+  return first.trim() || null;
 }
 
 function levelRank(l: ReadinessLevel): number {
@@ -49,20 +48,6 @@ function worstLevel(levels: ReadinessLevel[]): ReadinessLevel {
     if (levelRank(l) > levelRank(worst)) worst = l;
   }
   return worst;
-}
-
-function exportActivityTitle(status: ExportJobStatus): string {
-  switch (status) {
-    case ExportJobStatus.DONE:
-      return "Export abgeschlossen";
-    case ExportJobStatus.RUNNING:
-      return "Export läuft";
-    case ExportJobStatus.FAILED:
-      return "Export fehlgeschlagen";
-    case ExportJobStatus.QUEUED:
-    default:
-      return "Export geplant";
-  }
 }
 
 const TZ = "Europe/Zurich";
@@ -112,7 +97,10 @@ function zonedMidnightUtc(ymd: { year: number; month: number; day: number }, tim
   return new Date(approxUtc.getTime() - offMin * 60000);
 }
 
-function addDaysYmd(ymd: { year: number; month: number; day: number }, deltaDays: number): { year: number; month: number; day: number } {
+function addDaysYmd(
+  ymd: { year: number; month: number; day: number },
+  deltaDays: number
+): { year: number; month: number; day: number } {
   const base = new Date(Date.UTC(ymd.year, ymd.month - 1, ymd.day, 0, 0, 0));
   const next = new Date(base.getTime() + deltaDays * 86400000);
   return { year: next.getUTCFullYear(), month: next.getUTCMonth() + 1, day: next.getUTCDate() };
@@ -123,6 +111,13 @@ function startOfWeekMondayYmd(ymd: { year: number; month: number; day: number })
   const dow = d.getUTCDay(); // 0=Sun..6=Sat
   const offsetToMonday = (dow + 6) % 7; // Monday=0
   return addDaysYmd(ymd, -offsetToMonday);
+}
+
+function exportStatusTitle(s: ExportJobStatus): string {
+  if (s === ExportJobStatus.DONE) return "Export abgeschlossen";
+  if (s === ExportJobStatus.FAILED) return "Export fehlgeschlagen";
+  if (s === ExportJobStatus.RUNNING) return "Export läuft";
+  return "Export erstellt";
 }
 
 export async function GET(req: Request) {
@@ -354,7 +349,7 @@ export async function GET(req: Request) {
         id: `export_${e.id}`,
         type: "EXPORT_CREATED",
         at: e.queuedAt.toISOString(),
-        title: exportActivityTitle(e.status),
+        title: exportStatusTitle(e.status),
         href: "/admin/exports",
       });
     }
@@ -413,7 +408,6 @@ export async function GET(req: Request) {
         label: "Leads exportieren",
         href: "/admin/exports",
         kind: "secondary",
-        disabled: leadsWeek <= 0,
       }
     );
 
