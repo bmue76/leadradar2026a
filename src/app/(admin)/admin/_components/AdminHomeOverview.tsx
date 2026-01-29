@@ -345,7 +345,11 @@ export function AdminHomeOverview() {
           </div>
         </CardShell>
 
-        <CardShell title="Schnellaktionen" subtitle="Direkt zu den wichtigsten Bereichen." right={<span className="text-xs text-slate-500">Option 2</span>}>
+        <CardShell
+          title="Schnellaktionen"
+          subtitle="Direkt zu den wichtigsten Bereichen."
+          right={<span className="text-xs text-slate-500">Option 2</span>}
+        >
           <div className="flex flex-wrap gap-2">
             {data.quickActions.map((a) => (
               <ButtonLink key={a.id} label={a.label} href={a.href} kind={a.kind} disabled={a.disabled} />
@@ -368,7 +372,7 @@ export function AdminHomeOverview() {
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="text-sm font-semibold text-slate-900">Mit Visitenkarte</div>
               <div className="mt-1 text-2xl font-semibold text-slate-900">{data.kpisToday.businessCardsCaptured}</div>
-              <div className="mt-1 text-xs text-slate-600">BUSINESS_CARD_IMAGE</div>
+              <div className="mt-1 text-xs text-slate-600">Visitenkarten (Scan/Upload)</div>
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
