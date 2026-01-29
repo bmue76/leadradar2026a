@@ -40,16 +40,28 @@ function toIso(v: string | Date | null | undefined): string | null {
   return v.toISOString();
 }
 
-function mapStatusLabel(s: ExportItem["status"]): string {
+function formatWhen(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleString("de-CH", {
+    year: "2-digit",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function statusText(s: ExportItem["status"]): string {
   if (s === "DONE") return "Abgeschlossen";
   if (s === "FAILED") return "Fehlgeschlagen";
   if (s === "RUNNING") return "Läuft";
   return "Erstellt";
 }
 
-function formatWhen(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleString("de-CH", { year: "2-digit", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+function pillForStatus(s: ExportItem["status"]): { label: "OK" | "WARN" | "BLOCK"; className: string } {
+  if (s === "DONE") return { label: "OK", className: "lr-pillOk" };
+  if (s === "FAILED") return { label: "BLOCK", className: "lr-pillBlock" };
+  return { label: "WARN", className: "lr-pillWarn" };
 }
 
 function Skeleton() {
@@ -57,7 +69,7 @@ function Skeleton() {
     <div className="lr-page">
       <header className="lr-pageHeader">
         <h1 className="lr-h1">Exports</h1>
-        <p className="lr-muted">CSV-Exporte erstellen und herunterladen.</p>
+        <p className="lr-muted">CSV erstellen und herunterladen.</p>
       </header>
 
       <section className="lr-panel">
@@ -90,20 +102,20 @@ function EmptyStateNoLeads() {
     <section className="lr-panel">
       <div className="lr-panelHeader">
         <h2 className="lr-h2">Noch keine Exporte</h2>
-        <p className="lr-muted">
-          Sobald ihr Leads erfasst habt, könnt ihr hier einen CSV-Export erstellen und herunterladen.
-        </p>
+        <p className="lr-muted">Erst Leads erfassen, dann CSV exportieren.</p>
       </div>
 
       <div className="lr-actions">
-        <Link className="lr-btn" href="/admin/leads">Zu den Leads</Link>
-        <Link className="lr-btnSecondary" href="/admin">Übersicht</Link>
-        <Link className="lr-btnSecondary" href="/admin/forms">Formulare prüfen</Link>
+        <Link className="lr-btn" href="/admin/leads">
+          Zu den Leads
+        </Link>
+        <Link className="lr-btnSecondary" href="/admin">
+          Übersicht
+        </Link>
+        <Link className="lr-btnSecondary" href="/admin/forms">
+          Formulare prüfen
+        </Link>
       </div>
-
-      <p className="lr-muted" style={{ marginTop: 12 }}>
-        Tipp: Für Mobile braucht’s <strong>ACTIVE</strong> Formulare, die dem aktiven Event zugewiesen sind (Option 2).
-      </p>
     </section>
   );
 }
@@ -112,15 +124,17 @@ function EmptyStateNoExportsYet() {
   return (
     <section className="lr-panel">
       <div className="lr-panelHeader">
-        <h2 className="lr-h2">Noch kein Export erstellt</h2>
-        <p className="lr-muted">
-          Ihr habt bereits Leads erfasst. Sobald die Export-Funktion aktiviert ist, erscheinen hier eure CSV-Jobs.
-        </p>
+        <h2 className="lr-h2">Noch kein Export</h2>
+        <p className="lr-muted">Hier erscheinen eure CSV-Exports.</p>
       </div>
 
       <div className="lr-actions">
-        <Link className="lr-btn" href="/admin/leads">Leads ansehen</Link>
-        <Link className="lr-btnSecondary" href="/admin">Übersicht</Link>
+        <Link className="lr-btn" href="/admin/leads">
+          Leads ansehen
+        </Link>
+        <Link className="lr-btnSecondary" href="/admin">
+          Übersicht
+        </Link>
       </div>
     </section>
   );
@@ -187,7 +201,7 @@ export default function ExportsClient() {
         <div className="lr-page">
           <header className="lr-pageHeader">
             <h1 className="lr-h1">Exports</h1>
-            <p className="lr-muted">CSV-Exporte erstellen und herunterladen.</p>
+            <p className="lr-muted">CSV erstellen und herunterladen.</p>
           </header>
 
           <section className="lr-panel">
@@ -207,7 +221,9 @@ export default function ExportsClient() {
                   <button className="lr-btn" onClick={onRetry} type="button">
                     Erneut versuchen
                   </button>
-                  <Link className="lr-btnSecondary" href="/admin">Übersicht</Link>
+                  <Link className="lr-btnSecondary" href="/admin">
+                    Übersicht
+                  </Link>
                 </div>
               </div>
             </div>
@@ -216,14 +232,13 @@ export default function ExportsClient() {
       );
     }
 
-    // READY
     const { items, leadsTotal } = state;
 
     return (
       <div className="lr-page">
         <header className="lr-pageHeader">
           <h1 className="lr-h1">Exports</h1>
-          <p className="lr-muted">CSV-Exporte erstellen und herunterladen.</p>
+          <p className="lr-muted">CSV erstellen und herunterladen.</p>
         </header>
 
         {items.length <= 0 ? (
@@ -236,23 +251,32 @@ export default function ExportsClient() {
           <section className="lr-panel">
             <div className="lr-panelHeader">
               <h2 className="lr-h2">Letzte Exporte</h2>
-              <p className="lr-muted">Übersicht über eure letzten CSV-Jobs.</p>
+              <p className="lr-muted">Übersicht über eure CSV-Jobs.</p>
             </div>
 
             <div className="lr-list">
-              {items.map((it) => (
-                <div key={it.id} className="lr-listItem">
-                  <div className="lr-listTitle">
-                    CSV • {mapStatusLabel(it.status)}
+              {items.map((it) => {
+                const pill = pillForStatus(it.status);
+
+                return (
+                  <div key={it.id} className="lr-listItem">
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                      <div className="lr-listTitle">CSV Export</div>
+                      <span className={`lr-pill ${pill.className}`}>{pill.label}</span>
+                    </div>
+
+                    <div className="lr-muted">
+                      Status: {statusText(it.status)} • Erstellt: {formatWhen(it.queuedAt)}
+                    </div>
+
+                    <div className="lr-actions">
+                      <Link className="lr-btnSecondary" href="/admin/exports">
+                        Ansehen
+                      </Link>
+                    </div>
                   </div>
-                  <div className="lr-muted">Erstellt: {formatWhen(it.queuedAt)}</div>
-                  <div className="lr-actions">
-                    <Link className="lr-btnSecondary" href="/admin/exports">
-                      Ansehen
-                    </Link>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </section>
         )}
