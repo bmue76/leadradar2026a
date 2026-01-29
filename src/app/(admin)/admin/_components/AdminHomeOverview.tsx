@@ -366,7 +366,7 @@ export function AdminHomeOverview() {
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="text-sm font-semibold text-slate-900">Leads erfasst</div>
               <div className="mt-1 text-2xl font-semibold text-slate-900">{data.kpisToday.leadsCaptured}</div>
-              <div className="mt-1 text-xs text-slate-600">Woche: {data.kpisThisWeek.leadsCaptured}</div>
+              <div className="mt-1 text-xs text-slate-600">Diese Woche: {data.kpisThisWeek.leadsCaptured}</div>
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
