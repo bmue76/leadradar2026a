@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
+import Image from "next/image";
 
 import { SidebarNav } from "./SidebarNav";
 import { IconChevronDown, IconSettings, IconLogoMark } from "./icons";
@@ -78,7 +79,19 @@ export function AdminShell({ children }: AdminShellProps) {
                 <span>Einstellungen</span>
               </Link>
 
-              <div className="mt-3 px-3 text-xs text-slate-500">Powered by LeadRadar</div>
+              <div className="mt-3 px-3">
+                <div className="text-[11px] text-slate-500">Powered by</div>
+                <div className="mt-1">
+                  <Image
+                    src="/brand/leadradar-logo.png"
+                    alt="LeadRadar"
+                    width={140}
+                    height={32}
+                    className="h-5 w-auto opacity-80"
+                    priority={false}
+                  />
+                </div>
+              </div>
             </div>
           </div>
         </aside>

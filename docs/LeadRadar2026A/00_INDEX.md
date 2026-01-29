@@ -21,4 +21,4 @@ Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
 - docs/teilprojekt-4.3-ocr-visitenkarte-konzept.md
 - docs/teilprojekt-4.4-mobile-ocr-mlkit-e2e.md
 - docs/teilprojekt-4.5-mobile-home-tabs.md
-
+- docs/teilprojekt-5.0-admin-shell-navigation-scaffold.md

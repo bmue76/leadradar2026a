@@ -1,11 +1,11 @@
 import { AdminPageHeader } from "../_components/AdminPageHeader";
 
-export default function EventsPage() {
+export default function BrandingPage() {
   return (
     <div className="py-2">
       <AdminPageHeader
-        title="Events"
-        hint="Hier steuerst du Messe-Events und Aktiv-Status (MVP: Scaffold)."
+        title="Branding"
+        hint="Hier passt du Logo und Akzentfarbe deines Mandanten an (MVP: Scaffold)."
       />
     </div>
   );

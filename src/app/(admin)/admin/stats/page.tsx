@@ -1,11 +1,11 @@
 import { AdminPageHeader } from "../_components/AdminPageHeader";
 
-export default function EventsPage() {
+export default function StatsPage() {
   return (
     <div className="py-2">
       <AdminPageHeader
-        title="Events"
-        hint="Hier steuerst du Messe-Events und Aktiv-Status (MVP: Scaffold)."
+        title="Statistik"
+        hint="Hier findest du Kennzahlen und Auswertungen (MVP: Scaffold)."
       />
     </div>
   );

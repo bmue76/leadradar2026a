@@ -1,13 +1,13 @@
 # Teilprojekt 5.0 — Admin Shell + Navigation Scaffold (de-CH) — ONLINE-only (MVP)
 
 Datum: 2026-01-29  
-Status: READY ✅ (nach Commit/Push auf DONE setzen)
+Status: DONE ✅
 
 ## Ziel
 Admin Grundstruktur bereitstellen:
 - Topbar + Sidebar + Content Scaffold (Apple-clean)
-- Sidebar Navigation mit Gruppen & route-aware Active State
-- Sticky Einstellungen (unten) + Footer „Powered by LeadRadar“
+- Sidebar Navigation mit klaren Hauptkategorien (Icons) + aufklappbaren Unterpunkten
+- Sticky Einstellungen (unten) + Footer „Powered by“ (2-zeilig inkl. LeadRadar Logo)
 - de-CH Copy, ONLINE-only, keine echten API Calls (Placeholders)
 
 ## Umsetzung (Highlights)
@@ -16,9 +16,10 @@ Admin Grundstruktur bereitstellen:
   - Tenant: „Atlex GmbH“ (Logo-Platz)
   - User: „Beat“
 - Sidebar:
-  - Gruppen: Start / Setup / Betrieb / Statistik / Abrechnung
-  - Active State: pathname-basiert
-  - Sticky bottom: Einstellungen + Powered by
+  - Hauptkategorien als kompakte Buttons mit Icons (Start/Setup/Betrieb/Leads/Statistik/Abrechnung)
+  - Accordion: Klick öffnet die Unterpunkte der Kategorie
+  - Active State: route-aware, Kategorie wird beim Routenwechsel automatisch geöffnet
+  - Sticky bottom: Einstellungen + Powered by (Logo aus `/public/brand/leadradar-logo.png`)
 
 ## Routes / Sitemap (Stand TP 5.0)
 Start
@@ -32,6 +33,8 @@ Setup
 Betrieb
 - `/admin/events` — Events
 - `/admin/devices` — Geräte
+
+Leads
 - `/admin/leads` — Leads
 - `/admin/recipients` — Empfängerlisten
 - `/admin/exports` — Exporte
@@ -59,11 +62,15 @@ Manual Smoke:
 
 /admin öffnen
 
-alle Sidebar-Items anklicken → Seiten laden ohne Errors
+Hauptkategorien klicken → Unterpunkte klappen auf
 
-Active State wechselt korrekt
+Seiten laden ohne Errors
 
-Sticky „Einstellungen“ bleibt unten sichtbar
+Active State korrekt
+
+Sticky „Einstellungen“ sichtbar
+
+Footer „Powered by“ 2-zeilig mit Logo sichtbar
 
 Dateien/Änderungen
 src/app/(admin)/admin/layout.tsx
@@ -76,9 +83,11 @@ src/app/(admin)/admin/_components/icons.tsx
 
 src/app/(admin)/admin/_components/AdminPageHeader.tsx
 
-(optional neue Stub-Pages, je nach vorhandenem Stand)
+docs/LeadRadar2026A/00_INDEX.md
+
+docs/teilprojekt-5.0-admin-shell-navigation-scaffold.md
 
 Git
-Commit (nach Push eintragen):
+e6f6053 — feat(tp5.0): admin shell + navigation scaffolding (de-CH)
 
-TBD
+TBD — feat(tp5.0): sidebar accordion + powered-by logo
