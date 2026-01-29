@@ -279,8 +279,8 @@ model Event {
   // Devices bound to this event (activeEventId)
   activeDevices MobileDevice[] @relation("ActiveEvent")
 
-  // TP 5.1 — Option 2: Forms assigned to an Event
-  assignedForms Form[] @relation("EventAssignedForms")
+  // Option 2 — Forms assigned to this event (MVP-lean)
+  assignedForms Form[] @relation("FormAssignedEvent")
 
   @@index([tenantId, status])
   @@index([tenantId, startsAt])
@@ -299,9 +299,9 @@ model Form {
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
-  // TP 5.1 — Option 2: Form must be assigned to the ACTIVE event (assignedEventId == activeEvent.id)
+  // Option 2 — assigned to active event (nullable, MVP-lean)
   assignedEventId String?
-  assignedEvent   Event?  @relation("EventAssignedForms", fields: [assignedEventId], references: [id], onDelete: SetNull)
+  assignedEvent   Event? @relation("FormAssignedEvent", fields: [assignedEventId], references: [id], onDelete: SetNull)
 
   tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   fields FormField[]
@@ -311,8 +311,7 @@ model Form {
   deviceAssignments MobileDeviceForm[]
 
   @@index([tenantId, status])
-  @@index([tenantId, assignedEventId], map: "Form_tenantId_assignedEventId_idx")
-  @@index([tenantId, status, assignedEventId], map: "Form_tenantId_status_assignedEventId_idx")
+  @@index([tenantId, status, assignedEventId])
 }
 
 //

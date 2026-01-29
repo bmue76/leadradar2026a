@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { Prisma, AttachmentType, FormStatus, MobileDeviceStatus } from "@prisma/client";
+import {
+  Prisma,
+  AttachmentType,
+  ExportJobStatus,
+  FormStatus,
+  MobileDeviceStatus,
+} from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { jsonError, jsonOk } from "@/lib/api";
@@ -25,15 +31,10 @@ type ActivityType =
   | "EVENT_ACTIVATED"
   | "FORM_ASSIGNED";
 
-function pickGivenName(user: { firstName?: string | null; name?: string | null }): string | null {
+// Pref: only firstName
+function pickGivenName(user: { firstName?: string | null }): string | null {
   const direct = (user.firstName ?? "").trim();
-  if (direct) return direct;
-
-  const n = (user.name ?? "").trim();
-  if (!n) return null;
-
-  const first = n.split(/\s+/).filter(Boolean)[0] ?? "";
-  return first.trim() || null;
+  return direct || null;
 }
 
 function levelRank(l: ReadinessLevel): number {
@@ -48,6 +49,20 @@ function worstLevel(levels: ReadinessLevel[]): ReadinessLevel {
     if (levelRank(l) > levelRank(worst)) worst = l;
   }
   return worst;
+}
+
+function exportActivityTitle(status: ExportJobStatus): string {
+  switch (status) {
+    case ExportJobStatus.DONE:
+      return "Export abgeschlossen";
+    case ExportJobStatus.RUNNING:
+      return "Export läuft";
+    case ExportJobStatus.FAILED:
+      return "Export fehlgeschlagen";
+    case ExportJobStatus.QUEUED:
+    default:
+      return "Export geplant";
+  }
 }
 
 const TZ = "Europe/Zurich";
@@ -339,7 +354,7 @@ export async function GET(req: Request) {
         id: `export_${e.id}`,
         type: "EXPORT_CREATED",
         at: e.queuedAt.toISOString(),
-        title: `Export erstellt • ${String(e.status)}`,
+        title: exportActivityTitle(e.status),
         href: "/admin/exports",
       });
     }
