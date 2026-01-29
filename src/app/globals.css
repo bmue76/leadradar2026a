@@ -2,7 +2,7 @@
 
 :root {
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #0f172a; /* slate-900 */
 }
 
 @theme inline {
@@ -14,13 +14,112 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    /* MVP: Admin bleibt bewusst hell; wir halten Variablen trotzdem konsistent */
+    --background: #ffffff;
+    --foreground: #0f172a;
   }
+}
+
+html,
+body {
+  height: 100%;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family:
+    var(--font-sans),
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    Arial,
+    "Noto Sans",
+    "Apple Color Emoji",
+    "Segoe UI Emoji";
+}
+
+/* ------------------------------------------------------------
+   LeadRadar "lr-*" UI primitives (Apple-clean)
+   ------------------------------------------------------------ */
+@layer components {
+  .lr-page {
+    @apply mx-auto w-full max-w-5xl px-6 py-6;
+  }
+
+  .lr-pageHeader {
+    @apply mb-6;
+  }
+
+  .lr-h1 {
+    @apply text-3xl font-semibold tracking-tight text-slate-900;
+  }
+
+  .lr-h2 {
+    @apply text-base font-semibold tracking-tight text-slate-900;
+  }
+
+  .lr-muted {
+    @apply text-sm text-slate-600;
+  }
+
+  .lr-grid {
+    @apply grid grid-cols-1 gap-4 lg:grid-cols-2;
+  }
+
+  .lr-panel {
+    @apply rounded-2xl border border-slate-200 bg-white p-5;
+  }
+
+  .lr-panelHeader {
+    @apply flex items-start justify-between gap-4;
+  }
+
+  .lr-list {
+    @apply divide-y divide-slate-100;
+  }
+
+  .lr-listItem {
+    padding: 16px 0;
+  }
+  .lr-listItem:first-child {
+    padding-top: 0;
+  }
+  .lr-listItem:last-child {
+    padding-bottom: 0;
+  }
+
+  .lr-listTitle {
+    @apply text-sm font-semibold text-slate-900;
+  }
+
+  .lr-actions {
+    @apply mt-3 flex flex-wrap gap-2;
+  }
+
+  .lr-btn {
+    @apply inline-flex items-center justify-center rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-200;
+  }
+
+  .lr-btnSecondary {
+    @apply inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200;
+  }
+
+  .lr-card {
+    @apply block rounded-2xl border border-slate-200 bg-white p-5 transition-colors hover:bg-slate-50;
+  }
+
+  .lr-cardTitle {
+    @apply text-sm font-semibold text-slate-900;
+  }
+
+  .lr-cardDesc {
+    @apply mt-1 text-sm text-slate-600;
+  }
+
+  .lr-cardHint {
+    @apply mt-2 text-xs text-slate-500;
+  }
 }
