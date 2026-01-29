@@ -1,6 +1,6 @@
 # LeadRadar2026A — Doku Index
 
-Stand: 2026-01-23  
+Stand: 2026-01-29  
 Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
 
 ## Navigation
@@ -22,3 +22,4 @@ Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
 - docs/teilprojekt-4.4-mobile-ocr-mlkit-e2e.md
 - docs/teilprojekt-4.5-mobile-home-tabs.md
 - docs/teilprojekt-5.0-admin-shell-navigation-scaffold.md
+- docs/teilprojekt-5.1-admin-home-summary.md
