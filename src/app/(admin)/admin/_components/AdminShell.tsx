@@ -3,11 +3,31 @@ import Link from "next/link";
 import Image from "next/image";
 
 import { SidebarNav } from "./SidebarNav";
-import { IconChevronDown, IconSettings, IconLogoMark } from "./icons";
+import { IconChevronDown, IconLogoMark } from "./icons";
+import { SidebarLogoutButton } from "./SidebarLogoutButton";
 
 type AdminShellProps = {
   children: ReactNode;
 };
+
+function IconSettingsNice(props: React.SVGProps<SVGSVGElement>) {
+  // Sliders / controls – cleaner than a dense gear
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <path d="M4 7h10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M18 7h2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M14 7a2 2 0 1 1 0 .01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+
+      <path d="M4 12h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M14 12h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M10 12a2 2 0 1 1 0 .01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+
+      <path d="M4 17h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M20 17h0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M18 17a2 2 0 1 1 0 .01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 export function AdminShell({ children }: AdminShellProps) {
   // ONLINE-only MVP: Placeholders. Später via tenant-scoped APIs ersetzen.
@@ -69,15 +89,19 @@ export function AdminShell({ children }: AdminShellProps) {
               <SidebarNav />
             </div>
 
-            {/* Sticky bottom: Settings + Footer */}
+            {/* Sticky bottom: Settings + Logout + Footer */}
             <div className="mt-auto border-t border-slate-200 px-3 py-3">
               <Link
                 href="/admin/settings"
                 className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
               >
-                <IconSettings className="size-4 text-slate-600" />
+                <IconSettingsNice className="size-4 text-slate-600" />
                 <span>Einstellungen</span>
               </Link>
+
+              <div className="mt-1">
+                <SidebarLogoutButton />
+              </div>
 
               <div className="mt-3 px-3">
                 <div className="text-[11px] text-slate-500">Powered by</div>

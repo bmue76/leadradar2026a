@@ -58,10 +58,18 @@ function statusText(s: ExportItem["status"]): string {
   return "Erstellt";
 }
 
-function pillForStatus(s: ExportItem["status"]): { label: "OK" | "WARN" | "BLOCK"; className: string } {
-  if (s === "DONE") return { label: "OK", className: "lr-pillOk" };
-  if (s === "FAILED") return { label: "BLOCK", className: "lr-pillBlock" };
-  return { label: "WARN", className: "lr-pillWarn" };
+function pillLabel(s: ExportItem["status"]): "OK" | "WARN" | "BLOCK" {
+  if (s === "DONE") return "OK";
+  if (s === "FAILED") return "BLOCK";
+  return "WARN";
+}
+
+function pillClass(s: ExportItem["status"]): string {
+  const base =
+    "inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold tracking-wide";
+  if (s === "DONE") return `${base} border-emerald-200 bg-emerald-50 text-emerald-700`;
+  if (s === "FAILED") return `${base} border-rose-200 bg-rose-50 text-rose-700`;
+  return `${base} border-amber-200 bg-amber-50 text-amber-700`;
 }
 
 function Skeleton() {
@@ -75,7 +83,7 @@ function Skeleton() {
       <section className="lr-panel">
         <div className="lr-panelHeader">
           <h2 className="lr-h2">Übersicht</h2>
-          <p className="lr-muted">Lade Daten…</p>
+          <p className="lr-muted">Lade…</p>
         </div>
 
         <div className="lr-list">
@@ -111,9 +119,6 @@ function EmptyStateNoLeads() {
         </Link>
         <Link className="lr-btnSecondary" href="/admin">
           Übersicht
-        </Link>
-        <Link className="lr-btnSecondary" href="/admin/forms">
-          Formulare prüfen
         </Link>
       </div>
     </section>
@@ -184,8 +189,13 @@ export default function ExportsClient() {
     }
   }, []);
 
+  // ESLint rule react-hooks/set-state-in-effect:
+  // -> call load in a callback (async tick), not synchronously in effect body.
   useEffect(() => {
-    void load();
+    const t = setTimeout(() => {
+      void load();
+    }, 0);
+    return () => clearTimeout(t);
   }, [load]);
 
   const onRetry = useCallback(() => {
@@ -255,28 +265,24 @@ export default function ExportsClient() {
             </div>
 
             <div className="lr-list">
-              {items.map((it) => {
-                const pill = pillForStatus(it.status);
-
-                return (
-                  <div key={it.id} className="lr-listItem">
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                      <div className="lr-listTitle">CSV Export</div>
-                      <span className={`lr-pill ${pill.className}`}>{pill.label}</span>
-                    </div>
-
-                    <div className="lr-muted">
-                      Status: {statusText(it.status)} • Erstellt: {formatWhen(it.queuedAt)}
-                    </div>
-
-                    <div className="lr-actions">
-                      <Link className="lr-btnSecondary" href="/admin/exports">
-                        Ansehen
-                      </Link>
-                    </div>
+              {items.map((it) => (
+                <div key={it.id} className="lr-listItem">
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                    <div className="lr-listTitle">CSV Export</div>
+                    <span className={pillClass(it.status)}>{pillLabel(it.status)}</span>
                   </div>
-                );
-              })}
+
+                  <div className="lr-muted">
+                    {statusText(it.status)} • {formatWhen(it.queuedAt)}
+                  </div>
+
+                  <div className="lr-actions">
+                    <Link className="lr-btnSecondary" href="/admin/exports">
+                      Ansehen
+                    </Link>
+                  </div>
+                </div>
+              ))}
             </div>
           </section>
         )}
