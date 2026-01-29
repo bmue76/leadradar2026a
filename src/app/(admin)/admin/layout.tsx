@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
-import AdminShell from "./_components/AdminShell";
-import "./_styles/tokens.css";
+import type { ReactNode } from "react";
+
+import { AdminShell } from "./_components/AdminShell";
 
 export const metadata: Metadata = {
   title: "LeadRadar Admin",
-  description: "LeadRadar Admin UI",
 };
 
-export default function AdminLayout({ children }: { children: React.ReactNode }) {
+export default function AdminLayout({ children }: { children: ReactNode }) {
   return <AdminShell>{children}</AdminShell>;
 }
