@@ -70,6 +70,33 @@ function pillClass(kind: "neutral" | "good" | "warn" | "bad"): string {
   return "border-black/10 bg-black/5 text-black/70";
 }
 
+async function copyText(text: string): Promise<void> {
+  const t = (text || "").trim();
+  if (!t) return;
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(t);
+      return;
+    }
+  } catch {
+    // fallthrough
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = t;
+    ta.style.position = "fixed";
+    ta.style.left = "-1000px";
+    ta.style.top = "-1000px";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+  } catch {
+    // ignore
+  }
+}
+
 type LeadAttachmentListItem = {
   id: string;
   type?: string;
@@ -286,6 +313,89 @@ function sameOcrContact(a: OcrContact | null, b: OcrContact | null): boolean {
     "country",
   ];
   return keys.every((k) => (aa[k] ?? null) === (bb[k] ?? null));
+}
+
+function Callout(props: {
+  tone: "neutral" | "warn" | "bad";
+  title: string;
+  message?: string;
+  traceId?: string | null;
+  onRetry?: (() => void) | null;
+  retryLabel?: string;
+}) {
+  const { tone, title, message, traceId, onRetry, retryLabel } = props;
+
+  const cls =
+    tone === "bad"
+      ? "border-red-200 bg-red-50 text-red-900"
+      : tone === "warn"
+        ? "border-amber-200 bg-amber-50 text-amber-900"
+        : "border-black/10 bg-black/5 text-black/70";
+
+  return (
+    <div className={`rounded-xl border p-4 ${cls}`}>
+      <div className="font-medium">{title}</div>
+      {message ? <div className="mt-1 text-sm opacity-90">{message}</div> : null}
+
+      {(traceId || onRetry) ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {onRetry ? (
+            <button
+              type="button"
+              className="rounded-md border bg-white px-3 py-1.5 text-sm hover:bg-white/60"
+              onClick={onRetry}
+            >
+              {retryLabel || "Retry"}
+            </button>
+          ) : null}
+
+          {traceId ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs opacity-80">traceId: {traceId}</span>
+              <button
+                type="button"
+                className="rounded-md border bg-white px-2 py-1 text-xs hover:bg-white/60"
+                onClick={() => void copyText(traceId)}
+              >
+                Copy
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function OcrFieldRow(props: { label: string; value: string }) {
+  const { label, value } = props;
+  return (
+    <div className="grid grid-cols-12 gap-3 py-2">
+      <div className="col-span-4 text-xs font-medium text-black/60">{label}</div>
+      <div className="col-span-8 break-words text-sm text-black/80">{value || "—"}</div>
+    </div>
+  );
+}
+
+function NonEmptyPairsFromContact(c: OcrContact | null): Array<{ label: string; value: string }> {
+  const x = c ?? {};
+  const pairs: Array<{ label: string; value: string }> = [
+    { label: "First name", value: toInput(x.firstName) },
+    { label: "Last name", value: toInput(x.lastName) },
+    { label: "Company", value: toInput(x.company) },
+    { label: "Title", value: toInput(x.title) },
+    { label: "Email", value: toInput(x.email) },
+    { label: "Phone", value: toInput(x.phone) },
+    { label: "Mobile", value: toInput(x.mobile) },
+    { label: "Website", value: toInput(x.website) },
+    { label: "Street", value: toInput(x.street) },
+    { label: "ZIP", value: toInput(x.zip) },
+    { label: "City", value: toInput(x.city) },
+    { label: "Country", value: toInput(x.country) },
+  ];
+  const hasAny = pairs.some((p) => (p.value || "").trim().length > 0);
+  if (!hasAny) return pairs;
+  return pairs.filter((p) => (p.value || "").trim().length > 0);
 }
 
 export default function LeadDetailDrawer(props: {
@@ -520,10 +630,13 @@ export default function LeadDetailDrawer(props: {
     }
   }, [leadId, loadDetail, onMutated, resetLocalErrors]);
 
+  const ocr = ocrPanel.ocr;
+  const parsedContact = useMemo(() => (ocr?.parsedContact ?? null) as OcrContact | null, [ocr?.parsedContact]);
+  const correctedContact = useMemo(() => (ocr?.correctedContact ?? null) as OcrContact | null, [ocr?.correctedContact]);
+
   const effectiveContact = useMemo(() => {
-    const ocr = ocrPanel.ocr;
-    return (ocr?.correctedContact ?? ocr?.parsedContact ?? null) as OcrContact | null;
-  }, [ocrPanel.ocr]);
+    return (correctedContact ?? parsedContact ?? null) as OcrContact | null;
+  }, [correctedContact, parsedContact]);
 
   const isDraftDirty = useMemo(() => {
     const base = sanitizeDraft(effectiveContact ?? {});
@@ -609,8 +722,8 @@ export default function LeadDetailDrawer(props: {
   }, [leadId, ocrPanel.ocr?.id, onMutated, loadDetail, loadOcr, businessCardAttachment, resetOcrErrors, resetLocalErrors]);
 
   const doResetDraft = useCallback(() => {
-    const effective = effectiveContact;
-    if (effective) setCorrectionDraft({ ...effective });
+    const base = effectiveContact;
+    if (base) setCorrectionDraft({ ...base });
     else {
       setCorrectionDraft({
         firstName: null,
@@ -648,19 +761,18 @@ export default function LeadDetailDrawer(props: {
     { label: "Country", value: toInput(leadContact.contactCountry) },
   ];
 
-  const ocr = ocrPanel.ocr;
   const ocrPill = ocrStatusPill(ocr?.status);
-  const ocrHasAttachment = Boolean(ocrPanel.attachment?.id);
   const ocrAttachment = ocrPanel.attachment;
 
-  const inlineUrl =
-    leadId && ocrAttachment?.id ? `/api/admin/v1/leads/${leadId}/attachments/${ocrAttachment.id}/download?disposition=inline` : "#";
-  const downloadUrl =
-    leadId && ocrAttachment?.id ? `/api/admin/v1/leads/${leadId}/attachments/${ocrAttachment.id}/download` : "#";
+  const hasAttachment = Boolean(leadId && ocrAttachment?.id);
+  const inlineUrl = hasAttachment ? `/api/admin/v1/leads/${leadId}/attachments/${ocrAttachment!.id}/download?disposition=inline` : "#";
+  const downloadUrl = hasAttachment ? `/api/admin/v1/leads/${leadId}/attachments/${ocrAttachment!.id}/download` : "#";
 
-  const canReload = ocrHasAttachment && ocrState !== "loading" && !ocrBusyApply && !ocrBusySave;
+  const canReload = Boolean(businessCardAttachment?.id) && ocrState !== "loading" && !ocrBusyApply && !ocrBusySave;
   const canApply = Boolean(ocr?.id) && String(ocr?.status || "").toUpperCase() === "COMPLETED" && !ocrBusyApply && !ocrBusySave;
   const canSave = Boolean(ocr?.id) && isDraftDirty && !ocrBusyApply && !ocrBusySave;
+
+  const parsedPairs = useMemo(() => NonEmptyPairsFromContact(parsedContact), [parsedContact]);
 
   return (
     <div className="fixed inset-0 z-50">
@@ -702,58 +814,34 @@ export default function LeadDetailDrawer(props: {
           {state === "loading" && <DetailSkeleton />}
 
           {state === "error" && (
-            <div className="rounded-xl border border-red-200 bg-red-50 p-4">
-              <div className="font-semibold text-red-800">Could not load lead.</div>
-              <div className="mt-1 text-sm text-red-800/80">{errorMessage || "Something went wrong."}</div>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm hover:bg-white/60"
-                  onClick={() => void loadDetail()}
-                >
-                  Retry
-                </button>
-                {traceId && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-red-800/70">traceId: {traceId}</span>
-                    <button
-                      type="button"
-                      className="rounded-md border border-red-200 bg-white px-2 py-1 text-xs hover:bg-white/60"
-                      onClick={() => void navigator.clipboard.writeText(traceId)}
-                    >
-                      Copy
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
+            <Callout
+              tone="bad"
+              title="Could not load lead."
+              message={errorMessage || "Something went wrong."}
+              traceId={traceId}
+              onRetry={() => void loadDetail()}
+              retryLabel="Retry"
+            />
           )}
 
           {state === "idle" && lead && (
             <>
               {(errorMessage || traceId) && (
-                <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
-                  <div className="font-medium text-amber-900">Action issue</div>
-                  <div className="mt-1 text-sm text-amber-900/80">{errorMessage}</div>
-                  {traceId && (
-                    <div className="mt-2 flex items-center gap-2">
-                      <span className="text-xs text-amber-900/70">traceId: {traceId}</span>
-                      <button
-                        type="button"
-                        className="rounded-md border border-amber-200 bg-white px-2 py-1 text-xs hover:bg-white/60"
-                        onClick={() => void navigator.clipboard.writeText(traceId)}
-                      >
-                        Copy
-                      </button>
-                    </div>
-                  )}
+                <div className="mb-4">
+                  <Callout
+                    tone="warn"
+                    title="Action issue"
+                    message={errorMessage || ""}
+                    traceId={traceId}
+                    onRetry={null}
+                  />
                 </div>
               )}
 
               <div className="mb-5 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-800 hover:bg-red-100"
+                  className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-800 hover:bg-red-100 disabled:opacity-50"
                   onClick={() => void doDelete()}
                   disabled={lead.isDeleted}
                   title={lead.isDeleted ? "Already deleted" : "Soft-delete"}
@@ -835,18 +923,18 @@ export default function LeadDetailDrawer(props: {
                 <div className="mt-3 text-xs text-black/40">Contact fields are exported as contact_* (stable columns).</div>
               </section>
 
+              {/* OCR POLISH */}
               <section className="mt-4 rounded-xl border bg-white p-4">
-                <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="mb-3 flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <h3 className="text-sm font-semibold">OCR (Business Card)</h3>
                       <span className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium ${pillClass(ocrPill.kind)}`}>
                         {ocrPill.label}
                       </span>
-                      {ocrState === "loading" ? (
-                        <span className="text-xs text-black/40">Loading…</span>
-                      ) : null}
+                      {ocrState === "loading" ? <span className="text-xs text-black/40">Loading…</span> : null}
                     </div>
+
                     <div className="mt-1 text-xs text-black/50">
                       engine: {ocr?.engine || "—"} {ocr?.engineVersion ? `· ${ocr.engineVersion}` : ""}{" "}
                       {ocr?.mode ? `· ${ocr.mode}` : ""}
@@ -860,7 +948,7 @@ export default function LeadDetailDrawer(props: {
                       className="rounded-md border px-3 py-1.5 text-sm hover:bg-black/5 disabled:opacity-50"
                       onClick={() => void loadOcr(businessCardAttachment)}
                       disabled={!canReload}
-                      title={!ocrHasAttachment ? "No business card attachment available" : "Reload OCR"}
+                      title={!businessCardAttachment?.id ? "No business card attachment available" : "Reload OCR"}
                     >
                       Reload
                     </button>
@@ -884,50 +972,51 @@ export default function LeadDetailDrawer(props: {
                 </div>
 
                 {(ocrErrorMessage || ocrTraceId) && (
-                  <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
-                    <div className="text-sm font-medium text-amber-900">OCR issue</div>
-                    <div className="mt-1 text-sm text-amber-900/80">{ocrErrorMessage || "Something went wrong."}</div>
-                    {ocrTraceId && (
-                      <div className="mt-2 flex items-center gap-2">
-                        <span className="text-xs text-amber-900/70">traceId: {ocrTraceId}</span>
-                        <button
-                          type="button"
-                          className="rounded-md border border-amber-200 bg-white px-2 py-1 text-xs hover:bg-white/60"
-                          onClick={() => void navigator.clipboard.writeText(ocrTraceId)}
-                        >
-                          Copy
-                        </button>
-                      </div>
-                    )}
+                  <div className="mb-3">
+                    <Callout
+                      tone="warn"
+                      title="OCR issue"
+                      message={ocrErrorMessage || "Something went wrong."}
+                      traceId={ocrTraceId}
+                      onRetry={canReload ? () => void loadOcr(businessCardAttachment) : null}
+                      retryLabel="Retry"
+                    />
                   </div>
                 )}
 
-                {!ocrHasAttachment ? (
+                {!businessCardAttachment ? (
                   <div className="text-sm text-black/60">No business card image attachment found for this lead.</div>
                 ) : !ocr?.id ? (
-                  <div className="rounded-lg border bg-black/[0.02] p-3 text-sm text-black/60">
-                    No OCR result yet. Try <span className="font-medium">Reload</span>.
+                  <div className="rounded-xl border bg-black/[0.02] p-4 text-sm text-black/60">
+                    No OCR result yet. Use <span className="font-medium">Reload</span>.
                   </div>
                 ) : (
                   <div className="grid grid-cols-12 gap-4">
+                    {/* Left: Attachment + OCR text */}
                     <div className="col-span-5">
-                      <div className="rounded-lg border bg-black/[0.02] p-2">
+                      <div className="rounded-xl border bg-black/[0.02] p-3">
                         <div className="flex items-center justify-between">
                           <div className="text-xs font-medium text-black/70">Attachment</div>
                           <a href={downloadUrl} className="text-xs text-black/60 underline hover:text-black">
                             Download
                           </a>
                         </div>
-                        <div className="mt-2 overflow-hidden rounded-md border bg-white">
-                          <Image
-                            src={inlineUrl}
-                            alt={ocrAttachment?.filename || "business card"}
-                            width={400}
-                            height={240}
-                            className="h-auto w-full object-contain"
-                            unoptimized
-                          />
+
+                        <div className="mt-2 overflow-hidden rounded-lg border bg-white">
+                          {hasAttachment ? (
+                            <Image
+                              src={inlineUrl}
+                              alt={ocrAttachment?.filename || "business card"}
+                              width={400}
+                              height={240}
+                              className="h-auto w-full object-contain"
+                              unoptimized
+                            />
+                          ) : (
+                            <div className="flex h-40 items-center justify-center text-sm text-black/50">No preview</div>
+                          )}
                         </div>
+
                         <div className="mt-2 text-xs text-black/50">
                           {ocrAttachment?.filename || "—"}
                           {ocrAttachment?.mimeType ? ` · ${ocrAttachment.mimeType}` : ""}
@@ -935,16 +1024,16 @@ export default function LeadDetailDrawer(props: {
                         </div>
                       </div>
 
-                      <div className="mt-3 rounded-lg border bg-white p-3">
+                      <div className="mt-3 rounded-xl border bg-white p-3">
                         <div className="flex items-center justify-between">
-                          <div className="text-xs font-medium text-black/70">Raw text</div>
+                          <div className="text-xs font-medium text-black/70">Recognized text</div>
                           <button
                             type="button"
                             className="text-xs text-black/60 underline hover:text-black disabled:opacity-50"
                             onClick={() => setRawExpanded((v) => !v)}
                             disabled={!ocr?.rawText}
                           >
-                            {rawExpanded ? "Collapse" : "Expand"}
+                            {rawExpanded ? "Less" : "More"}
                           </button>
                         </div>
 
@@ -952,22 +1041,23 @@ export default function LeadDetailDrawer(props: {
                           <div className="mt-2 text-sm text-black/50">Loading…</div>
                         ) : ocr?.rawText ? (
                           <pre
-                            className={`mt-2 whitespace-pre-wrap break-words rounded-md bg-black/[0.03] p-2 text-xs text-black/80 ${
+                            className={`mt-2 whitespace-pre-wrap break-words rounded-lg bg-black/[0.03] p-2 text-xs text-black/80 ${
                               rawExpanded ? "" : "max-h-40 overflow-hidden"
                             }`}
                           >
                             {ocr.rawText}
                           </pre>
                         ) : (
-                          <div className="mt-2 text-sm text-black/50">No raw text.</div>
+                          <div className="mt-2 text-sm text-black/50">No text.</div>
                         )}
 
                         <div className="mt-2 text-xs text-black/40">
                           created: {compactDate(ocr?.createdAt)} · updated: {compactDate(ocr?.updatedAt)} · completed:{" "}
                           {compactDate(ocr?.completedAt)}
                         </div>
+
                         {ocr?.errorCode || ocr?.errorMessage ? (
-                          <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-800">
+                          <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-800">
                             {ocr?.errorCode ? <span className="font-medium">{ocr.errorCode}</span> : null}
                             {ocr?.errorMessage ? <span>{ocr?.errorCode ? ` · ${ocr.errorMessage}` : ocr.errorMessage}</span> : null}
                           </div>
@@ -975,12 +1065,45 @@ export default function LeadDetailDrawer(props: {
                       </div>
                     </div>
 
+                    {/* Right: Suggestions + Correction */}
                     <div className="col-span-7">
-                      <div className="rounded-lg border bg-white p-3">
+                      {/* Suggestions */}
+                      <div className="rounded-xl border bg-white p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium text-black/70">Suggestions (parsed)</div>
+                            <div className="mt-1 text-xs text-black/50">Based on parsedContact. Corrections are separate.</div>
+                          </div>
+                          {correctedContact ? (
+                            <span className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium ${pillClass("neutral")}`}>
+                              corrected: {compactDate(ocr?.correctedAt)}
+                            </span>
+                          ) : null}
+                        </div>
+
+                        <div className="mt-3 border-t pt-2">
+                          {parsedPairs.length === 0 ? (
+                            <div className="text-sm text-black/60">No suggestions.</div>
+                          ) : (
+                            <div className="divide-y">
+                              {parsedPairs.map((p) => (
+                                <OcrFieldRow key={p.label} label={p.label} value={p.value} />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="mt-3 text-xs text-black/40">
+                          Apply is enabled only when OCR is <span className="font-medium">COMPLETED</span>.
+                        </div>
+                      </div>
+
+                      {/* Correction */}
+                      <div className="mt-3 rounded-xl border bg-white p-3">
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
-                            <div className="text-xs font-medium text-black/70">Parsed / corrected contact</div>
-                            <div className="mt-1 text-xs text-black/50">Uses correctedContact if present; otherwise parsedContact.</div>
+                            <div className="text-xs font-medium text-black/70">Correction (editable)</div>
+                            <div className="mt-1 text-xs text-black/50">Save stores correctedContactJson.</div>
                           </div>
 
                           <div className="flex shrink-0 items-center gap-2">
@@ -989,9 +1112,11 @@ export default function LeadDetailDrawer(props: {
                               className="rounded-md border px-2 py-1 text-xs hover:bg-black/5 disabled:opacity-50"
                               onClick={() => doResetDraft()}
                               disabled={!ocr?.id || ocrBusyApply || ocrBusySave}
+                              title="Reset to current effective contact"
                             >
                               Reset
                             </button>
+
                             <button
                               type="button"
                               className="rounded-md border px-2 py-1 text-xs hover:bg-black/5 disabled:opacity-50"
@@ -1022,12 +1147,12 @@ export default function LeadDetailDrawer(props: {
                         </div>
 
                         <div className="mt-3 text-xs text-black/40">
-                          Save stores correctedContactJson. Apply writes lead.contact_* and ocr_* export meta.
+                          Apply writes lead.contact_* and ocr_* export meta. Save does not change lead.contact_*.
                         </div>
                       </div>
 
                       {leadContact.contactOcrResultId ? (
-                        <div className="mt-3 rounded-lg border bg-black/[0.02] p-3 text-xs text-black/60">
+                        <div className="mt-3 rounded-xl border bg-black/[0.02] p-3 text-xs text-black/60">
                           Applied OCR Result: <span className="font-mono">{leadContact.contactOcrResultId}</span>
                         </div>
                       ) : null}
