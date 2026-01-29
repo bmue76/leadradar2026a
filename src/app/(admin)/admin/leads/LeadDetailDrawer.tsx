@@ -231,7 +231,6 @@ function normalizeOcrResult(v: unknown): OcrResult | null {
 function normalizeOcrPanelData(payload: unknown, fallbackAttachment: LeadAttachmentListItem | null): OcrPanelData {
   if (!isPlainObject(payload)) return { attachment: fallbackAttachment, ocr: null };
 
-  // Preferred shape: { attachment, ocr }
   const attRaw = payload.attachment;
   const ocrRaw = payload.ocr;
 
@@ -454,7 +453,6 @@ export default function LeadDetailDrawer(props: {
     const pick = items.find((a) => String(a.type || "").toUpperCase() === "BUSINESS_CARD_IMAGE");
     if (pick) return pick;
 
-    // fallback: any image attachment if no explicit BUSINESS_CARD_IMAGE
     const img = items.find((a) => isImageAttachment(a));
     return img ?? null;
   }, [leadAttachments]);
@@ -547,14 +545,12 @@ export default function LeadDetailDrawer(props: {
     [leadId, resetOcrErrors]
   );
 
-  // Load lead detail when drawer opens or leadId changes
   useEffect(() => {
     if (!open) return;
     if (!leadId) return;
     void loadDetail();
   }, [open, leadId, loadDetail]);
 
-  // Load OCR once lead is loaded (and attachment available)
   useEffect(() => {
     if (!open) return;
     if (!leadId) return;
@@ -742,6 +738,9 @@ export default function LeadDetailDrawer(props: {
     }
   }, [effectiveContact]);
 
+  // ✅ HOOK FIX: parsedPairs useMemo MUST be before any early return
+  const parsedPairs = useMemo(() => NonEmptyPairsFromContact(parsedContact), [parsedContact]);
+
   if (!open) return null;
 
   const leadContact = contactFromLead(lead);
@@ -761,6 +760,8 @@ export default function LeadDetailDrawer(props: {
     { label: "Country", value: toInput(leadContact.contactCountry) },
   ];
 
+  const formLabel = formName;
+
   const ocrPill = ocrStatusPill(ocr?.status);
   const ocrAttachment = ocrPanel.attachment;
 
@@ -771,8 +772,6 @@ export default function LeadDetailDrawer(props: {
   const canReload = Boolean(businessCardAttachment?.id) && ocrState !== "loading" && !ocrBusyApply && !ocrBusySave;
   const canApply = Boolean(ocr?.id) && String(ocr?.status || "").toUpperCase() === "COMPLETED" && !ocrBusyApply && !ocrBusySave;
   const canSave = Boolean(ocr?.id) && isDraftDirty && !ocrBusyApply && !ocrBusySave;
-
-  const parsedPairs = useMemo(() => NonEmptyPairsFromContact(parsedContact), [parsedContact]);
 
   return (
     <div className="fixed inset-0 z-50">
@@ -798,7 +797,7 @@ export default function LeadDetailDrawer(props: {
               {lead?.formId ? (
                 <>
                   {" · "}
-                  <span className="font-medium text-black/75">{formName}</span>
+                  <span className="font-medium text-black/75">{formLabel}</span>
                 </>
               ) : null}
             </div>
@@ -828,13 +827,7 @@ export default function LeadDetailDrawer(props: {
             <>
               {(errorMessage || traceId) && (
                 <div className="mb-4">
-                  <Callout
-                    tone="warn"
-                    title="Action issue"
-                    message={errorMessage || ""}
-                    traceId={traceId}
-                    onRetry={null}
-                  />
+                  <Callout tone="warn" title="Action issue" message={errorMessage || ""} traceId={traceId} onRetry={null} />
                 </div>
               )}
 
@@ -923,7 +916,6 @@ export default function LeadDetailDrawer(props: {
                 <div className="mt-3 text-xs text-black/40">Contact fields are exported as contact_* (stable columns).</div>
               </section>
 
-              {/* OCR POLISH */}
               <section className="mt-4 rounded-xl border bg-white p-4">
                 <div className="mb-3 flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -992,7 +984,6 @@ export default function LeadDetailDrawer(props: {
                   </div>
                 ) : (
                   <div className="grid grid-cols-12 gap-4">
-                    {/* Left: Attachment + OCR text */}
                     <div className="col-span-5">
                       <div className="rounded-xl border bg-black/[0.02] p-3">
                         <div className="flex items-center justify-between">
@@ -1065,9 +1056,7 @@ export default function LeadDetailDrawer(props: {
                       </div>
                     </div>
 
-                    {/* Right: Suggestions + Correction */}
                     <div className="col-span-7">
-                      {/* Suggestions */}
                       <div className="rounded-xl border bg-white p-3">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
@@ -1098,7 +1087,6 @@ export default function LeadDetailDrawer(props: {
                         </div>
                       </div>
 
-                      {/* Correction */}
                       <div className="mt-3 rounded-xl border bg-white p-3">
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
