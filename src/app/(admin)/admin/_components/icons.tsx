@@ -50,12 +50,18 @@ export function IconLogoMark(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-/** Sidebar category icons (simple, high-contrast, Apple-clean) */
+/**
+ * Sidebar category icons — clean, consistent, "SumUp/Square-like"
+ * - 24x24 grid
+ * - round caps/joins
+ * - strokeWidth 1.8
+ */
+
 export function IconHome(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
       <path
-        d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5Z"
+        d="M4.5 10.2 12 4.6l7.5 5.6V20a1.2 1.2 0 0 1-1.2 1.2H14v-6.3h-4V21.2H5.7A1.2 1.2 0 0 1 4.5 20v-9.8Z"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinejoin="round"
@@ -65,16 +71,39 @@ export function IconHome(props: SVGProps<SVGSVGElement>) {
 }
 
 export function IconSetup(props: SVGProps<SVGSVGElement>) {
+  // Sliders / Controls
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
       <path
-        d="M4 7h10M4 12h16M4 17h12"
+        d="M6 7h12"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
       />
       <path
-        d="M16 6.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3ZM10 16.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z"
+        d="M6 12h12"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path
+        d="M6 17h12"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path
+        d="M9 7a2 2 0 1 0 0 .01V7Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M15 12a2 2 0 1 0 0 .01V12Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M11 17a2 2 0 1 0 0 .01V17Z"
         stroke="currentColor"
         strokeWidth="1.8"
       />
@@ -83,34 +112,43 @@ export function IconSetup(props: SVGProps<SVGSVGElement>) {
 }
 
 export function IconOperations(props: SVGProps<SVGSVGElement>) {
+  // Briefcase
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
       <path
-        d="M7 7h10M7 12h10M7 17h10"
+        d="M9 7.2V6.3A1.3 1.3 0 0 1 10.3 5h3.4A1.3 1.3 0 0 1 15 6.3v.9"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
       />
       <path
-        d="M4.5 7h.01M4.5 12h.01M4.5 17h.01"
+        d="M6.2 8h11.6A2.2 2.2 0 0 1 20 10.2v8.6A2.2 2.2 0 0 1 17.8 21H6.2A2.2 2.2 0 0 1 4 18.8v-8.6A2.2 2.2 0 0 1 6.2 8Z"
         stroke="currentColor"
-        strokeWidth="3"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M4 13h16"
+        stroke="currentColor"
+        strokeWidth="1.8"
         strokeLinecap="round"
+        opacity="0.9"
       />
     </svg>
   );
 }
 
 export function IconLeads(props: SVGProps<SVGSVGElement>) {
+  // Users
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
       <path
-        d="M16 11a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"
+        d="M15.8 10.2a3.8 3.8 0 1 1-7.6 0 3.8 3.8 0 0 1 7.6 0Z"
         stroke="currentColor"
         strokeWidth="1.8"
       />
       <path
-        d="M4 20a8 8 0 0 1 16 0"
+        d="M4.8 21a7.2 7.2 0 0 1 14.4 0"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
@@ -120,16 +158,29 @@ export function IconLeads(props: SVGProps<SVGSVGElement>) {
 }
 
 export function IconStats(props: SVGProps<SVGSVGElement>) {
+  // Bar chart
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
       <path
-        d="M5 19V10M12 19V5M19 19v-8"
+        d="M5 20h14"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
       />
       <path
-        d="M4 19h16"
+        d="M7.5 20V11.2"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path
+        d="M12 20V6.8"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path
+        d="M16.5 20v-8.2"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
@@ -139,22 +190,24 @@ export function IconStats(props: SVGProps<SVGSVGElement>) {
 }
 
 export function IconBilling(props: SVGProps<SVGSVGElement>) {
+  // Credit card
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
       <path
-        d="M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8Z"
+        d="M5.6 7h12.8A2.2 2.2 0 0 1 20.6 9.2v8.6A2.2 2.2 0 0 1 18.4 20H5.6A2.2 2.2 0 0 1 3.4 17.8V9.2A2.2 2.2 0 0 1 5.6 7Z"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinejoin="round"
       />
       <path
-        d="M4 10h16"
+        d="M3.4 11h17.2"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
+        opacity="0.9"
       />
       <path
-        d="M7 15h4"
+        d="M7 16h4.6"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
