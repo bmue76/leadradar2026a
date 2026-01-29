@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
@@ -391,7 +391,7 @@ export default function CaptureScreen() {
     try {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
       if (!perm.granted) {
-        Alert.alert("Kamera benötigt", "Bitte erlaube den Zugriff auf die Kamera, um Visitenkarten zu scannen.");
+        setOcrError("Kamera-Zugriff ist nötig, um eine Visitenkarte zu scannen.");
         return;
       }
 
@@ -409,8 +409,8 @@ export default function CaptureScreen() {
 
       const manipulated = await ImageManipulator.manipulateAsync(
         uri,
-        [{ resize: { width: 1600 } }],
-        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+        [{ resize: { width: 2048 } }],
+        { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG }
       );
 
       const fileUri = manipulated.uri;
@@ -446,7 +446,6 @@ export default function CaptureScreen() {
     const next = applyContactToValues(fields, values, contactDraft);
     setValues(next);
     setContactApplied(true);
-    Alert.alert("OK", "Kontakt übernommen.");
   }, [contactDraft, fields, values]);
 
   const onSubmit = useCallback(async () => {
@@ -496,7 +495,7 @@ export default function CaptureScreen() {
           await handleUnauthorized(leadRes.traceId);
           return;
         }
-        Alert.alert("Fehler", `Lead konnte nicht gesendet werden.\n${leadRes.message}${leadRes.traceId ? `\ntraceId: ${leadRes.traceId}` : ""}`);
+        Alert.alert("Fehler", `Konnte nicht gespeichert werden.\n${leadRes.message}${leadRes.traceId ? `\ntraceId: ${leadRes.traceId}` : ""}`);
         return;
       }
 
@@ -575,7 +574,7 @@ export default function CaptureScreen() {
         }
       }
 
-      Alert.alert("OK", "Lead gespeichert.");
+      Alert.alert("OK", "Gespeichert.");
       resetValues();
     } finally {
       setSubmitBusy(false);
@@ -666,7 +665,6 @@ export default function CaptureScreen() {
               />
               <View style={{ flex: 1, gap: 6 }}>
                 <Text style={{ fontWeight: "900", color: UI.text }}>Scan vorhanden</Text>
-                <Text style={{ opacity: 0.7, fontFamily: "monospace", color: UI.text }} numberOfLines={1}>{cardName}</Text>
 
                 <View style={{ flexDirection: "row", gap: 10 }}>
                   <Pressable
@@ -674,7 +672,7 @@ export default function CaptureScreen() {
                     disabled={ocrBusy || submitBusy}
                     style={{ paddingVertical: 9, paddingHorizontal: 12, borderRadius: 12, backgroundColor: (ocrBusy || submitBusy) ? "rgba(17,24,39,0.35)" : UI.text }}
                   >
-                    <Text style={{ color: "white", fontWeight: "900" }}>{ocrBusy ? "Wir lesen …" : "Neu scannen"}</Text>
+                    <Text style={{ color: "white", fontWeight: "900" }}>{ocrBusy ? "Einen Moment …" : "Neu aufnehmen"}</Text>
                   </Pressable>
 
                   <Pressable
@@ -706,9 +704,22 @@ export default function CaptureScreen() {
                 alignItems: "center",
               }}
             >
-              <Text style={{ color: "white", fontWeight: "900" }}>{ocrBusy ? "Wir lesen …" : "Visitenkarte scannen"}</Text>
+              <Text style={{ color: "white", fontWeight: "900" }}>{ocrBusy ? "Einen Moment …" : "Foto aufnehmen"}</Text>
             </Pressable>
           )}
+
+          {!cardUri ? (
+            <Text style={{ color: "rgba(17,24,39,0.55)", fontWeight: "700" }}>
+              Tipp: Gutes Licht. Karte möglichst gross im Bild und kurz ruhig halten.
+            </Text>
+          ) : null}
+
+          {ocrBusy ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingTop: 4 }}>
+              <ActivityIndicator />
+              <Text style={{ color: "rgba(17,24,39,0.55)", fontWeight: "700" }}>Wir lesen den Text.</Text>
+            </View>
+          ) : null}
 
           {ocrError ? (
             <View style={{ padding: 10, borderRadius: 12, borderWidth: 1, borderColor: "rgba(220,38,38,0.25)", backgroundColor: "rgba(220,38,38,0.06)" }}>
@@ -770,7 +781,20 @@ export default function CaptureScreen() {
                     marginTop: 4,
                   }}
                 >
-                  <Text style={{ color: "white", fontWeight: "900" }}>{contactApplied ? "Übernommen ✓" : "Übernehmen"}</Text>
+                  <Text style={{ color: "white", fontWeight: "900" }}>{contactApplied ? "Übernommen ✓" : "Kontakt übernehmen"}</Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={scanBusinessCard}
+                  disabled={submitBusy || ocrBusy}
+                  style={{
+                    paddingVertical: 12,
+                    borderRadius: 12,
+                    backgroundColor: "rgba(17,24,39,0.06)",
+                    alignItems: "center",
+                  }}
+                >
+                  <Text style={{ fontWeight: "900", color: UI.text }}>Neu aufnehmen</Text>
                 </Pressable>
               </View>
             </View>
