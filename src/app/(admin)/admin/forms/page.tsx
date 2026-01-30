@@ -1,25 +1,20 @@
-import { FormsListClient } from "./FormsListClient";
-import { FormsActionsClient } from "./FormsActionsClient";
+import { FormsScreenClient } from "./FormsScreenClient";
 
 export const metadata = {
-  title: "Forms · LeadRadar Admin",
+  title: "Formulare · LeadRadar Admin",
 };
 
 export default function AdminFormsPage() {
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-zinc-900">Forms</h1>
-          <p className="mt-1 text-sm text-zinc-600">
-            Create and manage your lead capture forms. Use search and filters to find what you need fast.
-          </p>
-        </div>
+    <div className="mx-auto w-full max-w-5xl space-y-5">
+      <header>
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Formulare</h1>
+        <p className="mt-2 text-sm text-slate-600">
+          Erstelle, aktiviere und stelle Formulare fürs aktive Event bereit.
+        </p>
+      </header>
 
-        <FormsActionsClient />
-      </div>
-
-      <FormsListClient />
+      <FormsScreenClient />
     </div>
   );
 }

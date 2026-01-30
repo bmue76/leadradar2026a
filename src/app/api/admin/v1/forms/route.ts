@@ -8,16 +8,55 @@ import { requireAdminAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
-const ListFormsQuerySchema = z.object({
-  status: z.preprocess(
-    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
-    z.nativeEnum(FormStatus).optional()
-  ),
-  q: z.preprocess(
-    (v) => (typeof v === "string" ? v.trim() : undefined),
-    z.string().min(1).max(200).optional()
-  ),
-});
+type ListStatus = "DRAFT" | "ACTIVE" | "ARCHIVED" | "ALL";
+type AssignedFilter = "YES" | "NO" | "ALL";
+type SortKey = "updatedAt" | "name";
+type SortDir = "asc" | "desc";
+
+function firstString(v: unknown): string | undefined {
+  if (typeof v === "string") return v;
+  if (Array.isArray(v)) return typeof v[0] === "string" ? v[0] : undefined;
+  return undefined;
+}
+
+function cleanEnum(v: unknown): string | undefined {
+  const s = firstString(v);
+  const t = (s ?? "").trim();
+  return t ? t : undefined;
+}
+
+const ListFormsQuerySchema = z
+  .object({
+    q: z.preprocess(
+      (v) => {
+        const s = firstString(v);
+        const t = (s ?? "").trim();
+        return t ? t : undefined;
+      },
+      z.string().min(1).max(200).optional()
+    ),
+
+    status: z.preprocess(
+      (v) => cleanEnum(v),
+      z.enum(["DRAFT", "ACTIVE", "ARCHIVED", "ALL"]).default("ALL")
+    ),
+
+    assigned: z.preprocess(
+      (v) => cleanEnum(v),
+      z.enum(["YES", "NO", "ALL"]).default("ALL")
+    ),
+
+    sort: z.preprocess(
+      (v) => cleanEnum(v),
+      z.enum(["updatedAt", "name"]).default("updatedAt")
+    ),
+
+    dir: z.preprocess(
+      (v) => cleanEnum(v),
+      z.enum(["asc", "desc"]).default("desc")
+    ),
+  })
+  .strict();
 
 const CreateFormSchema = z.object({
   name: z.string().trim().min(1).max(200),
@@ -50,18 +89,61 @@ function mapPrismaUniqueConflict(
   return null;
 }
 
+function mapStatusToPrisma(s: ListStatus): FormStatus | undefined {
+  if (s === "ALL") return undefined;
+  return s as unknown as FormStatus;
+}
+
 export async function GET(req: Request) {
   try {
     const { tenantId } = await requireAdminAuth(req);
     const query = await validateQuery(req, ListFormsQuerySchema);
 
+    // Active event context (Option 2 filter + assignedToActiveEvent)
+    const activeEvent = await prisma.event.findFirst({
+      where: { tenantId, status: "ACTIVE" },
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+      select: { id: true, name: true },
+    });
+
+    const activeEventId = activeEvent?.id ?? null;
+
+    // Special-case: assigned=YES but no active event => empty list (not an error)
+    if (query.assigned === "YES" && !activeEventId) {
+      return jsonOk(req, {
+        activeEvent: null,
+        forms: [],
+        items: [],
+      });
+    }
+
     const where: Prisma.FormWhereInput = { tenantId };
-    if (query.status) where.status = query.status;
+
+    const prismaStatus = mapStatusToPrisma(query.status as ListStatus);
+    if (prismaStatus) where.status = prismaStatus;
+
     if (query.q) where.name = { contains: query.q, mode: "insensitive" };
+
+    const assigned = query.assigned as AssignedFilter;
+
+    // assigned filter is relative to ACTIVE event (Option 2)
+    if (assigned === "YES" && activeEventId) {
+      where.assignedEventId = activeEventId;
+    } else if (assigned === "NO" && activeEventId) {
+      where.OR = [{ assignedEventId: null }, { assignedEventId: { not: activeEventId } }];
+    }
+
+    const sort = query.sort as SortKey;
+    const dir = query.dir as SortDir;
+
+    const orderBy: Prisma.FormOrderByWithRelationInput[] =
+      sort === "name"
+        ? [{ name: dir }, { updatedAt: "desc" }, { createdAt: "desc" }]
+        : [{ updatedAt: dir }, { createdAt: dir }];
 
     const rows = await prisma.form.findMany({
       where,
-      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+      orderBy,
       select: {
         id: true,
         name: true,
@@ -69,6 +151,7 @@ export async function GET(req: Request) {
         status: true,
         createdAt: true,
         updatedAt: true,
+        assignedEventId: true,
         _count: { select: { fields: true } },
       },
     });
@@ -76,17 +159,24 @@ export async function GET(req: Request) {
     const items = rows.map((r) => ({
       id: r.id,
       name: r.name,
-      description: r.description,
+      description: r.description ?? null,
       status: r.status,
+      category: null as string | null, // MVP: Form has no category field
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
       fieldsCount: r._count.fields,
+      assignedEventId: r.assignedEventId ?? null,
+      assignedToActiveEvent: activeEventId ? r.assignedEventId === activeEventId : false,
     }));
 
     // Backward compatible:
     // - forms: historical contract used by existing admin screens
-    // - items: array alias for new generic clients
-    return jsonOk(req, { forms: items, items });
+    // - items: alias for generic clients
+    return jsonOk(req, {
+      activeEvent: activeEvent ? { id: activeEvent.id, name: activeEvent.name } : null,
+      forms: items,
+      items,
+    });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     const conflict = mapPrismaUniqueConflict(e);
@@ -107,6 +197,7 @@ export async function POST(req: Request) {
         description: body.description,
         status: body.status ?? FormStatus.DRAFT,
         config: (body.config ?? undefined) as Prisma.InputJsonValue | undefined,
+        assignedEventId: null,
       },
       select: {
         id: true,
@@ -117,6 +208,7 @@ export async function POST(req: Request) {
         config: true,
         createdAt: true,
         updatedAt: true,
+        assignedEventId: true,
       },
     });
 
