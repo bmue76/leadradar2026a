@@ -1,9 +1,7 @@
 "use client";
 
-import Image from "next/image";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-
-import { AdminPageHeader } from "../_components/AdminPageHeader";
+import Image from "next/image";
 
 type ApiOk<T> = { ok: true; data: T; traceId: string };
 type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
@@ -21,6 +19,21 @@ type DeviceRow = {
 };
 
 type DevicesList = { items: DeviceRow[] };
+
+function RefreshIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <path
+        d="M20 12a8 8 0 0 1-14.7 4.5M4 12A8 8 0 0 1 18.7 7.5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path d="M18 4v4h-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6 20v-4h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
 
 function formatDateTime(iso: string | null): string {
   if (!iso) return "—";
@@ -40,7 +53,7 @@ function statusChip(s: DeviceRow["status"]) {
       ? "bg-emerald-50 text-emerald-700 border-emerald-100"
       : s === "STALE"
         ? "bg-amber-50 text-amber-800 border-amber-100"
-        : "bg-zinc-50 text-zinc-700 border-zinc-100";
+        : "bg-slate-50 text-slate-700 border-slate-200";
   const label = s === "CONNECTED" ? "Online" : s === "STALE" ? "Stale" : "Nie";
   return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${cls}`}>{label}</span>;
 }
@@ -64,9 +77,11 @@ export default function DevicesScreenClient() {
     setErr(null);
     setTraceId(null);
     try {
-      const url = new URL("/api/admin/v1/devices", window.location.origin);
-      if (q.trim()) url.searchParams.set("q", q.trim());
-      const res = await fetch(url.toString(), { cache: "no-store" });
+      const params = new URLSearchParams();
+      if (q.trim()) params.set("q", q.trim());
+      const url = params.toString() ? `/api/admin/v1/devices?${params.toString()}` : "/api/admin/v1/devices";
+
+      const res = await fetch(url, { cache: "no-store" });
       const json = (await res.json()) as ApiResp<DevicesList>;
       if (!json.ok) {
         setErr(json.error.message);
@@ -139,178 +154,211 @@ export default function DevicesScreenClient() {
     }
   }, [email, emailMsg]);
 
-  // Use RELATIVE URL so next/image stays "local" and doesn't need remotePatterns.
-  const qrSrc = useMemo(() => {
+  const qrUrl = useMemo(() => {
     if (!provToken) return null;
-    const params = new URLSearchParams();
-    params.set("text", provToken.claimUrl);
-    params.set("size", "320");
-    return `/api/platform/v1/qr?${params.toString()}`;
+    const sp = new URLSearchParams();
+    sp.set("text", provToken.claimUrl);
+    sp.set("size", "320");
+    return `/api/platform/v1/qr?${sp.toString()}`;
   }, [provToken]);
 
   return (
     <div className="space-y-6">
-      <AdminPageHeader
-        title="Geräte"
-        hint="Verbundene Geräte, Status, Event-Bind und Provisioning."
-        actions={
-          <button
-            type="button"
-            onClick={() => setShowConnect(true)}
-            className="rounded-md bg-zinc-900 px-3 py-2 text-sm text-white hover:bg-zinc-800"
-          >
-            Gerät verbinden
-          </button>
-        }
-      />
+      {/* Toolbar Card */}
+      <section className="rounded-2xl border border-slate-200 bg-white">
+        <div className="p-5">
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Suche (Name oder ID)"
+              className="h-9 w-72 rounded-xl border border-slate-200 bg-white px-3 text-sm"
+            />
 
-      <div className="mx-auto w-full max-w-5xl space-y-6">
-        <div className="flex flex-wrap items-center gap-2">
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Suche (Name)"
-            className="w-72 rounded-md border border-zinc-200 px-3 py-2 text-sm"
-          />
-          <button
-            type="button"
-            onClick={load}
-            className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm hover:bg-zinc-50"
-          >
-            Aktualisieren
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={load}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+              disabled={loading}
+            >
+              Aktualisieren
+            </button>
 
-        {loading ? (
-          <div className="rounded-xl border border-zinc-200 bg-white p-6 text-sm text-zinc-600">Lädt…</div>
-        ) : !data ? (
-          <div className="rounded-xl border border-zinc-200 bg-white p-6">
-            <div className="text-sm text-zinc-800">Keine Daten.</div>
-            {err ? <div className="mt-2 text-sm text-red-600">{err}</div> : null}
-            {traceId ? <div className="mt-1 text-xs text-zinc-500">TraceId: {traceId}</div> : null}
-          </div>
-        ) : (
-          <div className="rounded-xl border border-zinc-200 bg-white">
-            <div className="px-6 py-2">
-              {data.items.length === 0 ? (
-                <div className="py-4 text-sm text-zinc-600">Noch keine Geräte.</div>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead className="text-zinc-500">
-                    <tr>
-                      <th className="py-2 text-left font-medium">Name</th>
-                      <th className="py-2 text-left font-medium">Status</th>
-                      <th className="py-2 text-left font-medium">Plattform</th>
-                      <th className="py-2 text-right font-medium">Zuletzt gesehen</th>
-                      <th className="py-2 text-right font-medium">Updated</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.items.map((d) => (
-                      <tr key={d.id} className="border-t border-zinc-50">
-                        <td className="py-2 font-medium">{d.name}</td>
-                        <td className="py-2">{statusChip(d.status)}</td>
-                        <td className="py-2 text-zinc-700">
-                          {d.platform ?? "—"}
-                          {d.appVersion ? <span className="text-zinc-400"> · {d.appVersion}</span> : null}
-                        </td>
-                        <td className="py-2 text-right">{formatDateTime(d.lastSeenAt)}</td>
-                        <td className="py-2 text-right">{formatDateTime(d.updatedAt)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowConnect(true)}
+                className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+              >
+                Gerät verbinden
+              </button>
+
+              <button
+                type="button"
+                onClick={load}
+                className="grid h-9 w-9 place-items-center rounded-xl hover:bg-slate-100 disabled:opacity-50"
+                aria-label="Aktualisieren"
+                disabled={loading}
+              >
+                <RefreshIcon className="h-4 w-4 text-slate-600" />
+              </button>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      </section>
 
+      {/* Data Card */}
+      {loading ? (
+        <section className="rounded-2xl border border-slate-200 bg-white p-6">
+          <div className="text-sm text-slate-600">Lade…</div>
+        </section>
+      ) : !data ? (
+        <section className="rounded-2xl border border-slate-200 bg-white p-6">
+          <div className="text-sm text-slate-900">Keine Daten.</div>
+          {err ? <div className="mt-2 text-sm text-red-600">{err}</div> : null}
+          {traceId ? <div className="mt-1 text-xs text-slate-500">TraceId: {traceId}</div> : null}
+        </section>
+      ) : (
+        <section className="rounded-2xl border border-slate-200 bg-white">
+          <div className="p-6">
+            {data.items.length === 0 ? (
+              <div className="text-sm text-slate-600">Noch keine Geräte.</div>
+            ) : (
+              <table className="w-full table-auto text-sm">
+                <thead className="text-xs font-semibold text-slate-600">
+                  <tr>
+                    <th className="pb-3 text-left">Name</th>
+                    <th className="pb-3 text-left">Status</th>
+                    <th className="pb-3 text-left">Plattform</th>
+                    <th className="pb-3 text-right">Zuletzt gesehen</th>
+                    <th className="pb-3 text-right">Updated</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {data.items.map((d) => (
+                    <tr key={d.id} className="hover:bg-slate-50">
+                      <td className="py-3 font-medium text-slate-900">{d.name}</td>
+                      <td className="py-3">{statusChip(d.status)}</td>
+                      <td className="py-3 text-slate-700">
+                        {d.platform ?? "—"}
+                        {d.appVersion ? <span className="text-slate-400"> · {d.appVersion}</span> : null}
+                      </td>
+                      <td className="py-3 text-right">{formatDateTime(d.lastSeenAt)}</td>
+                      <td className="py-3 text-right">{formatDateTime(d.updatedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* Connect Modal */}
       {showConnect ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="w-full max-w-2xl rounded-2xl border border-zinc-200 bg-white p-6 shadow-xl">
-            <div className="flex items-start justify-between gap-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 p-4">
+          <div className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex h-14 items-center justify-between border-b border-slate-200 px-6">
               <div>
-                <div className="text-base font-semibold">Gerät verbinden</div>
-                <div className="mt-1 text-sm text-zinc-600">QR scannen oder Token in der App eingeben.</div>
+                <div className="text-sm font-semibold text-slate-900">Gerät verbinden</div>
+                <div className="text-xs text-slate-600">QR scannen oder Token in der App eingeben.</div>
               </div>
+
               <button
                 type="button"
                 onClick={() => {
                   setShowConnect(false);
                   setProvToken(null);
                 }}
-                className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm hover:bg-zinc-50"
+                className="rounded-xl px-3 py-2 text-sm font-medium hover:bg-slate-100"
               >
                 Schliessen
               </button>
             </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div className="rounded-xl border border-zinc-200 p-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-medium">QR / Token</div>
-                  <button
-                    type="button"
-                    onClick={createToken}
-                    className="rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-sm hover:bg-zinc-50 disabled:opacity-50"
-                    disabled={busy !== null}
-                  >
-                    Token erzeugen
-                  </button>
-                </div>
-
-                {!provToken ? (
-                  <div className="mt-3 text-sm text-zinc-600">Noch kein Token erzeugt.</div>
-                ) : (
-                  <div className="mt-3 space-y-3">
-                    {qrSrc ? (
-                      <Image
-                        src={qrSrc}
-                        alt="QR"
-                        width={160}
-                        height={160}
-                        unoptimized
-                        className="h-40 w-40 rounded-lg border border-zinc-200"
-                      />
-                    ) : null}
-                    <div className="text-xs text-zinc-600">Gültig bis: {formatDateTime(provToken.expiresAt)}</div>
-                    <div className="rounded-lg bg-zinc-50 p-2 font-mono text-xs">{provToken.token}</div>
-                    <div className="break-all text-xs text-zinc-600">{provToken.claimUrl}</div>
+            <div className="px-6 py-6">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <section className="rounded-2xl border border-slate-200 bg-white">
+                  <div className="p-5">
+                    <div className="flex items-center gap-3">
+                      <div className="text-sm font-medium text-slate-900">QR / Token</div>
+                      <div className="ml-auto">
+                        <button
+                          type="button"
+                          onClick={createToken}
+                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+                          disabled={busy !== null}
+                        >
+                          Token erzeugen
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                )}
+
+                  <div className="h-px w-full bg-slate-200" />
+
+                  <div className="p-6">
+                    {!provToken ? (
+                      <div className="text-sm text-slate-600">Noch kein Token erzeugt.</div>
+                    ) : (
+                      <div className="space-y-3">
+                        {qrUrl ? (
+                          <Image
+                            src={qrUrl}
+                            alt="QR"
+                            width={160}
+                            height={160}
+                            className="h-40 w-40 rounded-xl border border-slate-200"
+                            unoptimized
+                          />
+                        ) : null}
+
+                        <div className="text-xs text-slate-600">Gültig bis: {formatDateTime(provToken.expiresAt)}</div>
+                        <div className="rounded-xl bg-slate-50 p-3 font-mono text-xs text-slate-800">{provToken.token}</div>
+                        <div className="break-all text-xs text-slate-600">{provToken.claimUrl}</div>
+                      </div>
+                    )}
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-slate-200 bg-white">
+                  <div className="p-5">
+                    <div className="text-sm font-medium text-slate-900">Per E-Mail senden</div>
+                    <div className="mt-1 text-sm text-slate-600">Sendet QR/Token + Ablauf.</div>
+                  </div>
+
+                  <div className="h-px w-full bg-slate-200" />
+
+                  <div className="p-6">
+                    <div className="space-y-2">
+                      <input
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="email@firma.ch"
+                        className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+                      />
+                      <textarea
+                        value={emailMsg}
+                        onChange={(e) => setEmailMsg(e.target.value)}
+                        placeholder="Optionale Nachricht (z. B. für welches Gerät)"
+                        className="h-24 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={sendEmail}
+                        className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                        disabled={busy !== null || !email.trim()}
+                      >
+                        E-Mail senden
+                      </button>
+                    </div>
+                  </div>
+                </section>
               </div>
 
-              <div className="rounded-xl border border-zinc-200 p-4">
-                <div className="text-sm font-medium">Per E-Mail senden</div>
-                <div className="mt-1 text-sm text-zinc-600">Sendet QR/Token + Ablauf.</div>
-                <div className="mt-3 space-y-2">
-                  <input
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="email@firma.ch"
-                    className="w-full rounded-md border border-zinc-200 px-3 py-2 text-sm"
-                  />
-                  <textarea
-                    value={emailMsg}
-                    onChange={(e) => setEmailMsg(e.target.value)}
-                    placeholder="Optionale Nachricht (z. B. für welches Gerät)"
-                    className="h-24 w-full rounded-md border border-zinc-200 px-3 py-2 text-sm"
-                  />
-                  <button
-                    type="button"
-                    onClick={sendEmail}
-                    className="rounded-md bg-zinc-900 px-3 py-2 text-sm text-white hover:bg-zinc-800 disabled:opacity-50"
-                    disabled={busy !== null || !email.trim()}
-                  >
-                    E-Mail senden
-                  </button>
-                </div>
-              </div>
+              {err ? <div className="mt-4 text-sm text-red-600">{err}</div> : null}
+              {traceId ? <div className="mt-1 text-xs text-slate-500">TraceId: {traceId}</div> : null}
             </div>
-
-            {err ? <div className="mt-4 text-sm text-red-600">{err}</div> : null}
-            {traceId ? <div className="mt-1 text-xs text-zinc-500">TraceId: {traceId}</div> : null}
           </div>
         </div>
       ) : null}

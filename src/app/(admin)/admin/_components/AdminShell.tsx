@@ -120,7 +120,8 @@ export function AdminShell({ children }: AdminShellProps) {
           </div>
         </aside>
 
-        <main className="min-w-0 flex-1 px-4 py-6 md:px-8">{children}</main>
+        {/* ✅ Kein Padding hier – Pages machen p-6 selber */}
+        <main className="min-w-0 flex-1">{children}</main>
       </div>
     </div>
   );
