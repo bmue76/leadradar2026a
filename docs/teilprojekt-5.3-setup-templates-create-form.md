@@ -2,7 +2,7 @@
 
 Datum: 2026-01-30  
 Status: DONE ✅  
-Git: afb3063 (+ follow-up Fix-Commit: bitte nach Commit ergänzen)
+Git: afb3063 + 882922e
 
 ## Ziel
 

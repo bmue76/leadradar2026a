@@ -113,6 +113,21 @@ enum LeadContactSource {
 }
 
 //
+// TP 5.4 — Billing/Credits/Coupons
+//
+enum TenantCreditType {
+  LICENSE_30D
+  LICENSE_365D
+  DEVICE_SLOT
+}
+
+enum TenantCreditLedgerReason {
+  COUPON_REDEEM
+  CREDIT_CONSUME
+  MANUAL_ADJUST
+}
+
+//
 // Core base models
 //
 model Tenant {
@@ -161,6 +176,12 @@ model Tenant {
 
   // TP 4.1/4.3 — OCR
   leadOcrResults LeadOcrResult[]
+
+  // TP 5.4 — Billing/Credits/Coupons
+  entitlement     TenantEntitlement?
+  creditBalances  TenantCreditBalance[]
+  creditLedger    TenantCreditLedger[]
+  promoRedemptions PromoRedemption[]
 
   @@index([country])
 }
@@ -320,14 +341,14 @@ model Form {
 // - Used to create new forms (DRAFT) without lock-in.
 //
 model FormTemplate {
-  id          String   @id @default(cuid())
-  tenantId    String
-  name        String
-  category    String?
-  schemaVersion Int    @default(1)
-  payloadJson Json
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default(cuid())
+  tenantId     String
+  name         String
+  category     String?
+  schemaVersion Int     @default(1)
+  payloadJson  Json
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -617,6 +638,97 @@ model MobileProvisionToken {
   @@index([tenantId, status, expiresAt])
   @@index([tenantId, createdAt])
   @@index([prefix, status])
+}
+
+//
+// TP 5.4 — Entitlement (current state per Tenant)
+//
+model TenantEntitlement {
+  tenantId   String   @id
+  validUntil DateTime?
+  maxDevices Int      @default(1)
+  updatedAt  DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+//
+// TP 5.4 — Credits (balances)
+// - Separate rows per type+expiresAt to enable FIFO and expiry.
+//
+model TenantCreditBalance {
+  id        String           @id @default(cuid())
+  tenantId  String
+  type      TenantCreditType
+  quantity  Int
+  expiresAt DateTime
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, type, expiresAt])
+  @@index([tenantId, type, expiresAt])
+}
+
+//
+// TP 5.4 — Optional Audit Ledger (MVP-lean)
+//
+model TenantCreditLedger {
+  id        String                  @id @default(cuid())
+  tenantId  String
+  type      TenantCreditType
+  delta     Int
+  reason    TenantCreditLedgerReason
+  refId     String?
+  createdAt DateTime                @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, type, createdAt])
+}
+
+//
+// TP 5.4 — Promo Codes (global)
+//
+model PromoCode {
+  id                 String   @id @default(cuid())
+  code               String   @unique
+  active             Boolean  @default(true)
+  validFrom          DateTime?
+  validUntil         DateTime?
+  maxRedemptions     Int      @default(1)
+  redeemedCount      Int      @default(0)
+
+  grantLicense30d     Int     @default(0)
+  grantLicense365d    Int     @default(0)
+  grantDeviceSlots    Int     @default(0)
+  creditExpiresInDays Int     @default(365)
+
+  partner            String?
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  redemptions        PromoRedemption[]
+}
+
+//
+// TP 5.4 — Promo Redemption (per tenant)
+//
+model PromoRedemption {
+  id              String   @id @default(cuid())
+  promoCodeId     String
+  tenantId        String
+  redeemedAt      DateTime @default(now())
+  redeemedByUserId String?
+
+  promoCode PromoCode @relation(fields: [promoCodeId], references: [id], onDelete: Cascade)
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([promoCodeId, tenantId])
+  @@index([tenantId, redeemedAt])
 }
 
 //
