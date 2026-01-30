@@ -11,39 +11,48 @@ Setup → Formulare ist produktiv nutzbar:
 - Option 2 Regel ist end-to-end umgesetzt: Mobile sieht nur `ACTIVE` + `assignedEventId === activeEvent.id`
 - Admin Home Readiness (TP 5.1) wird durch Zuweisung “grün”
 
+## UX (aktuell, “SumUp-like”)
+Ziel: weniger Controls, mehr Ruhe, klare Achsen.
+- Toolbar reduziert auf:
+  - **Status** (Pills: Alle/Entwurf/Aktiv/Archiviert)
+  - **Sortieren** (1 Dropdown)
+  - **Suche**
+  - **Refresh** (Icon)
+  - **Neues Formular** (Primary)
+  - **Zurücksetzen** nur als dezenter Link (nur wenn Filter aktiv)
+- Filter **“Im aktiven Event”** als Toolbar-Filter entfernt (Zuweisung bleibt als Info/Spalte + im Drawer).
+- **Kategorie-Spalte entfernt** (war Ballast für die Formularliste; Kategorisierung bleibt ein Template/Preset-Thema).
+- Tabelle: **kein Scrollbalken** (kein horizontaler Overflow); Rahmen/Einzug bündig mit Titel-Achse.
+
 ## Umsetzung (Highlights)
 - Admin Forms API erweitert:
-  - List mit `q/status/assigned/sort/dir`
+  - List mit `q/status/sort/dir`
   - `assignedToActiveEvent` serverseitig berechnet (bezogen auf aktives Event)
   - PATCH unterstützt Status + Assignment in einem Contract (backward-compatible)
   - Duplizieren erstellt DRAFT-Kopie ohne Assignment, inkl. Field-Kopie
 - UX/Copy de-CH:
-  - Toggle zeigt aktives Event im Label
+  - Drawer-Toggle zeigt aktives Event im Label
   - Klarer Helper: “Nur ACTIVE + zugewiesen = in der App sichtbar.”
 - MVP Guardrail:
   - Bei `status=ARCHIVED` wird Assignment immer entfernt
-- Apple-clean Polishing (nach Review):
-  - Header-Typo & Einzug konsistent mit `/admin`
-  - Toolbar: ruhigere Controls + mehr Freiraum (Pills)
-  - Tabelle ohne Horizontal-Scrollbar (Spalten reduziert, Truncation)
-  - Spalte “Kategorie” entfernt (aktuell kein valides Form-Attribut; später wieder, falls `Form.category` eingeführt wird)
 
 ## Dateien / Änderungen
 - `src/app/api/admin/v1/forms/route.ts` (List + Create, Filter, Option2-Assignment-Info)
 - `src/app/api/admin/v1/forms/[id]/route.ts` (PATCH: Status + Assignment + Guardrail)
 - `src/app/api/admin/v1/forms/[id]/duplicate/route.ts` (NEW: Duplicate)
-- `src/app/(admin)/admin/forms/page.tsx` (de-CH Page)
-- `src/app/(admin)/admin/forms/FormsScreenClient.tsx` (Finder-like List + Drawer)
+- `src/app/(admin)/admin/forms/page.tsx` (de-CH Page, Einzug/Spacing auf Admin-Achse)
+- `src/app/(admin)/admin/forms/FormsScreenClient.tsx` (Finder-like List + Drawer, “SumUp-like” Toolbar)
 - `docs/teilprojekt-5.2-setup-forms-ui-assignment.md` (diese Doku)
 
 ## Akzeptanzkriterien – Check ✅
-- Liste lädt, Filter/Sort/Reset/Refresh funktionieren
+- Liste lädt, Status/Sortierung/Suche funktionieren
+- Toolbar wirkt ruhig (SumUp-like): wenig Controls, konsistente Abstände, Reset nur bei Bedarf
 - Drawer: Status-Update funktioniert
 - Toggle setzt/entfernt Assignment zum aktiven Event (Option 2)
 - Duplizieren erstellt DRAFT ohne Assignment
 - Archivieren entfernt Assignment (Guardrail)
 - Home Readiness wird “grün” sobald mind. 1 ACTIVE + assigned
-- Tabelle hat keinen Horizontal-Scrollbar
+- Tabelle hat **keinen Scrollbalken**
 
 ## Tests / Proof (reproduzierbar)
 ### Lokal
@@ -52,7 +61,8 @@ Setup → Formulare ist produktiv nutzbar:
 - `npm run build`
 
 ### API (Beispiele)
-- `GET /api/admin/v1/forms?status=ALL&assigned=ALL&sort=updatedAt&dir=desc`
+- `GET /api/admin/v1/forms?status=ALL&sort=updatedAt&dir=desc`
+- `GET /api/admin/v1/forms?q=demo&status=ACTIVE&sort=name&dir=asc`
 - `PATCH /api/admin/v1/forms/:id` mit `{ "setAssignedToActiveEvent": true }`
 - `PATCH /api/admin/v1/forms/:id` mit `{ "setAssignedToActiveEvent": false }`
 - `POST /api/admin/v1/forms/:id/duplicate`
@@ -60,7 +70,7 @@ Setup → Formulare ist produktiv nutzbar:
 
 ## Offene Punkte / Risiken
 - Preview-Link führt aktuell auf Builder mit `?mode=preview` (falls Builder Query ignoriert, zeigt trotzdem Builder).
-- Optional später: “Neues Formular” via Templates Flow (TP 4.8) statt Prompt.
+- Optional später: “Neues Formular” via Templates Flow (TP 4.8) statt Prompt/Redirect.
 
 ## Next Step
 - TP 5.3: Leads UI / Exporte / Geräte-Flow (je nach Roadmap)

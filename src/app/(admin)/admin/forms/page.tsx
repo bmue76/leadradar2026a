@@ -6,11 +6,12 @@ export const metadata = {
 
 export default function AdminFormsPage() {
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-5">
-      {/* Align header with table cell padding (px-4) */}
-      <header className="px-4">
+    <div className="mx-auto w-full max-w-6xl px-6 pt-6 space-y-6">
+      <header className="space-y-1">
         <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Formulare</h1>
-        <p className="mt-2 text-sm text-slate-600">Erstelle, aktiviere und stelle Formulare fürs aktive Event bereit.</p>
+        <p className="text-sm text-slate-600">
+          Erstelle, aktiviere und stelle Formulare fürs aktive Event bereit.
+        </p>
       </header>
 
       <FormsScreenClient />

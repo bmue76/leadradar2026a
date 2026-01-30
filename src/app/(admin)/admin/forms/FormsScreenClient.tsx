@@ -4,9 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type FormStatus = "DRAFT" | "ACTIVE" | "ARCHIVED";
-type AssignedFilter = "ALL" | "YES" | "NO";
-type SortKey = "updatedAt" | "name";
-type SortDir = "asc" | "desc";
+type SortOption = "UPDATED_DESC" | "UPDATED_ASC" | "NAME_ASC" | "NAME_DESC";
 
 type ApiOk<T> = { ok: true; data: T; traceId: string };
 type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
@@ -96,24 +94,42 @@ function Button({
   );
 }
 
+function IconButton({
+  label,
+  title,
+  onClick,
+}: {
+  label: string;
+  title: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-600 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-200"
+      aria-label={title}
+      title={title}
+      onClick={onClick}
+    >
+      {label}
+    </button>
+  );
+}
+
 function Select({
   value,
   onChange,
   ariaLabel,
   children,
-  minWidth,
 }: {
   value: string;
   onChange: (v: string) => void;
   ariaLabel: string;
   children: React.ReactNode;
-  minWidth?: string;
 }) {
   return (
     <select
-      className={`h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200 ${
-        minWidth ? minWidth : ""
-      }`}
+      className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
       value={value}
       aria-label={ariaLabel}
       onChange={(e) => onChange(e.target.value)}
@@ -134,11 +150,44 @@ function Input({
 }) {
   return (
     <input
-      className="h-9 w-full min-w-[220px] rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+      className="h-9 w-[280px] rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
       value={value}
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
     />
+  );
+}
+
+function StatusPills({
+  value,
+  onChange,
+}: {
+  value: "ALL" | FormStatus;
+  onChange: (v: "ALL" | FormStatus) => void;
+}) {
+  const pillBase =
+    "inline-flex h-9 items-center justify-center rounded-full border px-3 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-slate-200";
+
+  const pill = (active: boolean) =>
+    active
+      ? `${pillBase} border-slate-900 bg-slate-900 text-white`
+      : `${pillBase} border-slate-200 bg-white text-slate-700 hover:bg-slate-50`;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button type="button" className={pill(value === "ALL")} onClick={() => onChange("ALL")}>
+        Alle
+      </button>
+      <button type="button" className={pill(value === "DRAFT")} onClick={() => onChange("DRAFT")}>
+        Entwurf
+      </button>
+      <button type="button" className={pill(value === "ACTIVE")} onClick={() => onChange("ACTIVE")}>
+        Aktiv
+      </button>
+      <button type="button" className={pill(value === "ARCHIVED")} onClick={() => onChange("ARCHIVED")}>
+        Archiviert
+      </button>
+    </div>
   );
 }
 
@@ -159,7 +208,7 @@ function DrawerShell({
     <div className="fixed inset-0 z-50">
       <button type="button" className="absolute inset-0 bg-black/20" aria-label="Schliessen" onClick={onClose} />
       <aside className="absolute right-0 top-0 h-full w-full max-w-[480px] bg-white shadow-2xl">
-        <div className="flex h-14 items-center justify-between border-b border-slate-200 px-5">
+        <div className="flex h-14 items-center justify-between border-b border-slate-200 px-6">
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-slate-900">{title}</div>
           </div>
@@ -171,7 +220,7 @@ function DrawerShell({
             Schliessen
           </button>
         </div>
-        <div className="h-[calc(100%-3.5rem)] overflow-auto px-5 py-5">{children}</div>
+        <div className="h-[calc(100%-3.5rem)] overflow-auto px-6 py-6">{children}</div>
       </aside>
     </div>
   );
@@ -184,9 +233,7 @@ export function FormsScreenClient() {
 
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<"ALL" | FormStatus>("ALL");
-  const [assigned, setAssigned] = useState<AssignedFilter>("ALL");
-  const [sort, setSort] = useState<SortKey>("updatedAt");
-  const [dir, setDir] = useState<SortDir>("desc");
+  const [sortOpt, setSortOpt] = useState<SortOption>("UPDATED_DESC");
 
   const [loadingList, setLoadingList] = useState(true);
   const [listError, setListError] = useState<{ message: string; code?: string; traceId?: string } | null>(null);
@@ -199,38 +246,37 @@ export function FormsScreenClient() {
   const [detail, setDetail] = useState<FormDetail | null>(null);
   const [detailError, setDetailError] = useState<{ message: string; code?: string; traceId?: string } | null>(null);
 
-  const isDirty = useMemo(() => {
-    return q.trim() !== "" || status !== "ALL" || assigned !== "ALL" || sort !== "updatedAt" || dir !== "desc";
-  }, [q, status, assigned, sort, dir]);
+  const activeEventName = activeEvent?.name ?? null;
+
+  const { sort, dir } = useMemo(() => {
+    if (sortOpt === "UPDATED_ASC") return { sort: "updatedAt" as const, dir: "asc" as const };
+    if (sortOpt === "NAME_ASC") return { sort: "name" as const, dir: "asc" as const };
+    if (sortOpt === "NAME_DESC") return { sort: "name" as const, dir: "desc" as const };
+    return { sort: "updatedAt" as const, dir: "desc" as const };
+  }, [sortOpt]);
+
+  const isDirty = useMemo(() => q.trim() !== "" || status !== "ALL" || sortOpt !== "UPDATED_DESC", [q, status, sortOpt]);
 
   const countLabel = useMemo(() => {
     const n = items.length;
     return n === 1 ? "1 Formular" : `${n} Formulare`;
   }, [items.length]);
 
-  const activeEventName = activeEvent?.name ?? null;
-
   const buildListUrl = useCallback((): string => {
     const sp = new URLSearchParams();
     if (q.trim()) sp.set("q", q.trim());
     sp.set("status", status);
-    sp.set("assigned", assigned);
     sp.set("sort", sort);
     sp.set("dir", dir);
     return `/api/admin/v1/forms?${sp.toString()}`;
-  }, [q, status, assigned, sort, dir]);
+  }, [q, status, sort, dir]);
 
   const loadActiveEvent = useCallback(async () => {
     try {
       const res = await fetch("/api/admin/v1/events/active", { method: "GET", cache: "no-store" });
       const json = (await res.json()) as ApiResp<ActiveEventApi>;
-
-      if (json.ok) {
-        setActiveEvent(json.data.item);
-        return;
-      }
-
-      setActiveEvent(null);
+      if (json.ok) setActiveEvent(json.data.item);
+      else setActiveEvent(null);
     } catch {
       setActiveEvent(null);
     }
@@ -276,12 +322,17 @@ export function FormsScreenClient() {
     await Promise.all([loadActiveEvent(), loadList()]);
   }, [loadActiveEvent, loadList]);
 
+  // initial load (lint-safe: setTimeout)
   useEffect(() => {
-    const t = setTimeout(() => {
-      void refreshAll();
-    }, 0);
+    const t = setTimeout(() => void refreshAll(), 0);
     return () => clearTimeout(t);
   }, [refreshAll]);
+
+  // auto-apply filters (SumUp-like), debounce for search input
+  useEffect(() => {
+    const t = setTimeout(() => void loadList(), 220);
+    return () => clearTimeout(t);
+  }, [q, status, sortOpt, loadList]);
 
   const openDrawer = useCallback((id: string) => {
     setSelectedId(id);
@@ -344,9 +395,7 @@ export function FormsScreenClient() {
 
   useEffect(() => {
     if (!drawerOpen || !selectedId) return;
-    const t = setTimeout(() => {
-      void loadDetail(selectedId);
-    }, 0);
+    const t = setTimeout(() => void loadDetail(selectedId), 0);
     return () => clearTimeout(t);
   }, [drawerOpen, selectedId, loadDetail]);
 
@@ -382,7 +431,7 @@ export function FormsScreenClient() {
           fields: Array.isArray(json.data.fields) ? json.data.fields : undefined,
         });
 
-        setDetailError(null); // clear inline action error on success
+        setDetailError(null);
         await loadList();
         return true;
       } catch {
@@ -398,9 +447,7 @@ export function FormsScreenClient() {
     setDetailError(null);
 
     const currentlyAssigned = !!detail.assignedEventId && !!activeEvent?.id && detail.assignedEventId === activeEvent.id;
-    const target = !currentlyAssigned;
-
-    await patchForm(detail.id, { setAssignedToActiveEvent: target });
+    await patchForm(detail.id, { setAssignedToActiveEvent: !currentlyAssigned });
   }, [detail, activeEvent, patchForm]);
 
   const onChangeStatus = useCallback(
@@ -458,17 +505,7 @@ export function FormsScreenClient() {
   const reset = useCallback(() => {
     setQ("");
     setStatus("ALL");
-    setAssigned("ALL");
-    setSort("updatedAt");
-    setDir("desc");
-    const t = setTimeout(() => {
-      void loadList();
-    }, 0);
-    return () => clearTimeout(t);
-  }, [loadList]);
-
-  const toggleDir = useCallback(() => {
-    setDir((d) => (d === "asc" ? "desc" : "asc"));
+    setSortOpt("UPDATED_DESC");
   }, []);
 
   const assignedLabelForRow = useCallback(
@@ -481,67 +518,64 @@ export function FormsScreenClient() {
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white">
-      <div className="px-4 py-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-[260px] flex-1 flex-wrap items-center gap-2">
-            <div className="w-full max-w-[340px]">
-              <Input value={q} onChange={setQ} placeholder="Suchen…" />
-            </div>
+      {/* SumUp-like toolbar */}
+      <div className="px-6 py-5">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <StatusPills value={status} onChange={setStatus} />
 
-            <Select value={status} onChange={(v) => setStatus(v as typeof status)} ariaLabel="Status" minWidth="min-w-[150px]">
-              <option value="ALL">Status: Alle</option>
-              <option value="DRAFT">Status: Entwurf</option>
-              <option value="ACTIVE">Status: Aktiv</option>
-              <option value="ARCHIVED">Status: Archiviert</option>
+            <Select value={sortOpt} onChange={(v) => setSortOpt(v as SortOption)} ariaLabel="Sortieren">
+              <option value="UPDATED_DESC">Sortieren: Aktualisiert</option>
+              <option value="UPDATED_ASC">Sortieren: Aktualisiert (älteste)</option>
+              <option value="NAME_ASC">Sortieren: Name (A–Z)</option>
+              <option value="NAME_DESC">Sortieren: Name (Z–A)</option>
             </Select>
 
-            <Select
-              value={assigned}
-              onChange={(v) => setAssigned(v as AssignedFilter)}
-              ariaLabel="Zuweisung aktives Event"
-              minWidth="min-w-[190px]"
-            >
-              <option value="ALL">Im aktiven Event: Alle</option>
-              <option value="YES">Im aktiven Event: Ja</option>
-              <option value="NO">Im aktiven Event: Nein</option>
-            </Select>
-
-            <Select value={sort} onChange={(v) => setSort(v as SortKey)} ariaLabel="Sortierung" minWidth="min-w-[175px]">
-              <option value="updatedAt">Sortierung: Aktualisiert</option>
-              <option value="name">Sortierung: Name</option>
-            </Select>
-
-            <Button label={dir === "desc" ? "Absteigend" : "Aufsteigend"} kind="secondary" onClick={toggleDir} title="Sortierrichtung ändern" />
-
-            <span className="ml-1 text-sm text-slate-500">{countLabel}</span>
+            {isDirty ? (
+              <button
+                type="button"
+                className="ml-1 text-sm font-semibold text-slate-600 hover:text-slate-900"
+                onClick={reset}
+              >
+                Zurücksetzen
+              </button>
+            ) : null}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {isDirty ? <Button label="Reset" kind="ghost" onClick={reset} /> : null}
-            <Button label="Refresh" kind="secondary" onClick={() => void refreshAll()} />
+            <Input value={q} onChange={setQ} placeholder="Suchen…" />
+            <IconButton label="↻" title="Aktualisieren" onClick={() => void refreshAll()} />
             <Button label="Neues Formular" kind="primary" onClick={onCreateNew} />
           </div>
+        </div>
+
+        <div className="mt-3 flex items-center justify-between text-sm text-slate-500">
+          <span>{countLabel}</span>
+          <span className="hidden md:inline">
+            Mobile zeigt nur <span className="font-semibold text-slate-700">ACTIVE</span> + zugewiesen (Option 2).
+          </span>
         </div>
       </div>
 
       <div className="h-px w-full bg-slate-200" />
 
+      {/* Table (no scrollbar) */}
       <div className="w-full overflow-hidden">
         <table className="w-full table-fixed">
           <colgroup>
-            <col className="w-[44%]" />
+            <col className="w-[46%]" />
             <col className="w-[16%]" />
             <col className="w-[22%]" />
-            <col className="w-[16%]" />
+            <col className="w-[14%]" />
             <col className="w-[2%]" />
           </colgroup>
 
           <thead>
             <tr className="text-left text-xs font-semibold text-slate-600">
-              <th className="px-4 py-3">Name</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Zuweisung</th>
-              <th className="px-4 py-3 hidden md:table-cell">Aktualisiert</th>
+              <th className="px-6 py-3">Name</th>
+              <th className="px-6 py-3">Status</th>
+              <th className="px-6 py-3">Zuweisung</th>
+              <th className="px-6 py-3 hidden md:table-cell">Aktualisiert</th>
               <th className="px-2 py-3" aria-label="Aktionen" />
             </tr>
           </thead>
@@ -550,16 +584,16 @@ export function FormsScreenClient() {
             {loadingList ? (
               Array.from({ length: 6 }).map((_, i) => (
                 <tr key={`sk_${i}`} className="animate-pulse">
-                  <td className="px-4 py-4">
+                  <td className="px-6 py-4">
                     <div className="h-4 w-3/4 rounded bg-slate-100" />
                   </td>
-                  <td className="px-4 py-4">
+                  <td className="px-6 py-4">
                     <div className="h-6 w-24 rounded-full bg-slate-100" />
                   </td>
-                  <td className="px-4 py-4">
+                  <td className="px-6 py-4">
                     <div className="h-4 w-32 rounded bg-slate-100" />
                   </td>
-                  <td className="px-4 py-4 hidden md:table-cell">
+                  <td className="px-6 py-4 hidden md:table-cell">
                     <div className="h-4 w-28 rounded bg-slate-100" />
                   </td>
                   <td className="px-2 py-4">
@@ -569,7 +603,7 @@ export function FormsScreenClient() {
               ))
             ) : listError ? (
               <tr>
-                <td colSpan={5} className="px-4 py-6">
+                <td colSpan={5} className="px-6 py-6">
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                     <div className="text-sm font-semibold text-slate-900">Konnte nicht laden</div>
                     <div className="mt-1 text-sm text-slate-600">{listError.message}</div>
@@ -588,7 +622,7 @@ export function FormsScreenClient() {
               </tr>
             ) : items.length <= 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-10">
+                <td colSpan={5} className="px-6 py-10">
                   <div className="text-sm font-semibold text-slate-900">Keine Formulare</div>
                   <div className="mt-1 text-sm text-slate-600">Passe Filter an oder erstelle ein neues Formular.</div>
                 </td>
@@ -596,21 +630,25 @@ export function FormsScreenClient() {
             ) : (
               items.map((it) => (
                 <tr key={it.id} className="cursor-pointer hover:bg-slate-50" onClick={() => openDrawer(it.id)}>
-                  <td className="px-4 py-4">
+                  <td className="px-6 py-4">
                     <div className="truncate text-sm font-semibold text-slate-900">{it.name}</div>
                   </td>
 
-                  <td className="px-4 py-4">
-                    <span className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold ${statusPillClasses(it.status)}`}>
+                  <td className="px-6 py-4">
+                    <span
+                      className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold ${statusPillClasses(
+                        it.status
+                      )}`}
+                    >
                       {statusLabel(it.status)}
                     </span>
                   </td>
 
-                  <td className="px-4 py-4">
+                  <td className="px-6 py-4">
                     <div className="truncate text-sm text-slate-700">{assignedLabelForRow(it)}</div>
                   </td>
 
-                  <td className="px-4 py-4 hidden md:table-cell">
+                  <td className="px-6 py-4 hidden md:table-cell">
                     <div className="truncate text-sm text-slate-700">{fmtDateTime(it.updatedAt)}</div>
                   </td>
 
@@ -634,8 +672,8 @@ export function FormsScreenClient() {
           </tbody>
         </table>
 
-        <div className="px-4 py-3 text-xs text-slate-500">
-          Mobile zeigt nur <span className="font-semibold text-slate-700">ACTIVE</span> Formulare, die dem aktiven Event zugewiesen sind (Option 2).
+        <div className="px-6 py-4 text-xs text-slate-500 md:hidden">
+          Mobile zeigt nur <span className="font-semibold text-slate-700">ACTIVE</span> + zugewiesen (Option 2).
         </div>
       </div>
 
@@ -678,7 +716,7 @@ export function FormsScreenClient() {
             <div>
               <div className="text-xs font-semibold text-slate-600">Status</div>
               <div className="mt-2">
-                <Select value={detail.status} onChange={(v) => void onChangeStatus(v as FormStatus)} ariaLabel="Status ändern" minWidth="min-w-[220px]">
+                <Select value={detail.status} onChange={(v) => void onChangeStatus(v as FormStatus)} ariaLabel="Status ändern">
                   <option value="DRAFT">Entwurf</option>
                   <option value="ACTIVE">Aktiv</option>
                   <option value="ARCHIVED">Archiviert</option>
