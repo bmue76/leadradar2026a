@@ -1,12 +1,5 @@
-import { AdminPageHeader } from "../_components/AdminPageHeader";
+import DevicesScreenClient from "./DevicesScreenClient";
 
-export default function DevicesPage() {
-  return (
-    <div className="py-2">
-      <AdminPageHeader
-        title="Geräte"
-        hint="Hier verwaltest du verbundene Geräte und Zuweisungen (MVP: Scaffold)."
-      />
-    </div>
-  );
+export default function Page() {
+  return <DevicesScreenClient />;
 }
