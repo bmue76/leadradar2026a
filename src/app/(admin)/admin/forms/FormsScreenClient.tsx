@@ -43,6 +43,8 @@ type FormDetail = {
   fields?: Array<{ id: string }>;
 };
 
+type UiError = { message: string; code?: string; traceId?: string };
+
 function fmtDateTime(iso: string): string {
   try {
     return new Intl.DateTimeFormat("de-CH", { dateStyle: "short", timeStyle: "short" }).format(new Date(iso));
@@ -77,7 +79,7 @@ function Button({
   title?: string;
 }) {
   const base =
-    "inline-flex h-9 items-center justify-center rounded-xl px-3 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-slate-200";
+    "inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-slate-200";
   const primary = "bg-slate-900 text-white hover:bg-slate-800";
   const secondary = "border border-slate-200 bg-white text-slate-900 hover:bg-slate-50";
   const ghost = "text-slate-700 hover:bg-slate-100";
@@ -94,15 +96,7 @@ function Button({
   );
 }
 
-function IconButton({
-  label,
-  title,
-  onClick,
-}: {
-  label: string;
-  title: string;
-  onClick: () => void;
-}) {
+function IconButton({ title, onClick }: { title: string; onClick: () => void }) {
   return (
     <button
       type="button"
@@ -111,7 +105,7 @@ function IconButton({
       title={title}
       onClick={onClick}
     >
-      {label}
+      ↻
     </button>
   );
 }
@@ -150,7 +144,7 @@ function Input({
 }) {
   return (
     <input
-      className="h-9 w-[280px] rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+      className="h-9 w-[260px] rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
       value={value}
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
@@ -158,15 +152,9 @@ function Input({
   );
 }
 
-function StatusPills({
-  value,
-  onChange,
-}: {
-  value: "ALL" | FormStatus;
-  onChange: (v: "ALL" | FormStatus) => void;
-}) {
+function StatusPills({ value, onChange }: { value: "ALL" | FormStatus; onChange: (v: "ALL" | FormStatus) => void }) {
   const pillBase =
-    "inline-flex h-9 items-center justify-center rounded-full border px-3 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-slate-200";
+    "inline-flex h-9 items-center justify-center rounded-full border px-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-slate-200";
 
   const pill = (active: boolean) =>
     active
@@ -214,7 +202,7 @@ function DrawerShell({
           </div>
           <button
             type="button"
-            className="inline-flex h-9 items-center justify-center rounded-xl px-3 text-sm font-semibold text-slate-700 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-200"
+            className="inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-200"
             onClick={onClose}
           >
             Schliessen
@@ -236,7 +224,7 @@ export function FormsScreenClient() {
   const [sortOpt, setSortOpt] = useState<SortOption>("UPDATED_DESC");
 
   const [loadingList, setLoadingList] = useState(true);
-  const [listError, setListError] = useState<{ message: string; code?: string; traceId?: string } | null>(null);
+  const [listError, setListError] = useState<UiError | null>(null);
   const [items, setItems] = useState<FormListItem[]>([]);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -244,7 +232,7 @@ export function FormsScreenClient() {
 
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [detail, setDetail] = useState<FormDetail | null>(null);
-  const [detailError, setDetailError] = useState<{ message: string; code?: string; traceId?: string } | null>(null);
+  const [detailError, setDetailError] = useState<UiError | null>(null);
 
   const activeEventName = activeEvent?.name ?? null;
 
@@ -322,13 +310,11 @@ export function FormsScreenClient() {
     await Promise.all([loadActiveEvent(), loadList()]);
   }, [loadActiveEvent, loadList]);
 
-  // initial load (lint-safe: setTimeout)
   useEffect(() => {
     const t = setTimeout(() => void refreshAll(), 0);
     return () => clearTimeout(t);
   }, [refreshAll]);
 
-  // auto-apply filters (SumUp-like), debounce for search input
   useEffect(() => {
     const t = setTimeout(() => void loadList(), 220);
     return () => clearTimeout(t);
@@ -518,42 +504,40 @@ export function FormsScreenClient() {
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white">
-      {/* SumUp-like toolbar */}
-      <div className="px-6 py-5">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <StatusPills value={status} onChange={setStatus} />
+      {/* Toolbar (SumUp-clean) */}
+      <div className="p-5">
+        <div className="flex flex-wrap items-center gap-3">
+          <StatusPills value={status} onChange={setStatus} />
 
-            <Select value={sortOpt} onChange={(v) => setSortOpt(v as SortOption)} ariaLabel="Sortieren">
-              <option value="UPDATED_DESC">Sortieren: Aktualisiert</option>
-              <option value="UPDATED_ASC">Sortieren: Aktualisiert (älteste)</option>
-              <option value="NAME_ASC">Sortieren: Name (A–Z)</option>
-              <option value="NAME_DESC">Sortieren: Name (Z–A)</option>
-            </Select>
+          {isDirty ? (
+            <button
+              type="button"
+              className="text-sm font-medium text-slate-500 hover:text-slate-900"
+              onClick={reset}
+            >
+              Zurücksetzen
+            </button>
+          ) : null}
 
-            {isDirty ? (
-              <button
-                type="button"
-                className="ml-1 text-sm font-semibold text-slate-600 hover:text-slate-900"
-                onClick={reset}
-              >
-                Zurücksetzen
-              </button>
-            ) : null}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="ml-auto flex flex-wrap items-center gap-2">
             <Input value={q} onChange={setQ} placeholder="Suchen…" />
-            <IconButton label="↻" title="Aktualisieren" onClick={() => void refreshAll()} />
+            <IconButton title="Aktualisieren" onClick={() => void refreshAll()} />
             <Button label="Neues Formular" kind="primary" onClick={onCreateNew} />
           </div>
         </div>
 
-        <div className="mt-3 flex items-center justify-between text-sm text-slate-500">
-          <span>{countLabel}</span>
-          <span className="hidden md:inline">
-            Mobile zeigt nur <span className="font-semibold text-slate-700">ACTIVE</span> + zugewiesen (Option 2).
-          </span>
+        <div className="mt-3 flex items-center justify-between">
+          <div className="text-sm text-slate-500">{countLabel}</div>
+
+          <div className="hidden md:flex items-center gap-2">
+            <div className="text-sm text-slate-500">Sortieren</div>
+            <Select value={sortOpt} onChange={(v) => setSortOpt(v as SortOption)} ariaLabel="Sortieren">
+              <option value="UPDATED_DESC">Aktualisiert</option>
+              <option value="UPDATED_ASC">Aktualisiert (älteste)</option>
+              <option value="NAME_ASC">Name (A–Z)</option>
+              <option value="NAME_DESC">Name (Z–A)</option>
+            </Select>
+          </div>
         </div>
       </div>
 
@@ -561,22 +545,14 @@ export function FormsScreenClient() {
 
       {/* Table (no scrollbar) */}
       <div className="w-full overflow-hidden">
-        <table className="w-full table-fixed">
-          <colgroup>
-            <col className="w-[46%]" />
-            <col className="w-[16%]" />
-            <col className="w-[22%]" />
-            <col className="w-[14%]" />
-            <col className="w-[2%]" />
-          </colgroup>
-
+        <table className="w-full table-auto">
           <thead>
             <tr className="text-left text-xs font-semibold text-slate-600">
-              <th className="px-6 py-3">Name</th>
-              <th className="px-6 py-3">Status</th>
-              <th className="px-6 py-3">Zuweisung</th>
-              <th className="px-6 py-3 hidden md:table-cell">Aktualisiert</th>
-              <th className="px-2 py-3" aria-label="Aktionen" />
+              <th className="px-5 py-3">Name</th>
+              <th className="px-5 py-3">Status</th>
+              <th className="px-5 py-3">Zuweisung</th>
+              <th className="hidden md:table-cell px-5 py-3">Aktualisiert</th>
+              <th className="w-12 px-2 py-3" aria-label="Aktionen" />
             </tr>
           </thead>
 
@@ -584,16 +560,16 @@ export function FormsScreenClient() {
             {loadingList ? (
               Array.from({ length: 6 }).map((_, i) => (
                 <tr key={`sk_${i}`} className="animate-pulse">
-                  <td className="px-6 py-4">
+                  <td className="px-5 py-4">
                     <div className="h-4 w-3/4 rounded bg-slate-100" />
                   </td>
-                  <td className="px-6 py-4">
+                  <td className="px-5 py-4">
                     <div className="h-6 w-24 rounded-full bg-slate-100" />
                   </td>
-                  <td className="px-6 py-4">
+                  <td className="px-5 py-4">
                     <div className="h-4 w-32 rounded bg-slate-100" />
                   </td>
-                  <td className="px-6 py-4 hidden md:table-cell">
+                  <td className="hidden md:table-cell px-5 py-4">
                     <div className="h-4 w-28 rounded bg-slate-100" />
                   </td>
                   <td className="px-2 py-4">
@@ -603,7 +579,7 @@ export function FormsScreenClient() {
               ))
             ) : listError ? (
               <tr>
-                <td colSpan={5} className="px-6 py-6">
+                <td colSpan={5} className="px-5 py-6">
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                     <div className="text-sm font-semibold text-slate-900">Konnte nicht laden</div>
                     <div className="mt-1 text-sm text-slate-600">{listError.message}</div>
@@ -622,7 +598,7 @@ export function FormsScreenClient() {
               </tr>
             ) : items.length <= 0 ? (
               <tr>
-                <td colSpan={5} className="px-6 py-10">
+                <td colSpan={5} className="px-5 py-10">
                   <div className="text-sm font-semibold text-slate-900">Keine Formulare</div>
                   <div className="mt-1 text-sm text-slate-600">Passe Filter an oder erstelle ein neues Formular.</div>
                 </td>
@@ -630,11 +606,11 @@ export function FormsScreenClient() {
             ) : (
               items.map((it) => (
                 <tr key={it.id} className="cursor-pointer hover:bg-slate-50" onClick={() => openDrawer(it.id)}>
-                  <td className="px-6 py-4">
+                  <td className="px-5 py-4">
                     <div className="truncate text-sm font-semibold text-slate-900">{it.name}</div>
                   </td>
 
-                  <td className="px-6 py-4">
+                  <td className="px-5 py-4">
                     <span
                       className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold ${statusPillClasses(
                         it.status
@@ -644,11 +620,11 @@ export function FormsScreenClient() {
                     </span>
                   </td>
 
-                  <td className="px-6 py-4">
+                  <td className="px-5 py-4">
                     <div className="truncate text-sm text-slate-700">{assignedLabelForRow(it)}</div>
                   </td>
 
-                  <td className="px-6 py-4 hidden md:table-cell">
+                  <td className="hidden md:table-cell px-5 py-4">
                     <div className="truncate text-sm text-slate-700">{fmtDateTime(it.updatedAt)}</div>
                   </td>
 
@@ -672,7 +648,7 @@ export function FormsScreenClient() {
           </tbody>
         </table>
 
-        <div className="px-6 py-4 text-xs text-slate-500 md:hidden">
+        <div className="px-5 py-4 text-xs text-slate-500">
           Mobile zeigt nur <span className="font-semibold text-slate-700">ACTIVE</span> + zugewiesen (Option 2).
         </div>
       </div>
