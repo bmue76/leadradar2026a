@@ -2,7 +2,7 @@
 
 Datum: 2026-01-30  
 Status: DONE ✅  
-Git: (bitte nach Commit ergänzen)
+Git: afb3063 (+ follow-up Fix-Commit: bitte nach Commit ergänzen)
 
 ## Ziel
 
@@ -23,6 +23,7 @@ Setup → Vorlagen produktiv nutzbar machen:
   - Preview Drawer zeigt Felder (Required Marker).
   - “Verwenden” öffnet Modal (Name vorbefüllt) und erstellt DRAFT-Form.
   - Redirect nach `/admin/forms?open=...` öffnet Drawer automatisch.
+  - `/admin/forms` CTA “Neues Formular” → `/admin/templates?intent=create`.
 - **Next.js Build-Fix**:
   - `useSearchParams()` in Client-Komponenten via **Suspense Boundary** im `page.tsx`.
   - Page-Header/Title wieder konsistent zu `/admin` (Apple-clean Pattern).
@@ -89,9 +90,9 @@ Verwenden → Modal → Erstellen → Redirect /admin/forms
 Neues Formular sichtbar, Drawer/Builder erreichbar
 
 Offene Punkte / Risiken
-P1: SYSTEM Templates (global) vs TENANT Templates: MVP nutzt vorhandenes Model FormTemplate mit tenantId (nur Tenant-Templates). SYSTEM Seeds können später ergänzt werden (Schema/Nullable tenantId oder separates Seed-Konzept).
+P1: FormTemplate ist aktuell tenant-gebunden (tenantId required). SYSTEM Templates (global) können später ergänzt werden (nullable tenantId oder separates Source-Konzept).
 
-P1: Template-Kategorien & mehr Content (3–5 “Standard”-Vorlagen) kann iterativ erweitert werden.
+P1: Template-Kategorien & 3–5 “Standard”-Vorlagen können iterativ erweitert werden.
 
 Next Step
-TP 5.4: Setup → Geräte/Provisioning UI (wenn geplant) oder Betrieb → Leads/Exports weiter polieren (GoLive Flow).
+TP 5.4: Setup → Geräte/Provisioning UI (falls geplant) oder Betrieb → Leads/Exports weiter polieren (GoLive Flow).
