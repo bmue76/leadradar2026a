@@ -22,13 +22,18 @@ Setup → Formulare ist produktiv nutzbar:
   - Klarer Helper: “Nur ACTIVE + zugewiesen = in der App sichtbar.”
 - MVP Guardrail:
   - Bei `status=ARCHIVED` wird Assignment immer entfernt
+- Apple-clean Polishing (nach Review):
+  - Header-Typo & Einzug konsistent mit `/admin`
+  - Toolbar: ruhigere Controls + mehr Freiraum (Pills)
+  - Tabelle ohne Horizontal-Scrollbar (Spalten reduziert, Truncation)
+  - Spalte “Kategorie” entfernt (aktuell kein valides Form-Attribut; später wieder, falls `Form.category` eingeführt wird)
 
 ## Dateien / Änderungen
 - `src/app/api/admin/v1/forms/route.ts` (List + Create, Filter, Option2-Assignment-Info)
 - `src/app/api/admin/v1/forms/[id]/route.ts` (PATCH: Status + Assignment + Guardrail)
 - `src/app/api/admin/v1/forms/[id]/duplicate/route.ts` (NEW: Duplicate)
 - `src/app/(admin)/admin/forms/page.tsx` (de-CH Page)
-- `src/app/(admin)/admin/forms/FormsScreenClient.tsx` (NEW: Finder-like List + Drawer)
+- `src/app/(admin)/admin/forms/FormsScreenClient.tsx` (Finder-like List + Drawer)
 - `docs/teilprojekt-5.2-setup-forms-ui-assignment.md` (diese Doku)
 
 ## Akzeptanzkriterien – Check ✅
@@ -38,6 +43,7 @@ Setup → Formulare ist produktiv nutzbar:
 - Duplizieren erstellt DRAFT ohne Assignment
 - Archivieren entfernt Assignment (Guardrail)
 - Home Readiness wird “grün” sobald mind. 1 ACTIVE + assigned
+- Tabelle hat keinen Horizontal-Scrollbar
 
 ## Tests / Proof (reproduzierbar)
 ### Lokal
