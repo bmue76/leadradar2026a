@@ -5,6 +5,7 @@ import { isHttpError, validateBody } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { requireMobileAuth } from "@/lib/mobileAuth";
 import { enforceRateLimit } from "@/lib/rateLimit";
+import { enforceMobileCaptureLicense } from "@/lib/billing/mobileCaptureGate";
 
 const BodySchema = z.object({
   formId: z.string().min(1),
@@ -20,6 +21,9 @@ export async function POST(req: Request) {
 
     enforceRateLimit(`mobile:${auth.apiKeyId}`, { limit: 60, windowMs: 60_000 });
 
+    // Hardblock: Mobile Capture only
+    await enforceMobileCaptureLicense(auth.tenantId);
+
     const body = await validateBody(req, BodySchema, 1024 * 1024); // 1MB
     const capturedAt = new Date(body.capturedAt);
     if (Number.isNaN(capturedAt.getTime())) {
@@ -28,13 +32,28 @@ export async function POST(req: Request) {
       });
     }
 
-    // leak-safe: require assignment (and ACTIVE form) for lead capture
+    // Option 2: active event must exist, and device.activeEventId must match it
+    const activeEvent = await prisma.event.findFirst({
+      where: { tenantId: auth.tenantId, status: "ACTIVE" },
+      select: { id: true },
+    });
+    if (!activeEvent) return jsonError(req, 404, "NOT_FOUND", "Not found.");
+
+    const device = await prisma.mobileDevice.findFirst({
+      where: { id: auth.deviceId, tenantId: auth.tenantId },
+      select: { activeEventId: true },
+    });
+    if (!device?.activeEventId || device.activeEventId !== activeEvent.id) {
+      return jsonError(req, 404, "NOT_FOUND", "Not found.");
+    }
+
+    // leak-safe: require assignment (and ACTIVE form) AND form assigned to active event
     const assignment = await prisma.mobileDeviceForm.findFirst({
       where: {
         tenantId: auth.tenantId,
         deviceId: auth.deviceId,
         formId: body.formId,
-        form: { status: "ACTIVE" },
+        form: { status: "ACTIVE", assignedEventId: activeEvent.id },
       },
       select: { formId: true },
     });
@@ -50,31 +69,6 @@ export async function POST(req: Request) {
 
     if (existing) {
       return jsonOk(req, { leadId: existing.id, deduped: true });
-    }
-
-    // TP 3.3 — Event tagging:
-    // 1) If device.activeEventId set AND event is ACTIVE => use it
-    // 2) Else fallback (as in your current behavior): first ACTIVE event (createdAt asc)
-    let eventId: string | null = null;
-
-    const device = await prisma.mobileDevice.findFirst({
-      where: { id: auth.deviceId, tenantId: auth.tenantId },
-      select: {
-        id: true,
-        activeEventId: true,
-        activeEvent: { select: { id: true, status: true } },
-      },
-    });
-
-    if (device?.activeEventId && device.activeEvent?.status === "ACTIVE") {
-      eventId = device.activeEventId;
-    } else {
-      const firstActive = await prisma.event.findFirst({
-        where: { tenantId: auth.tenantId, status: "ACTIVE" },
-        orderBy: [{ createdAt: "asc" }],
-        select: { id: true },
-      });
-      if (firstActive) eventId = firstActive.id;
     }
 
     const valuesJson = body.values as unknown as Prisma.InputJsonValue;
@@ -93,8 +87,7 @@ export async function POST(req: Request) {
         capturedAt,
         values: valuesJson,
         meta: metaJson,
-
-        ...(eventId ? { eventId } : {}),
+        eventId: activeEvent.id,
       },
       select: { id: true },
     });

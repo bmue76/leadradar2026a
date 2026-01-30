@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { router } from "expo-router";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
@@ -20,8 +20,22 @@ type FormSummary = {
 
 type JsonObject = Record<string, unknown>;
 
+type ApiErrorShape = {
+  code?: unknown;
+  message?: unknown;
+  details?: unknown;
+};
+
+type ApiRespShape =
+  | { ok: true; data?: unknown; traceId?: unknown }
+  | { ok: false; error?: ApiErrorShape; traceId?: unknown; status?: unknown; message?: unknown };
+
 function isObject(v: unknown): v is JsonObject {
   return typeof v === "object" && v !== null;
+}
+
+function isApiResp(v: unknown): v is ApiRespShape {
+  return isObject(v) && typeof v.ok === "boolean";
 }
 
 function asFormSummary(v: unknown): FormSummary | null {
@@ -45,6 +59,23 @@ function pickList(data: unknown): unknown[] {
   return [];
 }
 
+function extractError(res: ApiRespShape): { status: number; code: string; message: string; traceId: string } {
+  const traceId = typeof res.traceId === "string" ? res.traceId : "";
+
+  const status = typeof (res as { status?: unknown }).status === "number" ? ((res as { status: number }).status) : 0;
+
+  // Prefer standard jsonError shape: { ok:false, error:{code,message,details}, traceId }
+  const err = (res as { error?: ApiErrorShape }).error;
+  const code = err && typeof err.code === "string" ? err.code : "";
+  const msgFromErr = err && typeof err.message === "string" ? err.message : "";
+
+  // Fallback: some clients attach { status, message }
+  const msgTop = typeof (res as { message?: unknown }).message === "string" ? (res as { message: string }).message : "";
+
+  const message = msgFromErr || msgTop || "Request failed";
+  return { status, code, message, traceId };
+}
+
 export default function FormsIndex() {
   const insets = useSafeAreaInsets();
   const { state: brandingState, branding } = useBranding();
@@ -54,43 +85,54 @@ export default function FormsIndex() {
   const [refreshing, setRefreshing] = useState(false);
   const [errorText, setErrorText] = useState<string>("");
 
+  const tenantName = brandingState.kind === "ready" ? branding.tenantName : null;
+  const logoDataUrl = brandingState.kind === "ready" ? branding.logoDataUrl : null;
+
+  const listPadBottom = useMemo(() => UI.tabBarBaseHeight + Math.max(insets.bottom, 0) + 28, [insets.bottom]);
+
+  const reActivate = useCallback(async () => {
+    await clearApiKey();
+    router.replace("/provision");
+  }, []);
+
   const load = useCallback(async () => {
     setErrorText("");
     setBusy(true);
+
     try {
       const key = await getApiKey();
-
       if (!key) {
         router.replace("/provision");
         return;
       }
 
-      const res = await apiFetch({
+      const raw = await apiFetch({
         method: "GET",
         path: "/api/mobile/v1/forms",
         apiKey: key,
       });
 
-      if (!isObject(res) || typeof (res as { ok?: unknown }).ok !== "boolean") {
-        setErrorText("Invalid API response shape");
+      if (!isApiResp(raw)) {
+        setErrorText("Ungültige API-Antwort (Shape).");
         setItems([]);
         return;
       }
 
-      const ok = Boolean((res as { ok: boolean }).ok);
-      if (!ok) {
-        const status = typeof (res as { status?: unknown }).status === "number" ? (res as { status: number }).status : 0;
-        const message =
-          typeof (res as { message?: unknown }).message === "string"
-            ? (res as { message: string }).message
-            : "Request failed";
-        const traceId = typeof (res as { traceId?: unknown }).traceId === "string" ? (res as { traceId: string }).traceId : "";
+      if (!raw.ok) {
+        const { status, code, message, traceId } = extractError(raw);
+
+        // Mobile Capture Hardblock → License Screen
+        if (status === 402 || code === "PAYMENT_REQUIRED") {
+          router.replace("/license");
+          return;
+        }
+
         setErrorText(`HTTP ${status || "?"} — ${message}${traceId ? ` (traceId: ${traceId})` : ""}`);
         setItems([]);
         return;
       }
 
-      const data = (res as { data?: unknown }).data;
+      const data = raw.data;
       const rawList = pickList(data);
       const list = rawList.map(asFormSummary).filter((x): x is FormSummary => x !== null);
       setItems(list);
@@ -112,20 +154,9 @@ export default function FormsIndex() {
     }
   }, [load]);
 
-  const reActivate = useCallback(async () => {
-    await clearApiKey();
-    router.replace("/provision");
-  }, []);
-
-  const tenantName = brandingState.kind === "ready" ? branding.tenantName : null;
-  const logoDataUrl = brandingState.kind === "ready" ? branding.logoDataUrl : null;
-
-  const listPadBottom = UI.tabBarBaseHeight + Math.max(insets.bottom, 0) + 28;
-
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <StatusBar style="dark" backgroundColor={UI.bg} />
-
       <AppHeader title="Formulare" tenantName={tenantName} logoDataUrl={logoDataUrl} />
 
       {errorText ? (
@@ -151,7 +182,7 @@ export default function FormsIndex() {
         <View style={[styles.body, { paddingBottom: listPadBottom }]}>
           <View style={styles.card}>
             <Text style={styles.h2}>Keine Formulare zugewiesen.</Text>
-            <Text style={styles.p}>Weise im Admin ein ACTIVE Form dem Device zu.</Text>
+            <Text style={styles.p}>Weise im Admin ein ACTIVE Formular dem Gerät zu.</Text>
 
             <Pressable onPress={reActivate} style={[styles.btn, styles.btnDark, { marginTop: 10 }]}>
               <Text style={styles.btnDarkText}>Neu aktivieren</Text>
@@ -184,7 +215,6 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: UI.bg },
 
   body: { paddingHorizontal: UI.padX, paddingTop: 14, gap: 12 },
-
   list: { paddingHorizontal: UI.padX, paddingTop: 14 },
 
   card: {
