@@ -157,12 +157,7 @@ function DrawerShell({
 
   return (
     <div className="fixed inset-0 z-50">
-      <button
-        type="button"
-        className="absolute inset-0 bg-black/20"
-        aria-label="Schliessen"
-        onClick={onClose}
-      />
+      <button type="button" className="absolute inset-0 bg-black/20" aria-label="Schliessen" onClick={onClose} />
       <aside className="absolute right-0 top-0 h-full w-full max-w-[480px] bg-white shadow-2xl">
         <div className="flex h-14 items-center justify-between border-b border-slate-200 px-5">
           <div className="min-w-0">
@@ -235,7 +230,6 @@ export function FormsScreenClient() {
         return;
       }
 
-      // quiet fail: active event is optional but affects assignment UI
       setActiveEvent(null);
     } catch {
       setActiveEvent(null);
@@ -377,7 +371,6 @@ export function FormsScreenClient() {
           return false;
         }
 
-        // Update drawer detail from response
         setDetail({
           id: String(json.data.id),
           name: String(json.data.name),
@@ -389,7 +382,7 @@ export function FormsScreenClient() {
           fields: Array.isArray(json.data.fields) ? json.data.fields : undefined,
         });
 
-        // Refresh list to reflect new assignment/status
+        setDetailError(null); // clear inline action error on success
         await loadList();
         return true;
       } catch {
@@ -459,7 +452,6 @@ export function FormsScreenClient() {
   }, [detail, router]);
 
   const onCreateNew = useCallback(() => {
-    // MVP: go to templates flow (TP 4.8)
     router.push("/admin/templates");
   }, [router]);
 
@@ -469,7 +461,6 @@ export function FormsScreenClient() {
     setAssigned("ALL");
     setSort("updatedAt");
     setDir("desc");
-    // reload list after state sync
     const t = setTimeout(() => {
       void loadList();
     }, 0);
@@ -490,7 +481,6 @@ export function FormsScreenClient() {
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white">
-      {/* Toolbar */}
       <div className="px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-[260px] flex-1 flex-wrap items-center gap-2">
@@ -521,12 +511,7 @@ export function FormsScreenClient() {
               <option value="name">Sortierung: Name</option>
             </Select>
 
-            <Button
-              label={dir === "desc" ? "Absteigend" : "Aufsteigend"}
-              kind="secondary"
-              onClick={toggleDir}
-              title="Sortierrichtung ändern"
-            />
+            <Button label={dir === "desc" ? "Absteigend" : "Aufsteigend"} kind="secondary" onClick={toggleDir} title="Sortierrichtung ändern" />
 
             <span className="ml-1 text-sm text-slate-500">{countLabel}</span>
           </div>
@@ -541,7 +526,6 @@ export function FormsScreenClient() {
 
       <div className="h-px w-full bg-slate-200" />
 
-      {/* Table */}
       <div className="w-full overflow-hidden">
         <table className="w-full table-fixed">
           <colgroup>
@@ -611,11 +595,7 @@ export function FormsScreenClient() {
               </tr>
             ) : (
               items.map((it) => (
-                <tr
-                  key={it.id}
-                  className="cursor-pointer hover:bg-slate-50"
-                  onClick={() => openDrawer(it.id)}
-                >
+                <tr key={it.id} className="cursor-pointer hover:bg-slate-50" onClick={() => openDrawer(it.id)}>
                   <td className="px-4 py-4">
                     <div className="truncate text-sm font-semibold text-slate-900">{it.name}</div>
                   </td>
@@ -659,7 +639,6 @@ export function FormsScreenClient() {
         </div>
       </div>
 
-      {/* Drawer */}
       <DrawerShell open={drawerOpen} title={detail?.name ?? "Formular"} onClose={closeDrawer}>
         {loadingDetail ? (
           <div className="space-y-3">
@@ -668,42 +647,38 @@ export function FormsScreenClient() {
             <div className="h-4 w-5/6 rounded bg-slate-100 animate-pulse" />
             <div className="h-10 w-40 rounded bg-slate-100 animate-pulse" />
           </div>
-        ) : detailError ? (
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <div className="text-sm font-semibold text-slate-900">Konnte nicht laden</div>
-            <div className="mt-1 text-sm text-slate-600">{detailError.message}</div>
-            {(detailError.code || detailError.traceId) ? (
-              <div className="mt-2 text-xs text-slate-500">
-                {detailError.code ? `Code: ${detailError.code}` : null}
-                {detailError.code && detailError.traceId ? " • " : null}
-                {detailError.traceId ? `Trace: ${detailError.traceId}` : null}
-              </div>
-            ) : null}
-            <div className="mt-3 flex gap-2">
-              <Button
-                label="Erneut versuchen"
-                kind="secondary"
-                onClick={() => {
-                  if (selectedId) void loadDetail(selectedId);
-                }}
-              />
-              <Button label="Schliessen" kind="ghost" onClick={closeDrawer} />
-            </div>
-          </div>
         ) : !detail ? (
-          <div className="text-sm text-slate-600">Kein Formular ausgewählt.</div>
+          detailError ? (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-900">Konnte nicht laden</div>
+              <div className="mt-1 text-sm text-slate-600">{detailError.message}</div>
+              {(detailError.code || detailError.traceId) ? (
+                <div className="mt-2 text-xs text-slate-500">
+                  {detailError.code ? `Code: ${detailError.code}` : null}
+                  {detailError.code && detailError.traceId ? " • " : null}
+                  {detailError.traceId ? `Trace: ${detailError.traceId}` : null}
+                </div>
+              ) : null}
+              <div className="mt-3 flex gap-2">
+                <Button
+                  label="Erneut versuchen"
+                  kind="secondary"
+                  onClick={() => {
+                    if (selectedId) void loadDetail(selectedId);
+                  }}
+                />
+                <Button label="Schliessen" kind="ghost" onClick={closeDrawer} />
+              </div>
+            </div>
+          ) : (
+            <div className="text-sm text-slate-600">Kein Formular ausgewählt.</div>
+          )
         ) : (
           <div className="space-y-5">
-            {/* Status */}
             <div>
               <div className="text-xs font-semibold text-slate-600">Status</div>
               <div className="mt-2">
-                <Select
-                  value={detail.status}
-                  onChange={(v) => void onChangeStatus(v as FormStatus)}
-                  ariaLabel="Status ändern"
-                  minWidth="min-w-[220px]"
-                >
+                <Select value={detail.status} onChange={(v) => void onChangeStatus(v as FormStatus)} ariaLabel="Status ändern" minWidth="min-w-[220px]">
                   <option value="DRAFT">Entwurf</option>
                   <option value="ACTIVE">Aktiv</option>
                   <option value="ARCHIVED">Archiviert</option>
@@ -714,19 +689,14 @@ export function FormsScreenClient() {
               </div>
             </div>
 
-            {/* Assignment toggle */}
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
                   <div className="text-sm font-semibold text-slate-900">
                     Im aktiven Event verfügbar{" "}
-                    <span className="text-slate-500">
-                      ({activeEventName ? activeEventName : "kein aktives Event"})
-                    </span>
+                    <span className="text-slate-500">({activeEventName ? activeEventName : "kein aktives Event"})</span>
                   </div>
-                  <div className="mt-1 text-sm text-slate-600">
-                    Nur ACTIVE + zugewiesen ist in der Mobile App sichtbar (Option 2).
-                  </div>
+                  <div className="mt-1 text-sm text-slate-600">Nur ACTIVE + zugewiesen ist in der Mobile App sichtbar (Option 2).</div>
                 </div>
 
                 <button
@@ -757,11 +727,9 @@ export function FormsScreenClient() {
               </div>
             </div>
 
-            {/* Meta */}
             <div className="text-xs text-slate-500">
-              Aktualisiert: <span className="text-slate-700">{fmtDateTime(detail.updatedAt)}</span>
-              {" • "}
-              Erstellt: <span className="text-slate-700">{fmtDateTime(detail.createdAt)}</span>
+              Aktualisiert: <span className="text-slate-700">{fmtDateTime(detail.updatedAt)}</span> • Erstellt:{" "}
+              <span className="text-slate-700">{fmtDateTime(detail.createdAt)}</span>
               {Array.isArray(detail.fields) ? (
                 <>
                   {" • "}
@@ -770,7 +738,6 @@ export function FormsScreenClient() {
               ) : null}
             </div>
 
-            {/* Actions */}
             <div className="flex flex-wrap gap-2">
               <Button label="Im Builder öffnen" kind="primary" onClick={onOpenBuilder} />
               <Button label="Vorschau" kind="secondary" onClick={onOpenPreview} />
