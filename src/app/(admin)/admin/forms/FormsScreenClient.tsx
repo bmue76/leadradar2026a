@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 
 type FormStatus = "DRAFT" | "ACTIVE" | "ARCHIVED";
 type SortOption = "UPDATED_DESC" | "UPDATED_ASC" | "NAME_ASC" | "NAME_DESC";
@@ -216,6 +216,7 @@ function DrawerShell({
 
 export function FormsScreenClient() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [activeEvent, setActiveEvent] = useState<ActiveEventApi["item"]>(null);
 
@@ -233,6 +234,8 @@ export function FormsScreenClient() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [detail, setDetail] = useState<FormDetail | null>(null);
   const [detailError, setDetailError] = useState<UiError | null>(null);
+
+  const autoOpenConsumedRef = useRef(false);
 
   const activeEventName = activeEvent?.name ?? null;
 
@@ -332,6 +335,22 @@ export function FormsScreenClient() {
     setDetailError(null);
     setLoadingDetail(false);
   }, []);
+
+  // Auto-open from redirect: /admin/forms?open=FORM_ID
+  // Lint rule: avoid synchronous setState inside effect -> defer with setTimeout + useRef.
+  useEffect(() => {
+    if (autoOpenConsumedRef.current) return;
+    const openId = searchParams.get("open");
+    if (!openId) return;
+
+    autoOpenConsumedRef.current = true;
+
+    const t = setTimeout(() => {
+      openDrawer(openId);
+    }, 0);
+
+    return () => clearTimeout(t);
+  }, [searchParams, openDrawer]);
 
   const loadDetail = useCallback(async (id: string) => {
     setLoadingDetail(true);
@@ -485,7 +504,7 @@ export function FormsScreenClient() {
   }, [detail, router]);
 
   const onCreateNew = useCallback(() => {
-    router.push("/admin/templates");
+    router.push("/admin/templates?intent=create");
   }, [router]);
 
   const reset = useCallback(() => {

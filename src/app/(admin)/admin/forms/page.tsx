@@ -1,20 +1,34 @@
+import { Suspense } from "react";
+
 import { FormsScreenClient } from "./FormsScreenClient";
 
-export const metadata = {
-  title: "Formulare · LeadRadar Admin",
-};
-
-export default function AdminFormsPage() {
+function LoadingList() {
   return (
-    <div className="mx-auto w-full max-w-5xl px-6 py-6">
+    <section className="rounded-2xl border border-slate-200 bg-white p-6">
+      <div className="animate-pulse space-y-3">
+        <div className="h-4 w-40 rounded bg-slate-100" />
+        <div className="h-10 w-full rounded bg-slate-100" />
+        <div className="h-10 w-full rounded bg-slate-100" />
+        <div className="h-10 w-full rounded bg-slate-100" />
+      </div>
+    </section>
+  );
+}
+
+export default function Page() {
+  return (
+    <div className="p-6">
       <header className="mb-6">
-        <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Formulare</h1>
-        <p className="mt-2 text-sm text-slate-600">
-          Erstelle, aktiviere und stelle Formulare fürs aktive Event bereit.
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">Formulare</h1>
+        <p className="mt-1 text-sm text-slate-600">
+          Erstelle Formulare und weise sie dem aktiven Event zu. Mobile zeigt nur <span className="font-semibold">ACTIVE</span>{" "}
+          Formulare, die dem aktiven Event zugewiesen sind.
         </p>
       </header>
 
-      <FormsScreenClient />
+      <Suspense fallback={<LoadingList />}>
+        <FormsScreenClient />
+      </Suspense>
     </div>
   );
 }

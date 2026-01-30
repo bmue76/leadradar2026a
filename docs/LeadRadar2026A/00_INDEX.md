@@ -24,3 +24,4 @@ Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
 - docs/teilprojekt-5.0-admin-shell-navigation-scaffold.md
 - docs/teilprojekt-5.1-admin-home-summary.md
 - docs/teilprojekt-5.2-setup-forms-ui-assignment.md
+- docs/teilprojekt-5.3-setup-templates-create-form.md
