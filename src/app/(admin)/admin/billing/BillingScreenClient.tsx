@@ -2,6 +2,8 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
+import { AdminPageHeader } from "../_components/AdminPageHeader";
+
 type ApiOk<T> = { ok: true; data: T; traceId: string };
 type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
 type ApiResp<T> = ApiOk<T> | ApiErr;
@@ -20,7 +22,13 @@ type BillingOverview = {
 function formatDateTime(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
-  return d.toLocaleString("de-CH", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleString("de-CH", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function badge(text: string, tone: "ok" | "warn" | "muted") {
@@ -74,6 +82,7 @@ export default function BillingScreenClient() {
   const redeem = useCallback(async () => {
     const code = coupon.trim();
     if (!code) return;
+
     setBusy("redeem");
     setErr(null);
     setTraceId(null);
@@ -124,135 +133,142 @@ export default function BillingScreenClient() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold">Abrechnung</h1>
-          <p className="mt-1 text-sm text-zinc-600">Lizenz, Credits und Gutscheine.</p>
-        </div>
-        <button
-          type="button"
-          onClick={load}
-          className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm hover:bg-zinc-50"
-          disabled={loading}
-        >
-          Aktualisieren
-        </button>
-      </div>
+      <AdminPageHeader
+        title="Abrechnung"
+        hint="Lizenz, Credits und Gutscheine."
+        actions={
+          <button
+            type="button"
+            onClick={load}
+            className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+            disabled={loading}
+          >
+            Aktualisieren
+          </button>
+        }
+      />
 
-      {loading ? (
-        <div className="rounded-xl border border-zinc-200 bg-white p-6 text-sm text-zinc-600">Lädt…</div>
-      ) : !data ? (
-        <div className="rounded-xl border border-zinc-200 bg-white p-6">
-          <div className="text-sm text-zinc-800">Keine Daten.</div>
-          {err ? <div className="mt-2 text-sm text-red-600">{err}</div> : null}
-          {traceId ? <div className="mt-1 text-xs text-zinc-500">TraceId: {traceId}</div> : null}
-        </div>
-      ) : (
-        <>
+      <div className="mx-auto w-full max-w-5xl space-y-6">
+        {loading ? (
+          <div className="rounded-xl border border-zinc-200 bg-white p-6 text-sm text-zinc-600">Lädt…</div>
+        ) : !data ? (
           <div className="rounded-xl border border-zinc-200 bg-white p-6">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <div className="text-sm text-zinc-600">Lizenzstatus</div>
-                <div className="mt-1 flex items-center gap-2">
-                  {badge(meta?.activeText ?? "—", data.entitlement.isActive ? "ok" : "warn")}
-                  <span className="text-sm text-zinc-700">gültig bis</span>
-                  <span className="text-sm font-medium">{formatDateTime(data.entitlement.validUntil)}</span>
-                </div>
-                <div className="mt-2 text-sm text-zinc-600">
-                  Geräte: <span className="font-medium text-zinc-800">{data.entitlement.activeDevices}</span> /{" "}
-                  <span className="font-medium text-zinc-800">{data.entitlement.maxDevices}</span>
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => consume("ACTIVATE_LICENSE_30D")}
-                  className="rounded-md bg-zinc-900 px-3 py-2 text-sm text-white hover:bg-zinc-800 disabled:opacity-50"
-                  disabled={busy !== null}
-                >
-                  30 Tage aktivieren
-                </button>
-                <button
-                  type="button"
-                  onClick={() => consume("ACTIVATE_LICENSE_365D")}
-                  className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-50"
-                  disabled={busy !== null}
-                >
-                  365 Tage aktivieren
-                </button>
-                <button
-                  type="button"
-                  onClick={() => consume("ADD_DEVICE_SLOT")}
-                  className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-50"
-                  disabled={busy !== null}
-                >
-                  +1 Gerät hinzufügen
-                </button>
-              </div>
-            </div>
-            {data.expiringSoon ? (
-              <div className="mt-3 text-sm text-amber-700">Hinweis: {data.expiringSoon.count} Credit-Balance(s) läuft/laufen bald ab.</div>
-            ) : null}
-            {err ? <div className="mt-3 text-sm text-red-600">{err}</div> : null}
+            <div className="text-sm text-zinc-800">Keine Daten.</div>
+            {err ? <div className="mt-2 text-sm text-red-600">{err}</div> : null}
             {traceId ? <div className="mt-1 text-xs text-zinc-500">TraceId: {traceId}</div> : null}
           </div>
+        ) : (
+          <>
+            <div className="rounded-xl border border-zinc-200 bg-white p-6">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm text-zinc-600">Lizenzstatus</div>
+                  <div className="mt-1 flex items-center gap-2">
+                    {badge(meta?.activeText ?? "—", data.entitlement.isActive ? "ok" : "warn")}
+                    <span className="text-sm text-zinc-700">gültig bis</span>
+                    <span className="text-sm font-medium">{formatDateTime(data.entitlement.validUntil)}</span>
+                  </div>
+                  <div className="mt-2 text-sm text-zinc-600">
+                    Geräte: <span className="font-medium text-zinc-800">{data.entitlement.activeDevices}</span> /{" "}
+                    <span className="font-medium text-zinc-800">{data.entitlement.maxDevices}</span>
+                  </div>
+                </div>
 
-          <div className="rounded-xl border border-zinc-200 bg-white p-6">
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div>
-                <div className="text-sm font-medium">Gutschein einlösen</div>
-                <div className="mt-1 text-sm text-zinc-600">Credits werden gutgeschrieben (Verfall gemäss Gutschein, Standard 12 Monate).</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => consume("ACTIVATE_LICENSE_30D")}
+                    className="rounded-md bg-zinc-900 px-3 py-2 text-sm text-white hover:bg-zinc-800 disabled:opacity-50"
+                    disabled={busy !== null}
+                  >
+                    30 Tage aktivieren
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => consume("ACTIVATE_LICENSE_365D")}
+                    className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-50"
+                    disabled={busy !== null}
+                  >
+                    365 Tage aktivieren
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => consume("ADD_DEVICE_SLOT")}
+                    className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-50"
+                    disabled={busy !== null}
+                  >
+                    +1 Gerät hinzufügen
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <input
-                  value={coupon}
-                  onChange={(e) => setCoupon(e.target.value)}
-                  placeholder="CODE"
-                  className="w-56 rounded-md border border-zinc-200 px-3 py-2 text-sm"
-                />
-                <button
-                  type="button"
-                  onClick={redeem}
-                  className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-50"
-                  disabled={busy !== null || !coupon.trim()}
-                >
-                  Einlösen
-                </button>
+
+              {data.expiringSoon ? (
+                <div className="mt-3 text-sm text-amber-700">Hinweis: {data.expiringSoon.count} Credit-Balance(s) läuft/laufen bald ab.</div>
+              ) : null}
+              {err ? <div className="mt-3 text-sm text-red-600">{err}</div> : null}
+              {traceId ? <div className="mt-1 text-xs text-zinc-500">TraceId: {traceId}</div> : null}
+            </div>
+
+            <div className="rounded-xl border border-zinc-200 bg-white p-6">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">Gutschein einlösen</div>
+                  <div className="mt-1 text-sm text-zinc-600">
+                    Credits werden gutgeschrieben (Verfall gemäss Gutschein, Standard 12 Monate).
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    value={coupon}
+                    onChange={(e) => setCoupon(e.target.value)}
+                    placeholder="CODE"
+                    className="w-56 rounded-md border border-zinc-200 px-3 py-2 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={redeem}
+                    className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-50"
+                    disabled={busy !== null || !coupon.trim()}
+                  >
+                    Einlösen
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="rounded-xl border border-zinc-200 bg-white">
-            <div className="border-b border-zinc-100 px-6 py-4">
-              <div className="text-sm font-medium">Credits</div>
-            </div>
-            <div className="px-6 py-2">
-              {data.credits.length === 0 ? (
-                <div className="py-4 text-sm text-zinc-600">Keine aktiven Credits.</div>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead className="text-zinc-500">
-                    <tr>
-                      <th className="py-2 text-left font-medium">Typ</th>
-                      <th className="py-2 text-right font-medium">Menge</th>
-                      <th className="py-2 text-right font-medium">Verfall</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.credits.map((c) => (
-                      <tr key={`${c.type}-${c.expiresAt}`} className="border-t border-zinc-50">
-                        <td className="py-2">{c.type}</td>
-                        <td className="py-2 text-right font-medium">{c.quantity}</td>
-                        <td className="py-2 text-right">{formatDateTime(c.expiresAt)}</td>
+            <div className="rounded-xl border border-zinc-200 bg-white">
+              <div className="border-b border-zinc-100 px-6 py-4">
+                <div className="text-sm font-medium">Credits</div>
+              </div>
+              <div className="px-6 py-2">
+                {data.credits.length === 0 ? (
+                  <div className="py-4 text-sm text-zinc-600">Keine aktiven Credits.</div>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead className="text-zinc-500">
+                      <tr>
+                        <th className="py-2 text-left font-medium">Typ</th>
+                        <th className="py-2 text-right font-medium">Menge</th>
+                        <th className="py-2 text-right font-medium">Verfall</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
+                    </thead>
+                    <tbody>
+                      {data.credits.map((c) => (
+                        <tr key={`${c.type}-${c.expiresAt}`} className="border-t border-zinc-50">
+                          <td className="py-2">{c.type}</td>
+                          <td className="py-2 text-right font-medium">{c.quantity}</td>
+                          <td className="py-2 text-right">{formatDateTime(c.expiresAt)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
             </div>
-          </div>
-        </>
-      )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
