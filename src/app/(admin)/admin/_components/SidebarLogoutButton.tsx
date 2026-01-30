@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useCallback, useState } from "react";
-import { useRouter } from "next/navigation";
 
 function IconLogout(props: React.SVGProps<SVGSVGElement>) {
   return (
@@ -12,12 +11,7 @@ function IconLogout(props: React.SVGProps<SVGSVGElement>) {
         strokeWidth="1.8"
         strokeLinecap="round"
       />
-      <path
-        d="M3 12h11"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-      />
+      <path d="M3 12h11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
       <path
         d="M7 8l-4 4 4 4"
         stroke="currentColor"
@@ -30,58 +24,37 @@ function IconLogout(props: React.SVGProps<SVGSVGElement>) {
 }
 
 export function SidebarLogoutButton() {
-  const router = useRouter();
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
 
   const onLogout = useCallback(async () => {
     if (busy) return;
-    setErr(null);
     setBusy(true);
 
     try {
-      // Prefer POST (clears cookies in response)
-      const res = await fetch("/api/auth/logout", {
+      await fetch("/api/auth/logout", {
         method: "POST",
         credentials: "include",
         headers: { "content-type": "application/json" },
+        cache: "no-store",
       });
-
-      // Some setups only implement GET -> fallback to navigation
-      if (res.status === 405 || res.status === 404) {
-        window.location.assign("/api/auth/logout");
-        return;
-      }
-
-      if (!res.ok) {
-        // Last fallback: hard navigation
-        window.location.assign("/api/auth/logout");
-        return;
-      }
-
-      router.push("/login");
-      router.refresh();
     } catch {
-      window.location.assign("/api/auth/logout");
+      // ignore: even if fetch fails, we still hard-navigate
     } finally {
-      setBusy(false);
+      // Hard navigation = cleanest reset (cookies already expired by route)
+      window.location.assign("/login");
     }
-  }, [busy, router]);
+  }, [busy]);
 
   return (
-    <div>
-      <button
-        type="button"
-        onClick={onLogout}
-        disabled={busy}
-        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-60"
-        aria-label="Logout"
-      >
-        <IconLogout className="size-4 text-slate-600" />
-        <span>{busy ? "Logout…" : "Logout"}</span>
-      </button>
-
-      {err ? <div className="mt-2 px-3 text-[11px] text-rose-700">{err}</div> : null}
-    </div>
+    <button
+      type="button"
+      onClick={onLogout}
+      disabled={busy}
+      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+      aria-label="Abmelden"
+    >
+      <IconLogout className="size-4 text-slate-600" />
+      <span>{busy ? "Abmelden…" : "Abmelden"}</span>
+    </button>
   );
 }
