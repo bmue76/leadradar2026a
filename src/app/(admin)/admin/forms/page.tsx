@@ -18,17 +18,19 @@ function LoadingList() {
 export default function Page() {
   return (
     <div className="p-6">
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">Formulare</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Erstelle Formulare und weise sie dem aktiven Event zu. Mobile zeigt nur <span className="font-semibold">ACTIVE</span>{" "}
-          Formulare, die dem aktiven Event zugewiesen sind.
-        </p>
-      </header>
+      <div className="mx-auto w-full max-w-5xl">
+        <header className="mb-6">
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">Formulare</h1>
+          <p className="mt-1 text-sm text-slate-600">
+            Erstelle Formulare und weise sie dem aktiven Event zu. Mobile zeigt nur{" "}
+            <span className="font-semibold">ACTIVE</span> Formulare, die dem aktiven Event zugewiesen sind.
+          </p>
+        </header>
 
-      <Suspense fallback={<LoadingList />}>
-        <FormsScreenClient />
-      </Suspense>
+        <Suspense fallback={<LoadingList />}>
+          <FormsScreenClient />
+        </Suspense>
+      </div>
     </div>
   );
 }
