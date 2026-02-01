@@ -125,6 +125,22 @@ enum TenantCreditLedgerReason {
   COUPON_REDEEM
   CREDIT_CONSUME
   MANUAL_ADJUST
+  STRIPE_PURCHASE
+}
+
+//
+// TP 5.5 — Stripe Packages / Orders / Webhook
+//
+enum StripeEventStatus {
+  PROCESSED
+  IGNORED
+  FAILED
+}
+
+enum BillingOrderStatus {
+  PENDING
+  PAID
+  FAILED
 }
 
 //
@@ -178,10 +194,14 @@ model Tenant {
   leadOcrResults LeadOcrResult[]
 
   // TP 5.4 — Billing/Credits/Coupons
-  entitlement     TenantEntitlement?
-  creditBalances  TenantCreditBalance[]
-  creditLedger    TenantCreditLedger[]
+  entitlement      TenantEntitlement?
+  creditBalances   TenantCreditBalance[]
+  creditLedger     TenantCreditLedger[]
   promoRedemptions PromoRedemption[]
+
+  // TP 5.5 — Stripe Packages / Orders / Webhook (audit)
+  billingOrders BillingOrder[]
+  stripeEvents  StripeEvent[]
 
   @@index([country])
 }
@@ -341,14 +361,14 @@ model Form {
 // - Used to create new forms (DRAFT) without lock-in.
 //
 model FormTemplate {
-  id           String   @id @default(cuid())
-  tenantId     String
-  name         String
-  category     String?
-  schemaVersion Int     @default(1)
-  payloadJson  Json
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id            String   @id @default(cuid())
+  tenantId      String
+  name          String
+  category      String?
+  schemaVersion Int      @default(1)
+  payloadJson   Json
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -718,10 +738,10 @@ model PromoCode {
 // TP 5.4 — Promo Redemption (per tenant)
 //
 model PromoRedemption {
-  id              String   @id @default(cuid())
-  promoCodeId     String
-  tenantId        String
-  redeemedAt      DateTime @default(now())
+  id               String   @id @default(cuid())
+  promoCodeId      String
+  tenantId         String
+  redeemedAt       DateTime @default(now())
   redeemedByUserId String?
 
   promoCode PromoCode @relation(fields: [promoCodeId], references: [id], onDelete: Cascade)
@@ -729,6 +749,91 @@ model PromoRedemption {
 
   @@unique([promoCodeId, tenantId])
   @@index([tenantId, redeemedAt])
+}
+
+//
+// TP 5.5 — BillingSku (global catalog, Stripe price -> grant mapping)
+//
+model BillingSku {
+  id          String  @id @default(cuid())
+  active      Boolean @default(true)
+  name        String
+  description String?
+
+  stripePriceId String @unique
+
+  currency    String
+  amountCents Int?
+
+  grantLicense30d  Int @default(0)
+  grantLicense365d Int @default(0)
+  grantDeviceSlots Int @default(0)
+
+  creditExpiresInDays Int @default(365)
+  sortOrder           Int @default(100)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders BillingOrder[]
+
+  @@index([active, sortOrder])
+  @@index([stripePriceId])
+}
+
+//
+// TP 5.5 — BillingOrder (per tenant checkout audit)
+//
+model BillingOrder {
+  id       String @id @default(cuid())
+  tenantId String
+  skuId    String
+
+  stripeCheckoutSessionId String @unique
+  stripePaymentIntentId   String?
+
+  status BillingOrderStatus @default(PENDING)
+
+  currency    String?
+  amountCents Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  paidAt    DateTime?
+
+  tenant Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sku    BillingSku @relation(fields: [skuId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status, createdAt])
+  @@index([skuId])
+}
+
+//
+// TP 5.5 — StripeEvent (webhook idempotency + audit)
+//
+model StripeEvent {
+  id            String @id @default(cuid())
+  stripeEventId String @unique
+  type          String
+
+  status      StripeEventStatus
+  processedAt DateTime?
+
+  tenantId String?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  // Optional lightweight payload snapshot
+  payloadJson Json?
+
+  errorMessage String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([type, createdAt])
+  @@index([tenantId, createdAt])
+  @@index([status, createdAt])
 }
 
 //
