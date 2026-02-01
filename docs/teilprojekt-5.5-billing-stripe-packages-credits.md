@@ -1,118 +1,108 @@
-# Schlussrapport — Teilprojekt 5.5: Billing → Stripe Packages (Credits kaufen) + Webhook Gutschrift + Admin UI “Kaufen”
+# Schlussrapport — Teilprojekt 5.5: Billing — SKUs (Preisstufen) + Stripe Packages + Admin UI Fix (Credits oben)
 
-Datum: 2026-01-30  
-Status: READY (nach Commit/Push) ✅  
-Scope: ONLINE-only (GoLive MVP)
+Datum: 2026-01-31
+Status: DONE ✅
+Commit(s):
 
-## Ziel
+33f2636 — feat(tp5.5): Stripe Packages + Billing SKUs + Checkout/Webhook + Admin Billing UI
 
-- Credit-Pakete (3/5/10 etc.) via Stripe als One-time Payments verkaufen.
-- Webhook schreibt Credits tenant-scoped gut (idempotent + auditierbar).
-- Admin kann nach Kauf Credits in Billing Overview sehen (TP5.4).
-- Kein Auto-Activate (MVP): Kauf = Credits, Aktivierung bleibt Admin-Action (bestehender Flow).
+17ca766 — docs(tp5.5): Admin UI Layout Rule + Preisstaffelung + Schlussrapport
 
-## Umsetzung (Highlights)
+124b64c — fix(tp5.5): fehlende Stripe-Routen/Packages UI+API, Migration + Deps nachgezogen
 
-### DB (Prisma)
-- Neues Mapping-Modell `BillingSku` (stripePriceId → Grants, expiresInDays, sortOrder).
-- `BillingOrder` für Checkout Session Audit + Idempotenz via `creditsGrantedAt`.
-- `StripeEvent` Event Log (RECEIVED/PROCESSED/IGNORED/FAILED).
-- Ledger ergänzt um `TenantCreditLedgerReason.STRIPE_PURCHASE`.
+Ziel
 
-### API
-- `GET /api/admin/v1/billing/packages` listet aktive SKUs sortiert.
-- `POST /api/admin/v1/billing/checkout` erstellt Stripe Checkout Session + `BillingOrder(PENDING)`; metadata: tenantId/skuId/userId.
-- `POST /api/webhooks/stripe`:
-  - Signature Verify (STRIPE_WEBHOOK_SECRET)
-  - Idempotenz: `creditsGrantedAt` verhindert Double-Grant bei Retries
-  - Credits: upsert `TenantCreditBalance` pro type/expiresAt + Ledger `STRIPE_PURCHASE` refId=checkoutSessionId
+Lizenz-Credits als One-time Purchase via Stripe Packages kaufbar machen.
 
-### UI
-- Neuer Screen `/admin/billing/packages`: Cards mit SKU + “Kaufen”.
-- Checkout URL redirect aus Admin API.
+Preisstaffelung als Pakete abbilden (z.B. 10× günstiger als 10× Einzellizenz).
 
-## Dateien/Änderungen
+Im Admin Billing Screen:
 
-- prisma/schema.prisma
-- src/lib/stripe.ts
-- src/app/api/admin/v1/billing/packages/route.ts
-- src/app/api/admin/v1/billing/checkout/route.ts
-- src/app/api/webhooks/stripe/route.ts
-- src/app/(admin)/admin/billing/packages/page.tsx
-- src/app/(admin)/admin/billing/packages/PackagesScreenClient.tsx
-- docs/teilprojekt-5.5-billing-stripe-packages-credits.md
+Credits sichtbar oben (nicht erst am Seitenende).
 
-## Akzeptanzkriterien – Check
+Layout exakt wie /admin (Wrapper mx-auto ... max-w-5xl px-6 py-6).
 
-- [x] Packages sichtbar (SKU aus DB, sortiert, active=true)
-- [x] “Kaufen” öffnet Stripe Checkout
-- [x] Webhook gutschreibt Credits (balances + ledger) tenant-scoped
-- [x] Idempotent bei Stripe Retries (creditsGrantedAt)
-- [x] No secrets in Git (nur .env.local)
+Umsetzung / Änderungen (Highlights)
+Stripe / Pricing
 
-## Tests/Proof (reproduzierbar)
+Stripe Products/Prices für Lizenz-Credits angelegt:
 
-### 1) Migration + Build Checks
+30 Tage: 1× / 3× / 5× / 10×
 
-```bash
+365 Tage: 1× / 3× / 5× / 10×
+
+Preisstaffel eingeführt (z.B. 10× 30d günstiger als 10× 1×30d).
+
+DB: BillingSku Seed (stabile IDs)
+
+Seed-Skript erweitert/gebaut, um SKUs id-stabil zu upserten und Duplikate (name/stripePriceId) aufzuräumen.
+
+stripePriceId wird im Update mitgeführt (Preis/Stripe-Preis kann geändert werden ohne Row zu löschen).
+
+Admin UI (Billing)
+
+Credits-Übersicht nach oben gezogen:
+
+Lizenzstatus Card enthält “Verfügbare Credits” als Chips (Summary).
+
+Credits-Tabelle direkt unter Lizenzstatus (FIFO nach Verfall).
+
+Page Layout konsistent zu /admin:
+
+Wrapper mx-auto w-full max-w-5xl px-6 py-6
+
+Header im page.tsx, Client ohne outer padding.
+
+Dateien / Änderungen
+
+tools/seed/billing-skus-seed.mjs — Seed/Upsert der SKUs (inkl. Cleanup Duplikate)
+
+src/app/(admin)/admin/billing/page.tsx — Page Wrapper wie /admin
+
+src/app/(admin)/admin/billing/BillingScreenClient.tsx — UI Reihenfolge/Content
+
+docs/LeadRadar2026A/04_ADMIN_UI.md — Layout-Regel + Billing Screen Spec ergänzt
+
+(zusätzlich im Commit enthalten: Stripe Routes/Webhook/Migration/Deps gem. 124b64c)
+
+Akzeptanzkriterien – Check
+
+ GET /api/admin/v1/billing/packages liefert alle aktiven Pakete inkl. korrekter stripePriceId und amountCents.
+
+ Checkout startet mit POST /api/admin/v1/billing/checkout { skuId } und liefert Stripe Checkout URL.
+
+ Nach erfolgreichem Checkout verarbeitet Webhook Event(s) und schreibt Credits gut.
+
+ Billing Screen zeigt Credits oben (Summary + Tabelle).
+
+ Billing Page Layout entspricht /admin (Padding/Max-Width identisch).
+
+Tests/Proof (reproduzierbar)
+Commands
 cd /d/dev/leadradar2026a
-
-npx prisma migrate dev -n "tp5_5_stripe_packages"
 npm run typecheck
 npm run lint
 npm run build
-2) Stripe CLI Webhook Forwarding
-.env.local:
 
-STRIPE_SECRET_KEY=...
+API Smoke
 
-STRIPE_WEBHOOK_SECRET=...
+Cookie-Name je nach Setup: lr_session (oder eure aktuelle Session-Cookie-Bezeichnung).
 
-bash
-Code kopieren
-stripe listen --forward-to localhost:3000/api/webhooks/stripe
-3) SKU Setup (einmalig)
-Stripe Dashboard: Produkt/Price erstellen (one-time).
+curl -i -H "cookie: lr_session=DEIN_TOKEN" \
+  "$BASE/api/admin/v1/billing/packages?ts=$(date +%s)"
 
-In DB BillingSku anlegen:
+curl -i -H "cookie: lr_session=DEIN_TOKEN" \
+  "$BASE/api/admin/v1/billing/overview?ts=$(date +%s)"
 
-stripePriceId = price_...
+UI Smoke
 
-grants (z.B. grantLicense30d=3)
+/admin/billing → Credits sichtbar oben + konsistentes Padding (wie /admin)
 
-creditExpiresInDays=365
+“Pakete kaufen” → Checkout → nach Kauf Credits erhöht
 
-active=true
+Offene Punkte / Next
 
-4) Checkout erzeugen (Admin Cookie)
-bash
-Code kopieren
-curl -i -X POST \
-  -H "cookie: lr_session=DEIN_TOKEN" \
-  -H "content-type: application/json" \
-  -d '{"skuId":"SKU_ID"}' \
-  "http://localhost:3000/api/admin/v1/billing/checkout"
-checkoutUrl öffnen → Testzahlung → Stripe CLI zeigt checkout.session.completed.
+P1: “Sparen”-Label/Badge in Paket-Kacheln (Staffelpreis kommunizieren).
 
-5) Credits prüfen (Overview)
-bash
-Code kopieren
-curl -i \
-  -H "cookie: lr_session=DEIN_TOKEN" \
-  "http://localhost:3000/api/admin/v1/billing/overview"
-Erwartung: Credits erhöht, Ledger Einträge vorhanden (STRIPE_PURCHASE, refId=sessionId).
-
-6) UI Smoke
-/admin/billing/packages → Pakete sichtbar
-
-“Kaufen” → Stripe Checkout
-
-Zahlung → Webhook → Credits in Billing Overview sichtbar (nach Refresh)
-
-Offene Punkte / Risiken
-P1: Toast in /admin/billing?checkout=success|cancel muss im bestehenden Billing Screen ergänzt werden (separate Datei nicht im Scope geliefert).
-
-P1: Pflege UI/Link in Sidebar zu “Pakete” (falls gewünscht).
-
-Next Step
-TP 5.6: Billing UI polish (Pakete Section direkt in /admin/billing integrieren + Toast + Link/Tab)
+P1: Separate SKU-Kategorien/Filter in der UI (30d/365d Tabs).
+P2: Orders/Receipts/Invoices (Phase 2) im Billing-Bereich.
