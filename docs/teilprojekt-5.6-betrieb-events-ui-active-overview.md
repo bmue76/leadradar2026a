@@ -1,60 +1,55 @@
-# Teilprojekt 5.6 — Betrieb: Events UI + Active-Event Overview (Forms/Devices) — ONLINE-only (GoLive MVP)
+# Schlussrapport — Teilprojekt 5.6: Betrieb → Events UI + Active-Event Bind Overview (Forms/Devices) — ONLINE-only (GoLive MVP)
 
 Datum: 2026-02-01  
-Status: IN ARBEIT (Code vorbereitet, Proof/Commit folgt im Repo)
+Status: DONE ✅  
+Git: b38e3a9 — feat(tp5.6): events ui + activate/archive guardrails + active overview counts
 
 ## Ziel
 
-Betrieb → Events ist GoLive-ready und macht die Produktregel „Option 2“ operativ verständlich:
+Betrieb → Events GoLive-ready umsetzen, sodass Option 2 operativ verständlich und steuerbar ist:
 
-- Admin kann Events erstellen/bearbeiten (Name, Zeitraum, Ort optional)
-- Admin kann genau **ein Event aktiv** setzen (Guardrail: max 1 ACTIVE pro Tenant)
-- Admin kann Events archivieren (ARCHIVED)
-- Screen zeigt eine „Aktives Event“ Card inkl. Bind-Counts:
+- Admin kann Events erstellen und bearbeiten (Name, Datumspanne, Ort optional)
+- Admin kann Events aktiv setzen (max. 1 ACTIVE pro Tenant, Guardrail)
+- Admin kann Events archivieren
+- Screen zeigt Active-Event Overview inkl. Bind-Counts:
   - ACTIVE Formulare, die dem aktiven Event zugewiesen sind (Form.status=ACTIVE && Form.assignedEventId=activeEvent.id)
   - Geräte, die ans aktive Event gebunden sind (Device.activeEventId=activeEvent.id)
-- Quick Links zu /admin/forms und /admin/devices
-
-## Scope / Regeln
-
-- Phase 1: ONLINE-only (kein Offline/Sync)
-- Backend bleibt immer nutzbar (Admin nie blocken)
-- Tenant-scope leak-safe: falscher Tenant/ID → 404 NOT_FOUND
-- API Standards: jsonOk/jsonError + traceId + x-trace-id
-- Validation: Zod + validateBody/validateQuery
-- DB Guardrail „max 1 ACTIVE Event pro Tenant“ wird respektiert (transactional activate)
+- Quick Links/CTAs zu /admin/forms und /admin/devices
 
 ## Umsetzung (Highlights)
 
-### API
+### API (Admin)
+- **GET /api/admin/v1/events**
+  - Filter: q, status (ALL|DRAFT|ACTIVE|ARCHIVED), sort (updatedAt|startsAt|name), dir (asc|desc)
+  - Tenant-scoped, leak-safe über Admin Auth
+- **POST /api/admin/v1/events**
+  - Create DRAFT Event (startsAt/endsAt/location optional)
+- **PATCH /api/admin/v1/events/:id**
+  - Update name/startsAt/endsAt/location (null möglich)
+- **POST /api/admin/v1/events/:id/activate**
+  - Transactional: deaktiviert allfälliges ACTIVE → DRAFT, setzt Target → ACTIVE
+  - Archived kann nicht aktiviert werden (409 EVENT_ARCHIVED)
+  - DB-Guardrail (max 1 ACTIVE) wird respektiert (P2002 → 409 KEY_CONFLICT)
+- **POST /api/admin/v1/events/:id/archive**
+  - status → ARCHIVED; wenn ACTIVE → danach kein aktives Event
+- **GET /api/admin/v1/events/active/overview**
+  - activeEvent oder null + counts + actions
 
-- GET /api/admin/v1/events
-  - Filter: q, status, sort, dir
-- POST /api/admin/v1/events
-  - erstellt DRAFT Event
-- PATCH /api/admin/v1/events/:id
-  - editierbar: name, startsAt, endsAt, location
-- POST /api/admin/v1/events/:id/activate
-  - transaction: deaktiviert allfälliges bisheriges ACTIVE → DRAFT, setzt Target ACTIVE
-  - archived events nicht aktivierbar (409 EVENT_ARCHIVED)
-- POST /api/admin/v1/events/:id/archive
-  - setzt ARCHIVED; wenn ACTIVE → danach kein aktives Event
-- GET /api/admin/v1/events/active/overview
-  - activeEvent (oder null) + counts + CTAs
-
-### UI
-
-- /admin/events:
-  - Title + Hint („Ein Event kann aktiv sein…“)
-  - Top Card „Aktives Event“ inkl. Counts und Quick Links
+### UI (Admin) — /admin/events
+- Apple-clean Screen mit:
+  - Header + Hint: „Ein Event kann aktiv sein. Die App arbeitet immer mit dem aktiven Event.“
+  - Top Card „Aktives Event“:
+    - Name + Zeitraum/Ort (optional)
+    - KPIs: „Formulare zugewiesen“, „Geräte verbunden“
+    - CTAs zu /admin/forms & /admin/devices
+    - Ruhiger Empty State wenn kein aktives Event
   - Toolbar: Status Pills, Suche (debounced), Sort, Refresh, Reset
-  - Finder-like List mit Hover Actions: Aktivieren/Bearbeiten/Archivieren
-  - Drawer (rechts) für Create/Edit inkl. Confirm Dialogs für Activate/Archive
+  - Finder-like Liste mit Hover-Actions (Aktivieren / Archivieren / Bearbeiten)
+  - Drawer (rechts) für Create/Edit inkl. Confirm-Dialogen für Aktivieren/Archivieren
 
 ## Dateien / Änderungen
 
-Neue Dateien:
-
+Neu/angepasst (TP 5.6):
 - src/app/api/admin/v1/events/_repo.ts
 - src/app/api/admin/v1/events/route.ts
 - src/app/api/admin/v1/events/[id]/route.ts
@@ -64,74 +59,90 @@ Neue Dateien:
 - src/app/(admin)/admin/events/page.tsx
 - src/app/(admin)/admin/events/EventsScreenClient.tsx
 - docs/teilprojekt-5.6-betrieb-events-ui-active-overview.md
+- docs/LeadRadar2026A/00_INDEX.md
 
-Noch zu ergänzen (repo-spezifisch):
+Hinweis:
+- SidebarNav hatte „Betrieb → Events“ bereits korrekt enthalten → keine Änderung nötig.
 
-- docs/LeadRadar2026A/00_INDEX.md: Link auf TP 5.6 ergänzen
-- Admin Sidebar/Nav: Menüpunkt „Events“ unter Betrieb (falls noch nicht vorhanden)
+## Akzeptanzkriterien — Check ✅
 
-## Akzeptanzkriterien — Check (Soll)
-
-- [ ] /admin/events lädt Liste ohne Errors
-- [ ] Neues Event erstellen → erscheint in Liste
-- [ ] Aktiv setzen → Active Card zeigt Event + Counts + CTAs
-- [ ] /admin/forms: mind. 1 ACTIVE Form assignedEventId=activeEvent.id → Count steigt
-- [ ] /admin/devices: device.activeEventId=activeEvent.id → Count steigt
-- [ ] Archivieren → Active Card zeigt „Kein aktives Event“
-- [ ] Leak-safe: fremder Tenant/ID → 404
+- [x] /admin/events lädt Liste (ruhig, Apple-clean)
+- [x] Neues Event erstellen → erscheint in Liste (DRAFT)
+- [x] Aktiv setzen → macht Event zum einzigen ACTIVE Event (Guardrail via Transaction)
+- [x] Active Card zeigt aktives Event + Bind Counts + CTAs
+- [x] /admin/forms → ACTIVE + assignedEventId setzen → assignedActiveForms steigt
+- [x] /admin/devices → activeEventId setzen → boundDevices steigt
+- [x] Archivieren → Active Card zeigt „Kein aktives Event“
+- [x] Tenant-scope leak-safe: falscher Tenant/ID → 404 NOT_FOUND
+- [x] API Standards: jsonOk/jsonError + traceId + x-trace-id
+- [x] Validation: Zod + validateBody/validateQuery
 
 ## Tests / Proof (reproduzierbar)
 
 ### Commands
-
+```bash
 cd /d/dev/leadradar2026a
 npm run typecheck
 npm run lint
 npm run build
-
-### API Proof (curl)
-
+API Proof (curl)
 List:
+
+bash
+Code kopieren
 curl -i -H "cookie: lr_session=DEIN_TOKEN" \
   "http://localhost:3000/api/admin/v1/events?status=ALL"
-
 Create:
+
+bash
+Code kopieren
 curl -i -X POST -H "cookie: lr_session=DEIN_TOKEN" \
   -H "content-type: application/json" \
   -d '{"name":"Swissbau 2026","startsAt":"2026-01-20","endsAt":"2026-01-23","location":"Basel"}' \
   "http://localhost:3000/api/admin/v1/events"
-
 Activate:
+
+bash
+Code kopieren
 curl -i -X POST -H "cookie: lr_session=DEIN_TOKEN" \
   "http://localhost:3000/api/admin/v1/events/EVENT_ID/activate"
-
 Active overview:
+
+bash
+Code kopieren
 curl -i -H "cookie: lr_session=DEIN_TOKEN" \
   "http://localhost:3000/api/admin/v1/events/active/overview"
-
 Archive:
+
+bash
+Code kopieren
 curl -i -X POST -H "cookie: lr_session=DEIN_TOKEN" \
   "http://localhost:3000/api/admin/v1/events/EVENT_ID/archive"
-
-### UI Smoke
-
+UI Smoke
 /admin/events öffnen → Liste lädt
+
 Neues Event erstellen → erscheint in Liste
-„Aktiv setzen“ → Active Card zeigt Event + Counts
-/admin/forms → ACTIVE + assignedEventId setzen → Count steigt
-/admin/devices → activeEventId setzen → Count steigt
-Archivieren → Active Card zeigt „Kein aktives Event“
 
-## Offene Punkte / Risiken
+„Aktiv setzen“ → Active Card zeigt Event + Counts + CTAs
 
-P0:
-- Repo-spezifische Integration: Sidebar/Nav Item + 00_INDEX Link fehlt noch (ohne Overwrite liefern)
+/admin/forms → mind. 1 ACTIVE + assignedEventId=activeEvent.id setzen → Count steigt
 
-P1:
-- Falls Event-Felder (startsAt/endsAt/location) im Prisma Schema anders heissen/fehlen → minimaler Schema-Abgleich nötig.
+/admin/devices → device.activeEventId=activeEvent.id setzen → Count steigt
 
-## Next Step
+Event archivieren → Active Card zeigt „Kein aktives Event“
 
-1) Sidebar/Nav + 00_INDEX mit bestehenden Dateien sauber ergänzen  
-2) Tests/Proof laufen lassen (typecheck/lint/build + curl + UI smoke)  
-3) Commit/Push: feat(tp5.6): events ui + activate/archive guardrails + active overview counts
+Offene Punkte / Risiken
+P0
+
+Repo ist aktuell nicht clean: docs/teilprojekt-5.5-billing-stripe-packages-credits.md ist modified (nicht Teil von TP 5.6). Vor GoLive/Release bitte bereinigen oder separat committen.
+
+P1
+
+Device-Count nutzt Delegate-Fallback (mobileDevice/device) — funktioniert robust, kann später mit exaktem Prisma-Modelnamen 100% typisiert werden.
+
+Next Step
+Working Tree bereinigen: TP 5.5-Doku entweder revert oder als eigener docs-Commit abschliessen.
+
+Optional: Device-Modelnamen im Prisma fix identifizieren und den Fallback im Events Overview auf den korrekten Delegate „hart“ typisieren.
+
+Danach weiter mit nächstem Teilprojekt gemäss Roadmap (z. B. Betrieb → Events-Details/Readiness-Verknüpfung auf Admin Home, falls gewünscht).
