@@ -1,12 +1,5 @@
-import { AdminPageHeader } from "../_components/AdminPageHeader";
+import EventsScreenClient from "./EventsScreenClient";
 
-export default function EventsPage() {
-  return (
-    <div className="py-2">
-      <AdminPageHeader
-        title="Events"
-        hint="Hier steuerst du Messe-Events und Aktiv-Status (MVP: Scaffold)."
-      />
-    </div>
-  );
+export default function Page() {
+  return <EventsScreenClient />;
 }

@@ -1,6 +1,6 @@
 # LeadRadar2026A — Doku Index
 
-Stand: 2026-01-30  
+Stand: 2026-02-01  
 Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
 
 ## Navigation
@@ -25,3 +25,5 @@ Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
 - docs/teilprojekt-5.1-admin-home-summary.md
 - docs/teilprojekt-5.2-setup-forms-ui-assignment.md
 - docs/teilprojekt-5.3-setup-templates-create-form.md
+- docs/teilprojekt-5.4-betrieb-devices-billing-credits-coupons-hardblock.md
+- docs/teilprojekt-5.6-betrieb-events-ui-active-overview.md

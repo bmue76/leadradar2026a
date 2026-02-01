@@ -2,24 +2,23 @@ import { Prisma } from "@prisma/client";
 import { NextRequest } from "next/server";
 
 import { jsonError, jsonOk } from "@/lib/api";
-import { validateBody, isHttpError } from "@/lib/http";
+import { isHttpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { requireAdminAuth } from "@/lib/auth";
 
-import { EventUpdateBodySchema, updateEvent } from "../_repo";
+import { archiveEvent } from "../../_repo";
 
 export const runtime = "nodejs";
 
-export async function PATCH(req: NextRequest, ctxRoute: { params: Promise<{ id: string }> }) {
+export async function POST(req: NextRequest, ctxRoute: { params: Promise<{ id: string }> }) {
   try {
     const ctx = await requireAdminAuth(req);
     const { id } = await ctxRoute.params;
-    const body = await validateBody(req, EventUpdateBodySchema);
 
-    const item = await updateEvent(prisma, ctx.tenantId, id, body);
-    if (!item) return jsonError(req, 404, "NOT_FOUND", "Event not found.");
+    const res = await archiveEvent(prisma, ctx.tenantId, id);
+    if (res === "NOT_FOUND") return jsonError(req, 404, "NOT_FOUND", "Event not found.");
 
-    return jsonOk(req, { item });
+    return jsonOk(req, { ok: true });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
 
@@ -27,7 +26,7 @@ export async function PATCH(req: NextRequest, ctxRoute: { params: Promise<{ id: 
       return jsonError(req, 500, "DB_ERROR", "Database error.", { code: e.code });
     }
 
-    console.error("PATCH /api/admin/v1/events/:id failed", e);
+    console.error("POST /api/admin/v1/events/:id/archive failed", e);
     return jsonError(req, 500, "INTERNAL", "Unexpected error.");
   }
 }

@@ -1,164 +1,47 @@
-import { z } from "zod";
+import { Prisma } from "@prisma/client";
+import { NextRequest } from "next/server";
 
 import { jsonError, jsonOk } from "@/lib/api";
-import { validateBody, validateQuery, httpError, isHttpError } from "@/lib/http";
+import { validateBody, validateQuery, isHttpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { requireAdminAuth } from "@/lib/auth";
 
+import { EventCreateBodySchema, EventListQuerySchema, createEvent, listEvents } from "./_repo";
+
 export const runtime = "nodejs";
 
-const IsoDateTimeString = z
-  .string()
-  .min(1)
-  .refine((s) => !Number.isNaN(new Date(s).getTime()), "Invalid datetime.");
-
-const LimitSchema = z
-  .string()
-  .optional()
-  .transform((v) => (v === undefined ? 200 : Number.parseInt(v, 10)))
-  .refine(
-    (n) => Number.isInteger(n) && n >= 1 && n <= 500,
-    "limit must be an integer between 1 and 500."
-  );
-
-const BoolQuerySchema = z
-  .string()
-  .optional()
-  .transform((v) => v === "1" || v === "true");
-
-const ListQuerySchema = z
-  .object({
-    status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional(),
-    limit: LimitSchema,
-    includeCounts: BoolQuerySchema,
-  })
-  .transform((q) => ({
-    status: q.status,
-    limit: q.limit,
-    includeCounts: q.includeCounts ?? false,
-  }));
-
-const CreateBodySchema = z
-  .object({
-    name: z.string().trim().min(1).max(120),
-    location: z.string().trim().max(180).optional(),
-    startsAt: IsoDateTimeString.optional(),
-    endsAt: IsoDateTimeString.optional(),
-    status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional(),
-  })
-  .superRefine((b, ctx) => {
-    if (b.startsAt && b.endsAt) {
-      const s = new Date(b.startsAt);
-      const e = new Date(b.endsAt);
-      if (s.getTime() > e.getTime()) {
-        ctx.addIssue({
-          code: "custom",
-          message: "`startsAt` must be <= `endsAt`.",
-        });
-      }
-    }
-  });
-
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
   try {
-    const auth = await requireAdminAuth(req);
-    const query = await validateQuery(req, ListQuerySchema);
-
-    const items = await prisma.event.findMany({
-      where: {
-        tenantId: auth.tenantId,
-        ...(query.status ? { status: query.status } : {}),
-      },
-      orderBy: [{ startsAt: "desc" }, { createdAt: "desc" }],
-      take: query.limit,
-      select: {
-        id: true,
-        name: true,
-        location: true,
-        startsAt: true,
-        endsAt: true,
-        status: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
-
-    if (!query.includeCounts) {
-      return jsonOk(req, { items });
-    }
-
-    const ids = items.map((i) => i.id);
-    const countsByEventId: Record<string, number> = {};
-
-    if (ids.length > 0) {
-      const rows = await prisma.mobileDevice.groupBy({
-        by: ["activeEventId"],
-        where: {
-          tenantId: auth.tenantId,
-          activeEventId: { in: ids },
-        },
-        _count: { _all: true },
-      });
-
-      for (const r of rows) {
-        if (!r.activeEventId) continue;
-        countsByEventId[r.activeEventId] = r._count._all;
-      }
-    }
-
-    const itemsWithCounts = items.map((ev) => ({
-      ...ev,
-      boundDevicesCount: countsByEventId[ev.id] ?? 0,
-    }));
-
-    return jsonOk(req, { items: itemsWithCounts });
+    const ctx = await requireAdminAuth(req);
+    const q = await validateQuery(req, EventListQuerySchema);
+    const items = await listEvents(prisma, ctx.tenantId, q);
+    return jsonOk(req, { items });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
-    console.error(e);
-    return jsonError(req, 500, "INTERNAL_SERVER_ERROR", "Unexpected server error.");
+
+    if (e instanceof Prisma.PrismaClientKnownRequestError) {
+      return jsonError(req, 500, "DB_ERROR", "Database error.", { code: e.code });
+    }
+
+    console.error("GET /api/admin/v1/events failed", e);
+    return jsonError(req, 500, "INTERNAL", "Unexpected error.");
   }
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
-    const auth = await requireAdminAuth(req);
-    const body = await validateBody(req, CreateBodySchema, 256 * 1024);
-
-    const startsAt = body.startsAt ? new Date(body.startsAt) : undefined;
-    const endsAt = body.endsAt ? new Date(body.endsAt) : undefined;
-
-    if (startsAt && Number.isNaN(startsAt.getTime())) {
-      throw httpError(400, "INVALID_BODY", "Invalid request body.");
-    }
-    if (endsAt && Number.isNaN(endsAt.getTime())) {
-      throw httpError(400, "INVALID_BODY", "Invalid request body.");
-    }
-
-    const ev = await prisma.event.create({
-      data: {
-        tenantId: auth.tenantId,
-        name: body.name,
-        location: body.location?.trim() ? body.location.trim() : undefined,
-        startsAt,
-        endsAt,
-        status: body.status ?? "DRAFT",
-      },
-      select: {
-        id: true,
-        name: true,
-        location: true,
-        startsAt: true,
-        endsAt: true,
-        status: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
-
-    return jsonOk(req, { event: ev });
+    const ctx = await requireAdminAuth(req);
+    const body = await validateBody(req, EventCreateBodySchema);
+    const item = await createEvent(prisma, ctx.tenantId, body);
+    return jsonOk(req, { item }, { status: 201 });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
-    console.error(e);
-    return jsonError(req, 500, "INTERNAL_SERVER_ERROR", "Unexpected server error.");
+
+    if (e instanceof Prisma.PrismaClientKnownRequestError) {
+      return jsonError(req, 500, "DB_ERROR", "Database error.", { code: e.code });
+    }
+
+    console.error("POST /api/admin/v1/events failed", e);
+    return jsonError(req, 500, "INTERNAL", "Unexpected error.");
   }
 }

@@ -2,24 +2,19 @@ import { Prisma } from "@prisma/client";
 import { NextRequest } from "next/server";
 
 import { jsonError, jsonOk } from "@/lib/api";
-import { validateBody, isHttpError } from "@/lib/http";
+import { isHttpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { requireAdminAuth } from "@/lib/auth";
 
-import { EventUpdateBodySchema, updateEvent } from "../_repo";
+import { getActiveOverview } from "../../_repo";
 
 export const runtime = "nodejs";
 
-export async function PATCH(req: NextRequest, ctxRoute: { params: Promise<{ id: string }> }) {
+export async function GET(req: NextRequest) {
   try {
     const ctx = await requireAdminAuth(req);
-    const { id } = await ctxRoute.params;
-    const body = await validateBody(req, EventUpdateBodySchema);
-
-    const item = await updateEvent(prisma, ctx.tenantId, id, body);
-    if (!item) return jsonError(req, 404, "NOT_FOUND", "Event not found.");
-
-    return jsonOk(req, { item });
+    const data = await getActiveOverview(prisma, ctx.tenantId);
+    return jsonOk(req, data);
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
 
@@ -27,7 +22,7 @@ export async function PATCH(req: NextRequest, ctxRoute: { params: Promise<{ id: 
       return jsonError(req, 500, "DB_ERROR", "Database error.", { code: e.code });
     }
 
-    console.error("PATCH /api/admin/v1/events/:id failed", e);
+    console.error("GET /api/admin/v1/events/active/overview failed", e);
     return jsonError(req, 500, "INTERNAL", "Unexpected error.");
   }
 }
