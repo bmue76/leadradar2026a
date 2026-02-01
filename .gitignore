@@ -69,3 +69,6 @@ prisma/migrations/**/migration.sql.bak
 
 # local tools (dev-only)
 tools/*.cjs
+
+# Stripe CLI artifacts
+charge.updated
