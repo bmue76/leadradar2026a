@@ -27,3 +27,9 @@ Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
 - docs/teilprojekt-5.3-setup-templates-create-form.md
 - docs/teilprojekt-5.4-betrieb-devices-billing-credits-coupons-hardblock.md
 - docs/teilprojekt-5.6-betrieb-events-ui-active-overview.md
+
+- **Teilprojekt 5.7** — Betrieb: Leads Admin UI (Liste + Drawer) inkl. Review/Notes  
+  → `docs/teilprojekt-5.7-betrieb-leads-admin-ui-drawer-review-notes.md`
+
+- **Teilprojekt 5.8** — Betrieb: Exports (CSV) Admin UI + Export Jobs (Liste/Status) + Filter (Active Event)  
+  → `docs/teilprojekt-5.8-betrieb-exports-csv-ui-jobs.md`
