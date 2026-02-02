@@ -1,623 +1,1166 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
-import { adminFetchJson as _adminFetchJson } from "../_lib/adminFetch";
-import LeadDetailDrawer from "./LeadDetailDrawer";
-import LeadsTable from "./LeadsTable";
-import type {
-  AdminFormListItem,
-  AdminFormsListData,
-  AdminLeadListItem,
-  AdminLeadsListData,
-  ApiResponse,
-} from "./leads.types";
 
-type AdminFetchJsonFn = <T = unknown>(path: string, init?: RequestInit) => Promise<T>;
+type ApiOk<T> = { ok: true; data: T; traceId: string };
+type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
+type ApiResp<T> = ApiOk<T> | ApiErr;
 
-const adminFetchJson = _adminFetchJson as unknown as AdminFetchJsonFn;
+type ActiveEventApi = {
+  item: null | {
+    id: string;
+    name: string;
+    status: "ACTIVE" | "DRAFT" | "ARCHIVED";
+  };
+};
 
-type EventListItem = { id: string; name: string; status?: string; startsAt?: string | null; endsAt?: string | null };
+type LeadListItem = {
+  id: string;
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
+  createdAt: string;
+  updatedAt: string;
 
-function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return new Intl.DateTimeFormat(undefined, {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(d);
-}
+  capturedAt?: string;
+  formId?: string;
+  eventId?: string | null;
 
-function toIsoFromDateInput(value: string, endOfDay: boolean): string | null {
-  if (!value) return null;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return null;
-  if (endOfDay) {
-    d.setHours(23, 59, 59, 999);
-  } else {
-    d.setHours(0, 0, 0, 0);
-  }
-  return d.toISOString();
-}
+  contactName: string | null;
+  company: string | null;
+  email: string | null;
+  phone: string | null;
 
-function safePreviewFromValues(values?: Record<string, unknown> | null): string {
-  if (!values || typeof values !== "object") return "—";
+  event: { id: string; name: string } | null;
 
-  const pick = (k: string): string | null => {
-    const v = (values as Record<string, unknown>)[k];
-    if (typeof v === "string" && v.trim()) return v.trim();
-    if (typeof v === "number" && Number.isFinite(v)) return String(v);
-    return null;
+  reviewedAt: string | null;
+  reviewStatus: "NEW" | "REVIEWED";
+
+  hasCardAttachment: boolean;
+  hasOcr: boolean;
+
+  sourceDeviceName: string | null;
+};
+
+type LeadsListApi = { items: LeadListItem[]; nextCursor: string | null };
+
+type LeadDetail = {
+  id: string;
+
+  createdAt: string | null;
+  updatedAt: string | null;
+  capturedAt: string | null;
+
+  eventId: string | null;
+  formId: string;
+
+  reviewedAt: string | null;
+  reviewStatus: "NEW" | "REVIEWED";
+
+  adminNotes: string | null;
+
+  contact: {
+    firstName: string | null;
+    lastName: string | null;
+    name: string | null;
+    company: string | null;
+    email: string | null;
+    phone: string | null;
+    phoneRaw: string | null;
+    mobile: string | null;
+    source: string | null;
+    updatedAt: string | null;
   };
 
-  const candidates = [
-    "company",
-    "firma",
-    "organization",
-    "email",
-    "eMail",
-    "mail",
-    "lastName",
-    "lastname",
-    "nachname",
-    "firstName",
-    "firstname",
-    "vorname",
-    "name",
-  ];
+  sourceDeviceName: string | null;
 
-  const parts: string[] = [];
-  for (const k of candidates) {
-    const v = pick(k);
-    if (v && !parts.includes(v)) parts.push(v);
-    if (parts.length >= 3) break;
+  event: { id: string; name: string } | null;
+  form: { id: string; name: string } | null;
+
+  attachments: Array<{
+    id: string;
+    type: string;
+    filename: string;
+    mimeType: string | null;
+    sizeBytes: number | null;
+    createdAt: string | null;
+  }>;
+
+  hasCardAttachment?: boolean;
+  values?: unknown;
+  meta?: unknown;
+};
+
+type OcrView = {
+  id: string;
+  status: string;
+  engine: string;
+  confidence: number | null;
+  rawText: string | null;
+  parsedContactJson: unknown | null;
+  correctedContactJson: unknown | null;
+};
+
+type OcrApi = {
+  attachment: { id: string; filename: string; mimeType: string | null } | null;
+  ocr: OcrView | null;
+};
+
+type OcrResp = {
+  attachment: { id: string; filename: string; mimeType: string | null } | null;
+  ocr: OcrView | null;
+};
+
+type UiError = { message: string; code?: string; traceId?: string };
+
+type SortOpt = "CREATED_DESC" | "CREATED_ASC" | "NAME_ASC" | "NAME_DESC";
+
+/**
+ * Helper accessors to avoid TS "never" narrowing quirks in unreachable branches.
+ * (never is assignable to UiError|null, but property access would fail.)
+ */
+function errMessage(err: UiError | null): string {
+  return err?.message ?? "";
+}
+function errTraceId(err: UiError | null): string | undefined {
+  return err?.traceId;
+}
+
+function fmtDateTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  try {
+    return new Intl.DateTimeFormat("de-CH", { dateStyle: "short", timeStyle: "short" }).format(new Date(iso));
+  } catch {
+    return iso;
   }
-
-  if (parts.length > 0) return parts.join(" · ");
-  return "—";
 }
 
-function mergeUniqueById(existing: AdminLeadListItem[], incoming: AdminLeadListItem[]) {
-  const map = new Map<string, AdminLeadListItem>();
-  for (const it of existing) map.set(it.id, it);
-  for (const it of incoming) map.set(it.id, it);
-  return Array.from(map.values());
+function statusLabel(s: "NEW" | "REVIEWED"): string {
+  return s === "REVIEWED" ? "Bearbeitet" : "Neu";
 }
 
-function extractForms(payload: AdminFormsListData | AdminFormListItem[] | unknown): AdminFormListItem[] {
-  if (Array.isArray(payload)) return payload as AdminFormListItem[];
-  if (!payload || typeof payload !== "object") return [];
-  const p = payload as AdminFormsListData;
-  return (p.items ?? p.forms ?? []) as AdminFormListItem[];
+function statusPillClasses(s: "NEW" | "REVIEWED"): string {
+  if (s === "REVIEWED") return "border-slate-200 bg-slate-50 text-slate-700";
+  return "border-amber-200 bg-amber-50 text-amber-900";
 }
 
-function extractLeadsList(payload: AdminLeadsListData | unknown): { items: AdminLeadListItem[]; nextCursor: string | null } {
-  if (!payload || typeof payload !== "object") return { items: [], nextCursor: null };
-  const p = payload as AdminLeadsListData;
-  const items = (p.items ?? p.leads ?? []) as AdminLeadListItem[];
-  const nextCursor = (p.nextCursor ?? p.cursor ?? null) as string | null;
-  return { items, nextCursor };
-}
+function Button({
+  label,
+  kind,
+  onClick,
+  disabled,
+  title,
+}: {
+  label: string;
+  kind: "primary" | "secondary" | "ghost" | "danger";
+  onClick?: () => void;
+  disabled?: boolean;
+  title?: string;
+}) {
+  const base =
+    "inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-slate-200";
+  const primary = "bg-slate-900 text-white hover:bg-slate-800";
+  const secondary = "border border-slate-200 bg-white text-slate-900 hover:bg-slate-50";
+  const ghost = "text-slate-700 hover:bg-slate-100";
+  const danger = "border border-rose-200 bg-rose-50 text-rose-800 hover:bg-rose-100";
 
-function extractEvents(payload: unknown): EventListItem[] {
-  const arr: unknown[] = (() => {
-    if (Array.isArray(payload)) return payload;
-    if (!isRecord(payload)) return [];
-    if (Array.isArray(payload.items)) return payload.items as unknown[];
-    if (Array.isArray(payload.events)) return payload.events as unknown[];
-    if (isRecord(payload.data)) {
-      const d = payload.data as Record<string, unknown>;
-      if (Array.isArray(d.items)) return d.items as unknown[];
-      if (Array.isArray(d.events)) return d.events as unknown[];
-    }
-    return [];
-  })();
+  const cls = `${base} ${
+    kind === "primary" ? primary : kind === "secondary" ? secondary : kind === "danger" ? danger : ghost
+  } ${disabled ? "opacity-50 pointer-events-none" : ""}`;
 
-  return arr
-    .map((x) => {
-      if (!isRecord(x)) return null;
-      const id = typeof x.id === "string" ? x.id : "";
-      const name = typeof x.name === "string" ? x.name : "";
-      if (!id || !name) return null;
-      return {
-        id,
-        name,
-        status: typeof x.status === "string" ? x.status : undefined,
-        startsAt: typeof x.startsAt === "string" ? x.startsAt : x.startsAt === null ? null : undefined,
-        endsAt: typeof x.endsAt === "string" ? x.endsAt : x.endsAt === null ? null : undefined,
-      } satisfies EventListItem;
-    })
-    .filter(Boolean) as EventListItem[];
-}
-
-type LoadState = "idle" | "loading" | "error";
-
-export default function LeadsClient() {
-  // Filters
-  const [formId, setFormId] = useState<string>("");
-  const [eventId, setEventId] = useState<string>("");
-  const [includeDeleted, setIncludeDeleted] = useState<boolean>(false);
-  const [fromDate, setFromDate] = useState<string>(""); // YYYY-MM-DD
-  const [toDate, setToDate] = useState<string>(""); // YYYY-MM-DD
-  const [limit, setLimit] = useState<number>(50);
-
-  // Events map (for filter dropdown)
-  const [eventsState, setEventsState] = useState<LoadState>("idle");
-  const [events, setEvents] = useState<EventListItem[]>([]);
-  const eventsById = useMemo(() => {
-    const m = new Map<string, EventListItem>();
-    for (const e of events) m.set(e.id, e);
-    return m;
-  }, [events]);
-
-  // Forms map (for display + filter dropdown)
-  const [formsState, setFormsState] = useState<LoadState>("idle");
-  const [forms, setForms] = useState<AdminFormListItem[]>([]);
-  const formsById = useMemo(() => {
-    const m = new Map<string, AdminFormListItem>();
-    for (const f of forms) m.set(f.id, f);
-    return m;
-  }, [forms]);
-
-  // Leads list + cursor
-  const [listState, setListState] = useState<LoadState>("idle");
-  const [items, setItems] = useState<AdminLeadListItem[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [traceId, setTraceId] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string>("");
-
-  const [loadingMore, setLoadingMore] = useState<boolean>(false);
-
-  // Drawer
-  const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
-
-  // Avoid out-of-order list responses overwriting newer state
-  const listReqSeq = useRef(0);
-
-  const loadEvents = useCallback(async () => {
-    setEventsState("loading");
-    try {
-      const res = (await adminFetchJson<ApiResponse<unknown>>("/api/admin/v1/events?status=ACTIVE&limit=200", {
-        method: "GET",
-      })) as ApiResponse<unknown>;
-      if (!res.ok) {
-        setEventsState("error");
-        setTraceId(res.traceId ?? null);
-        setErrorMessage(res.error?.message || "Failed to load events.");
-        return;
-      }
-      const list = extractEvents(res.data);
-      setEvents(list);
-      setEventsState("idle");
-    } catch (e) {
-      setEventsState("error");
-      setErrorMessage(e instanceof Error ? e.message : "Failed to load events.");
-    }
-  }, []);
-
-  const loadForms = useCallback(async () => {
-    setFormsState("loading");
-    try {
-      const res = (await adminFetchJson<ApiResponse<AdminFormsListData | AdminFormListItem[]>>(
-        "/api/admin/v1/forms",
-        { method: "GET" }
-      )) as ApiResponse<AdminFormsListData | AdminFormListItem[]>;
-      if (!res.ok) {
-        setFormsState("error");
-        setTraceId(res.traceId ?? null);
-        setErrorMessage(res.error?.message || "Failed to load forms.");
-        return;
-      }
-      const list = extractForms(res.data);
-      setForms(list);
-      setFormsState("idle");
-    } catch (e) {
-      setFormsState("error");
-      setErrorMessage(e instanceof Error ? e.message : "Failed to load forms.");
-    }
-  }, []);
-
-  const buildListQuery = useCallback(
-    (cursor?: string | null) => {
-      const params = new URLSearchParams();
-      params.set("limit", String(limit));
-      if (cursor) params.set("cursor", cursor);
-      if (formId) params.set("formId", formId);
-      if (eventId) params.set("eventId", eventId);
-      if (includeDeleted) params.set("includeDeleted", "true");
-
-      const fromIso = toIsoFromDateInput(fromDate, false);
-      const toIso = toIsoFromDateInput(toDate, true);
-      if (fromIso) params.set("from", fromIso);
-      if (toIso) params.set("to", toIso);
-
-      return `/api/admin/v1/leads?${params.toString()}`;
-    },
-    [formId, eventId, includeDeleted, fromDate, toDate, limit]
+  return (
+    <button type="button" className={cls} onClick={onClick} disabled={disabled} title={title}>
+      {label}
+    </button>
   );
+}
 
-  const loadLeadsFirstPage = useCallback(async () => {
-    const seq = ++listReqSeq.current;
-
-    setListState("loading");
-    setErrorMessage("");
-    setTraceId(null);
-    setItems([]);
-    setNextCursor(null);
-
-    try {
-      const url = buildListQuery(null);
-      const res = (await adminFetchJson<ApiResponse<AdminLeadsListData>>(
-        url,
-        { method: "GET" }
-      )) as ApiResponse<AdminLeadsListData>;
-
-      if (seq !== listReqSeq.current) return;
-
-      if (!res.ok) {
-        setListState("error");
-        setTraceId(res.traceId ?? null);
-        setErrorMessage(res.error?.message || "Failed to load leads.");
-        return;
-      }
-
-      const { items: listItems, nextCursor: nc } = extractLeadsList(res.data);
-      setItems(listItems);
-      setNextCursor(nc);
-      setListState("idle");
-    } catch (e) {
-      if (seq !== listReqSeq.current) return;
-      setListState("error");
-      setErrorMessage(e instanceof Error ? e.message : "Failed to load leads.");
-    }
-  }, [buildListQuery]);
-
-  const loadMore = useCallback(async () => {
-    if (!nextCursor || loadingMore) return;
-
-    setLoadingMore(true);
-    setErrorMessage("");
-    setTraceId(null);
-
-    try {
-      const url = buildListQuery(nextCursor);
-      const res = (await adminFetchJson<ApiResponse<AdminLeadsListData>>(
-        url,
-        { method: "GET" }
-      )) as ApiResponse<AdminLeadsListData>;
-
-      if (!res.ok) {
-        setTraceId(res.traceId ?? null);
-        setErrorMessage(res.error?.message || "Failed to load more leads.");
-        setLoadingMore(false);
-        return;
-      }
-
-      const { items: moreItems, nextCursor: nc } = extractLeadsList(res.data);
-      setItems((prev) => mergeUniqueById(prev, moreItems));
-      setNextCursor(nc);
-      setLoadingMore(false);
-    } catch (e) {
-      setErrorMessage(e instanceof Error ? e.message : "Failed to load more leads.");
-      setLoadingMore(false);
-    }
-  }, [buildListQuery, loadingMore, nextCursor]);
-
-  const refresh = useCallback(async () => {
-    await loadLeadsFirstPage();
-  }, [loadLeadsFirstPage]);
-
-  // initial
-  useEffect(() => {
-    const t = setTimeout(() => {
-      void loadEvents();
-      void loadForms();
-    }, 0);
-    return () => clearTimeout(t);
-  }, [loadEvents, loadForms]);
-
-  useEffect(() => {
-    const t = setTimeout(() => {
-      void loadLeadsFirstPage();
-    }, 0);
-    return () => clearTimeout(t);
-  }, [loadLeadsFirstPage]);
-
-  const onFiltersChanged = useCallback(() => {
-    void loadLeadsFirstPage();
-  }, [loadLeadsFirstPage]);
-
-  // refresh list after a mutation (delete/restore)
-  const onLeadMutated = useCallback(
-    async (leadId: string) => {
-      await loadLeadsFirstPage();
-      setSelectedLeadId((prev) => (prev === leadId ? leadId : prev));
-    },
-    [loadLeadsFirstPage]
+function IconButton({ title, onClick }: { title: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-600 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-200"
+      aria-label={title}
+      title={title}
+      onClick={onClick}
+    >
+      ↻
+    </button>
   );
+}
 
-  const headerRight = (
-    <div className="flex items-center gap-2">
-      <button type="button" className="rounded-md border px-3 py-2 text-sm hover:bg-black/5" onClick={refresh}>
-        Refresh
+function Input({
+  value,
+  onChange,
+  placeholder,
+  widthClass,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  widthClass?: string;
+}) {
+  return (
+    <input
+      className={`h-9 ${widthClass ?? "w-[260px]"} rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200`}
+      value={value}
+      placeholder={placeholder}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  );
+}
+
+function Select({
+  value,
+  onChange,
+  ariaLabel,
+  children,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  ariaLabel: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <select
+      className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
+      value={value}
+      aria-label={ariaLabel}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      {children}
+    </select>
+  );
+}
+
+function DrawerShell({
+  open,
+  title,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <button type="button" className="absolute inset-0 bg-black/20" aria-label="Schliessen" onClick={onClose} />
+      <aside className="absolute right-0 top-0 h-full w-full max-w-[520px] bg-white shadow-2xl">
+        <div className="flex h-14 items-center justify-between border-b border-slate-200 px-6">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-900">{title}</div>
+          </div>
+          <button
+            type="button"
+            className="inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-200"
+            onClick={onClose}
+          >
+            Schliessen
+          </button>
+        </div>
+        <div className="h-[calc(100%-3.5rem)] overflow-auto px-6 py-6">{children}</div>
+      </aside>
+    </div>
+  );
+}
+
+function Card({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="mb-3 text-sm font-semibold text-slate-900">{title}</div>
+      {children}
+    </section>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <label className="block">
+      <div className="mb-1 text-xs font-medium text-slate-600">{label}</div>
+      <input
+        className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
+  );
+}
+
+function TextArea({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <label className="block">
+      <div className="mb-1 text-xs font-medium text-slate-600">{label}</div>
+      <textarea
+        className="min-h-[100px] w-full rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
+  );
+}
+
+function StatusPills({
+  value,
+  onChange,
+}: {
+  value: "ALL" | "NEW" | "REVIEWED";
+  onChange: (v: "ALL" | "NEW" | "REVIEWED") => void;
+}) {
+  const pillBase =
+    "inline-flex h-9 items-center justify-center rounded-full border px-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-slate-200";
+
+  const pill = (active: boolean) =>
+    active
+      ? `${pillBase} border-slate-900 bg-slate-900 text-white`
+      : `${pillBase} border-slate-200 bg-white text-slate-700 hover:bg-slate-50`;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button type="button" className={pill(value === "ALL")} onClick={() => onChange("ALL")}>
+        Alle
+      </button>
+      <button type="button" className={pill(value === "NEW")} onClick={() => onChange("NEW")}>
+        Neu
+      </button>
+      <button type="button" className={pill(value === "REVIEWED")} onClick={() => onChange("REVIEWED")}>
+        Bearbeitet
       </button>
     </div>
   );
-
-  const activeEventLabel = eventId ? eventsById.get(eventId)?.name ?? "Unknown event" : "All events";
-
-  return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-6">
-      <div className="mb-5 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Leads</h1>
-          <p className="mt-1 text-sm text-black/60">
-            Browse captured leads, open details, and soft-delete (restore optional).{" "}
-            <span className="text-black/50">Filter: {activeEventLabel}</span>
-          </p>
-        </div>
-        {headerRight}
-      </div>
-
-      {/* Filters */}
-      <div className="mb-4 rounded-xl border bg-white p-4">
-        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-          <div className="grid w-full grid-cols-1 gap-3 md:grid-cols-5">
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-black/60">Event</label>
-              <select
-                className="h-10 rounded-md border bg-white px-3 text-sm"
-                value={eventId}
-                onChange={(e) => {
-                  setEventId(e.target.value);
-                  setTimeout(onFiltersChanged, 0);
-                }}
-                disabled={eventsState === "loading"}
-              >
-                <option value="">All events</option>
-                {events.map((ev) => (
-                  <option key={ev.id} value={ev.id}>
-                    {ev.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-black/60">Form</label>
-              <select
-                className="h-10 rounded-md border bg-white px-3 text-sm"
-                value={formId}
-                onChange={(e) => {
-                  setFormId(e.target.value);
-                  setTimeout(onFiltersChanged, 0);
-                }}
-                disabled={formsState === "loading"}
-              >
-                <option value="">All forms</option>
-                {forms.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-black/60">Date from</label>
-              <input
-                type="date"
-                className="h-10 rounded-md border bg-white px-3 text-sm"
-                value={fromDate}
-                onChange={(e) => setFromDate(e.target.value)}
-                onBlur={onFiltersChanged}
-              />
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-black/60">Date to</label>
-              <input
-                type="date"
-                className="h-10 rounded-md border bg-white px-3 text-sm"
-                value={toDate}
-                onChange={(e) => setToDate(e.target.value)}
-                onBlur={onFiltersChanged}
-              />
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-medium text-black/60">Page size</label>
-              <select
-                className="h-10 rounded-md border bg-white px-3 text-sm"
-                value={String(limit)}
-                onChange={(e) => {
-                  const v = Number(e.target.value);
-                  setLimit(v);
-                  setTimeout(onFiltersChanged, 0);
-                }}
-              >
-                <option value="25">25</option>
-                <option value="50">50</option>
-                <option value="100">100</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="flex w-full items-center justify-between gap-3 md:w-auto md:justify-end">
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={includeDeleted}
-                onChange={(e) => {
-                  setIncludeDeleted(e.target.checked);
-                  setTimeout(onFiltersChanged, 0);
-                }}
-              />
-              <span>Show deleted</span>
-            </label>
-
-            <button
-              type="button"
-              className="rounded-md border px-3 py-2 text-sm hover:bg-black/5"
-              onClick={() => {
-                setEventId("");
-                setFormId("");
-                setIncludeDeleted(false);
-                setFromDate("");
-                setToDate("");
-                setLimit(50);
-                setTimeout(onFiltersChanged, 0);
-              }}
-            >
-              Reset
-            </button>
-          </div>
-        </div>
-
-        {(eventsState === "error" || formsState === "error") && (
-          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm">
-            <div className="font-medium text-red-800">Could not load filter lists.</div>
-            <div className="mt-1 text-red-800/80">Event/Form dropdown may be incomplete.</div>
-            <div className="mt-2 flex items-center gap-2">
-              <button type="button" className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm hover:bg-white/60" onClick={() => void loadEvents()}>
-                Retry events
-              </button>
-              <button type="button" className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm hover:bg-white/60" onClick={() => void loadForms()}>
-                Retry forms
-              </button>
-              {traceId && <span className="text-xs text-red-800/70">traceId: {traceId}</span>}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* States */}
-      {listState === "loading" && <LoadingSkeleton />}
-
-      {listState === "error" && (
-        <ErrorPanel
-          title="Could not load leads."
-          message={errorMessage || "Something went wrong while fetching leads."}
-          traceId={traceId}
-          onRetry={() => void loadLeadsFirstPage()}
-        />
-      )}
-
-      {listState === "idle" && items.length === 0 && <EmptyPanel />}
-
-      {listState === "idle" && items.length > 0 && (
-        <>
-          <div className="mb-2 flex items-center justify-between text-sm text-black/60">
-            <div>
-              Showing <span className="font-medium text-black/80">{items.length}</span> lead(s)
-            </div>
-            <div className="hidden md:block">Captured times are shown in your local timezone.</div>
-          </div>
-
-          <LeadsTable
-            rows={items}
-            formsById={formsById}
-            formatCapturedAt={formatDateTime}
-            getPreview={(row) => (row.preview && row.preview.trim() ? row.preview : safePreviewFromValues(row.values))}
-            onOpen={(id) => setSelectedLeadId(id)}
-            hasMore={Boolean(nextCursor)}
-            loadingMore={loadingMore}
-            onLoadMore={() => void loadMore()}
-          />
-        </>
-      )}
-
-      <LeadDetailDrawer
-        open={Boolean(selectedLeadId)}
-        leadId={selectedLeadId}
-        onClose={() => setSelectedLeadId(null)}
-        formsById={formsById}
-        formatCapturedAt={formatDateTime}
-        onMutated={(id) => void onLeadMutated(id)}
-      />
-
-      <div className="mt-6 text-sm text-black/60">
-        Need a form first?{" "}
-        <Link href="/admin/forms" className="font-medium text-black underline underline-offset-4">
-          Go to Forms
-        </Link>
-        .
-      </div>
-    </div>
-  );
 }
 
-function LoadingSkeleton() {
+export default function LeadsClient() {
+  const [activeEvent, setActiveEvent] = useState<ActiveEventApi["item"]>(null);
+
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState<"ALL" | "NEW" | "REVIEWED">("ALL");
+  const [sortOpt, setSortOpt] = useState<SortOpt>("CREATED_DESC");
+
+  const [loadingList, setLoadingList] = useState(true);
+  const [listError, setListError] = useState<UiError | null>(null);
+
+  const [items, setItems] = useState<LeadListItem[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [detail, setDetail] = useState<LeadDetail | null>(null);
+  const [drawerErr, setDrawerErr] = useState<UiError | null>(null);
+
+  const [draftFirst, setDraftFirst] = useState("");
+  const [draftLast, setDraftLast] = useState("");
+  const [draftCompany, setDraftCompany] = useState("");
+  const [draftEmail, setDraftEmail] = useState("");
+  const [draftPhone, setDraftPhone] = useState("");
+  const [draftMobile, setDraftMobile] = useState("");
+  const [draftNotes, setDraftNotes] = useState("");
+
+  const [saving, setSaving] = useState(false);
+
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrError, setOcrError] = useState<UiError | null>(null);
+  const [ocrData, setOcrData] = useState<OcrApi | null>(null);
+  const [ocrApplying, setOcrApplying] = useState(false);
+
+  const autoInitRef = useRef(false);
+
+  const { sort, dir } = useMemo(() => {
+    if (sortOpt === "CREATED_ASC") return { sort: "createdAt" as const, dir: "asc" as const };
+    if (sortOpt === "NAME_ASC") return { sort: "name" as const, dir: "asc" as const };
+    if (sortOpt === "NAME_DESC") return { sort: "name" as const, dir: "desc" as const };
+    return { sort: "createdAt" as const, dir: "desc" as const };
+  }, [sortOpt]);
+
+  const isDirtyFilters = useMemo(
+    () => q.trim() !== "" || status !== "ALL" || sortOpt !== "CREATED_DESC",
+    [q, status, sortOpt]
+  );
+
+  const countLabel = useMemo(() => {
+    const n = items.length;
+    return n === 1 ? "1 Lead" : `${n} Leads`;
+  }, [items.length]);
+
+  const selectedCount = useMemo(() => selectedIds.size, [selectedIds]);
+
+  const buildListUrl = useCallback(
+    (cursor?: string | null): string => {
+      const sp = new URLSearchParams();
+      if (q.trim()) sp.set("q", q.trim());
+      sp.set("status", status);
+      sp.set("event", "ACTIVE");
+      sp.set("sort", sort);
+      sp.set("dir", dir);
+      sp.set("take", "50");
+      if (cursor) sp.set("cursor", cursor);
+      return `/api/admin/v1/leads?${sp.toString()}`;
+    },
+    [q, status, sort, dir]
+  );
+
+  const loadActiveEvent = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/v1/events/active", { method: "GET", cache: "no-store" });
+      const json = (await res.json()) as ApiResp<ActiveEventApi>;
+      if (json.ok) setActiveEvent(json.data.item);
+      else setActiveEvent(null);
+    } catch {
+      setActiveEvent(null);
+    }
+  }, []);
+
+  const loadList = useCallback(async () => {
+    setLoadingList(true);
+    setListError(null);
+
+    try {
+      const res = await fetch(buildListUrl(null), { method: "GET", cache: "no-store" });
+      const json = (await res.json()) as ApiResp<LeadsListApi>;
+
+      if (!json || typeof json !== "object") {
+        setItems([]);
+        setNextCursor(null);
+        setListError({ message: "Ungültige Serverantwort." });
+        setLoadingList(false);
+        return;
+      }
+
+      if (!json.ok) {
+        setItems([]);
+        setNextCursor(null);
+        setListError({
+          message: json.error?.message || "Konnte Leads nicht laden.",
+          code: json.error?.code,
+          traceId: json.traceId,
+        });
+        setLoadingList(false);
+        return;
+      }
+
+      const list = Array.isArray(json.data.items) ? json.data.items : [];
+      setItems(list);
+      setNextCursor(json.data.nextCursor ?? null);
+      setLoadingList(false);
+      setSelectedIds(new Set());
+    } catch {
+      setItems([]);
+      setNextCursor(null);
+      setListError({ message: "Konnte Leads nicht laden. Bitte erneut versuchen." });
+      setLoadingList(false);
+    }
+  }, [buildListUrl]);
+
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+
+    try {
+      const res = await fetch(buildListUrl(nextCursor), { method: "GET", cache: "no-store" });
+      const json = (await res.json()) as ApiResp<LeadsListApi>;
+
+      if (json && typeof json === "object" && json.ok) {
+        const more = Array.isArray(json.data.items) ? json.data.items : [];
+        setItems((prev) => [...prev, ...more]);
+        setNextCursor(json.data.nextCursor ?? null);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [nextCursor, loadingMore, buildListUrl]);
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all([loadActiveEvent(), loadList()]);
+  }, [loadActiveEvent, loadList]);
+
+  useEffect(() => {
+    if (autoInitRef.current) return;
+    autoInitRef.current = true;
+    const t = setTimeout(() => void refreshAll(), 0);
+    return () => clearTimeout(t);
+  }, [refreshAll]);
+
+  // Debounced list reload on filters
+  useEffect(() => {
+    const t = setTimeout(() => void loadList(), 220);
+    return () => clearTimeout(t);
+  }, [q, status, sortOpt, loadList]);
+
+  const resetFilters = useCallback(() => {
+    setQ("");
+    setStatus("ALL");
+    setSortOpt("CREATED_DESC");
+  }, []);
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAllOnPage = useCallback(() => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      const allSelected = items.length > 0 && items.every((it) => next.has(it.id));
+      if (allSelected) {
+        for (const it of items) next.delete(it.id);
+      } else {
+        for (const it of items) next.add(it.id);
+      }
+      return next;
+    });
+  }, [items]);
+
+  const openDrawer = useCallback((id: string) => {
+    setSelectedId(id);
+    setDrawerOpen(true);
+  }, []);
+
+  const closeDrawer = useCallback(() => {
+    setDrawerOpen(false);
+    setSelectedId(null);
+    setDetail(null);
+    setDrawerErr(null);
+    setLoadingDetail(false);
+    setSaving(false);
+
+    setOcrData(null);
+    setOcrError(null);
+    setOcrLoading(false);
+    setOcrApplying(false);
+  }, []);
+
+  const loadDetail = useCallback(async (id: string) => {
+    setLoadingDetail(true);
+    setDetail(null);
+    setDrawerErr(null);
+
+    try {
+      const res = await fetch(`/api/admin/v1/leads/${id}`, { method: "GET", cache: "no-store" });
+      const json = (await res.json()) as ApiResp<LeadDetail>;
+
+      if (!json || typeof json !== "object") {
+        setDetail(null);
+        setDrawerErr({ message: "Ungültige Serverantwort." });
+        setLoadingDetail(false);
+        return;
+      }
+
+      if (!json.ok) {
+        setDetail(null);
+        setDrawerErr({
+          message: json.error?.message || "Konnte Lead nicht laden.",
+          code: json.error?.code,
+          traceId: json.traceId,
+        });
+        setLoadingDetail(false);
+        return;
+      }
+
+      const d = json.data;
+      setDetail(d);
+
+      setDraftFirst(d.contact?.firstName ?? "");
+      setDraftLast(d.contact?.lastName ?? "");
+      setDraftCompany(d.contact?.company ?? "");
+      setDraftEmail(d.contact?.email ?? "");
+      setDraftPhone(d.contact?.phoneRaw ?? "");
+      setDraftMobile(d.contact?.mobile ?? "");
+      setDraftNotes(d.adminNotes ?? "");
+
+      setLoadingDetail(false);
+    } catch {
+      setDetail(null);
+      setDrawerErr({ message: "Konnte Lead nicht laden. Bitte erneut versuchen." });
+      setLoadingDetail(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!drawerOpen || !selectedId) return;
+    const t = setTimeout(() => void loadDetail(selectedId), 0);
+    return () => clearTimeout(t);
+  }, [drawerOpen, selectedId, loadDetail]);
+
+  const isDirtyDetail = useMemo(() => {
+    if (!detail) return false;
+    return (
+      (draftFirst ?? "") !== (detail.contact?.firstName ?? "") ||
+      (draftLast ?? "") !== (detail.contact?.lastName ?? "") ||
+      (draftCompany ?? "") !== (detail.contact?.company ?? "") ||
+      (draftEmail ?? "") !== (detail.contact?.email ?? "") ||
+      (draftPhone ?? "") !== (detail.contact?.phoneRaw ?? "") ||
+      (draftMobile ?? "") !== (detail.contact?.mobile ?? "") ||
+      (draftNotes ?? "") !== (detail.adminNotes ?? "")
+    );
+  }, [detail, draftFirst, draftLast, draftCompany, draftEmail, draftPhone, draftMobile, draftNotes]);
+
+  const saveDetail = useCallback(async () => {
+    if (!detail || saving) return;
+    setSaving(true);
+    setDrawerErr(null);
+
+    try {
+      const body: Record<string, unknown> = {
+        firstName: draftFirst,
+        lastName: draftLast,
+        company: draftCompany,
+        email: draftEmail,
+        phone: draftPhone,
+        mobile: draftMobile,
+        notes: draftNotes,
+      };
+
+      const res = await fetch(`/api/admin/v1/leads/${detail.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      const json = (await res.json()) as ApiResp<LeadDetail>;
+      if (!json || typeof json !== "object") {
+        setDrawerErr({ message: "Ungültige Serverantwort." });
+        setSaving(false);
+        return;
+      }
+
+      if (!json.ok) {
+        setDrawerErr({
+          message: json.error?.message || "Konnte Änderungen nicht speichern.",
+          code: json.error?.code,
+          traceId: json.traceId,
+        });
+        setSaving(false);
+        return;
+      }
+
+      setDetail(json.data);
+      setDraftFirst(json.data.contact?.firstName ?? "");
+      setDraftLast(json.data.contact?.lastName ?? "");
+      setDraftCompany(json.data.contact?.company ?? "");
+      setDraftEmail(json.data.contact?.email ?? "");
+      setDraftPhone(json.data.contact?.phoneRaw ?? "");
+      setDraftMobile(json.data.contact?.mobile ?? "");
+      setDraftNotes(json.data.adminNotes ?? "");
+
+      await loadList();
+      setSaving(false);
+    } catch {
+      setDrawerErr({ message: "Konnte Änderungen nicht speichern. Bitte erneut versuchen." });
+      setSaving(false);
+    }
+  }, [detail, saving, draftFirst, draftLast, draftCompany, draftEmail, draftPhone, draftMobile, draftNotes, loadList]);
+
+  const toggleReviewed = useCallback(async () => {
+    if (!detail) return;
+
+    const nextReviewed = detail.reviewStatus !== "REVIEWED";
+
+    try {
+      const res = await fetch(`/api/admin/v1/leads/${detail.id}/review`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reviewed: nextReviewed }),
+      });
+
+      const json = (await res.json()) as ApiResp<{ id: string; reviewed: boolean; reviewedAt: string | null }>;
+      if (!json || typeof json !== "object") return;
+
+      if (!json.ok) {
+        setDrawerErr({
+          message: json.error?.message || "Konnte Status nicht speichern.",
+          code: json.error?.code,
+          traceId: json.traceId,
+        });
+        return;
+      }
+
+      await loadDetail(detail.id);
+      await loadList();
+    } catch {
+      setDrawerErr({ message: "Konnte Status nicht speichern. Bitte erneut versuchen." });
+    }
+  }, [detail, loadDetail, loadList]);
+
+  const pickBusinessCardAttachment = useMemo(() => {
+    if (!detail?.attachments?.length) return null;
+    const list = detail.attachments;
+    const bc = list.find((a) => String(a.type || "").toUpperCase() === "BUSINESS_CARD_IMAGE");
+    if (bc) return bc;
+    const img = list.find((a) => String(a.mimeType || "").toLowerCase().startsWith("image/"));
+    return img ?? list[0] ?? null;
+  }, [detail]);
+
+  const loadOcr = useCallback(async () => {
+    if (!detail || ocrLoading) return;
+    setOcrLoading(true);
+    setOcrError(null);
+    setOcrData(null);
+
+    try {
+      const res = await fetch(`/api/admin/v1/leads/${detail.id}/ocr`, { method: "GET", cache: "no-store" });
+      const json = (await res.json()) as ApiResp<OcrResp>;
+
+      if (!json || typeof json !== "object") {
+        setOcrError({ message: "Ungültige Serverantwort." });
+        setOcrLoading(false);
+        return;
+      }
+
+      if (!json.ok) {
+        setOcrError({
+          message: json.error?.message || "Konnte OCR nicht laden.",
+          code: json.error?.code,
+          traceId: json.traceId,
+        });
+        setOcrLoading(false);
+        return;
+      }
+
+      setOcrData({ ocr: json.data.ocr ?? null, attachment: json.data.attachment ?? null });
+      setOcrLoading(false);
+    } catch {
+      setOcrError({ message: "Konnte OCR nicht laden. Bitte erneut versuchen." });
+      setOcrLoading(false);
+    }
+  }, [detail, ocrLoading]);
+
+  const applyOcr = useCallback(async () => {
+    if (!detail || !ocrData?.ocr?.id || ocrApplying) return;
+    setOcrApplying(true);
+    setOcrError(null);
+
+    try {
+      const res = await fetch(`/api/admin/v1/leads/${detail.id}/ocr/apply`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ocrResultId: ocrData.ocr.id }),
+      });
+
+      const json = (await res.json()) as ApiResp<unknown>;
+      if (!json || typeof json !== "object") {
+        setOcrError({ message: "Ungültige Serverantwort." });
+        setOcrApplying(false);
+        return;
+      }
+
+      if (!json.ok) {
+        setOcrError({
+          message: json.error?.message || "Konnte OCR nicht anwenden.",
+          code: json.error?.code,
+          traceId: json.traceId,
+        });
+        setOcrApplying(false);
+        return;
+      }
+
+      await loadDetail(detail.id);
+      await loadList();
+      setOcrApplying(false);
+    } catch {
+      setOcrError({ message: "Konnte OCR nicht anwenden. Bitte erneut versuchen." });
+      setOcrApplying(false);
+    }
+  }, [detail, ocrData, ocrApplying, loadDetail, loadList]);
+
   return (
-    <div className="rounded-xl border bg-white p-4">
-      <div className="mb-4 h-4 w-40 animate-pulse rounded bg-black/10" />
-      <div className="space-y-3">
-        {Array.from({ length: 8 }).map((_, i) => (
-          <div key={i} className="grid grid-cols-12 gap-3">
-            <div className="col-span-3 h-9 animate-pulse rounded bg-black/10" />
-            <div className="col-span-3 h-9 animate-pulse rounded bg-black/10" />
-            <div className="col-span-4 h-9 animate-pulse rounded bg-black/10" />
-            <div className="col-span-2 h-9 animate-pulse rounded bg-black/10" />
+    <div className="space-y-4">
+      {/* Active Event Card */}
+      <section className="rounded-2xl border border-slate-200 bg-white p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">Aktives Event</div>
+            <div className="mt-1 text-sm text-slate-600">
+              {activeEvent?.name ? (
+                <>
+                  <span className="font-medium text-slate-900">{activeEvent.name}</span>{" "}
+                  <span className="text-slate-500">(Standardfilter)</span>
+                </>
+              ) : (
+                <span className="text-slate-500">Kein aktives Event.</span>
+              )}
+            </div>
           </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
-function EmptyPanel() {
-  return (
-    <div className="rounded-xl border bg-white p-10 text-center">
-      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full border bg-black/5">
-        <span className="text-xl">◎</span>
-      </div>
-      <h2 className="text-lg font-semibold">No leads yet</h2>
-      <p className="mt-2 text-sm text-black/60">
-        Create a form, activate it, and start capturing leads in the app. When the first lead arrives, it will show up
-        here.
-      </p>
-      <div className="mt-5 flex items-center justify-center gap-2">
-        <Link href="/admin/forms" className="rounded-md border px-4 py-2 text-sm font-medium hover:bg-black/5">
-          Create / Manage forms
-        </Link>
-      </div>
-    </div>
-  );
-}
-
-function ErrorPanel(props: { title: string; message: string; traceId?: string | null; onRetry: () => void }) {
-  const { title, message, traceId, onRetry } = props;
-
-  return (
-    <div className="rounded-xl border border-red-200 bg-red-50 p-4">
-      <div className="font-semibold text-red-800">{title}</div>
-      <div className="mt-1 text-sm text-red-800/80">{message}</div>
-
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <button type="button" className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm hover:bg-white/60" onClick={onRetry}>
-          Retry
-        </button>
-
-        {traceId && (
           <div className="flex items-center gap-2">
-            <span className="text-xs text-red-800/70">traceId: {traceId}</span>
-            <button
-              type="button"
-              className="rounded-md border border-red-200 bg-white px-2 py-1 text-xs hover:bg-white/60"
-              onClick={() => void navigator.clipboard.writeText(traceId)}
+            <a
+              href="/admin/events"
+              className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
             >
-              Copy
-            </button>
+              Events öffnen
+            </a>
+            <IconButton title="Aktualisieren" onClick={() => void refreshAll()} />
+          </div>
+        </div>
+
+        <div className="mt-2 text-xs text-slate-500">Hinweis: Wenn kein aktives Event existiert, bleibt die Liste leer (GoLive-safe).</div>
+      </section>
+
+      {/* Toolbar */}
+      <section className="rounded-2xl border border-slate-200 bg-white p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+            <StatusPills value={status} onChange={setStatus} />
+            <Input value={q} onChange={setQ} placeholder="Suche (Name, Firma, E-Mail, Telefon)" />
+            <Select value={sortOpt} onChange={(v) => setSortOpt(v as SortOpt)} ariaLabel="Sortierung">
+              <option value="CREATED_DESC">Neueste zuerst</option>
+              <option value="CREATED_ASC">Älteste zuerst</option>
+              <option value="NAME_ASC">Name A–Z</option>
+              <option value="NAME_DESC">Name Z–A</option>
+            </Select>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="text-sm text-slate-600">{countLabel}</div>
+
+            {selectedCount > 0 ? (
+              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700">
+                {selectedCount} ausgewählt
+              </div>
+            ) : null}
+
+            <Button label="Export" kind="secondary" disabled title="Kommt in Teilprojekt 5.8 (Exports)." />
+
+            {isDirtyFilters ? <Button label="Reset" kind="ghost" onClick={resetFilters} /> : null}
+
+            <IconButton title="Neu laden" onClick={() => void loadList()} />
+          </div>
+        </div>
+      </section>
+
+      {/* List */}
+      <section className="rounded-2xl border border-slate-200 bg-white">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="border-b border-slate-200 bg-white">
+                <th className="w-10 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    aria-label="Alle auswählen"
+                    checked={items.length > 0 && items.every((it) => selectedIds.has(it.id))}
+                    onChange={() => toggleSelectAllOnPage()}
+                  />
+                </th>
+                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Kontakt</th>
+                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">E-Mail / Telefon</th>
+                <th className="hidden px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600 md:table-cell">Event</th>
+                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Status</th>
+                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Erfasst am</th>
+                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Info</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {loadingList ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-6 text-sm text-slate-600">
+                    Lade…
+                  </td>
+                </tr>
+              ) : listError ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-6">
+                    <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                      <div className="text-sm font-medium text-rose-900">Fehler</div>
+                      <div className="mt-1 text-sm text-rose-800">{listError.message}</div>
+                      {listError.traceId ? <div className="mt-2 text-xs text-rose-700">Trace: {listError.traceId}</div> : null}
+                      <div className="mt-3">
+                        <Button label="Erneut versuchen" kind="secondary" onClick={() => void loadList()} />
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              ) : items.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-8 text-sm text-slate-600">
+                    Keine Leads gefunden.
+                  </td>
+                </tr>
+              ) : (
+                items.map((it) => {
+                  const checked = selectedIds.has(it.id);
+
+                  return (
+                    <tr
+                      key={it.id}
+                      className="cursor-pointer border-b border-slate-100 hover:bg-slate-50"
+                      onClick={() => openDrawer(it.id)}
+                    >
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          aria-label="Lead auswählen"
+                          checked={checked}
+                          onChange={() => toggleSelect(it.id)}
+                        />
+                      </td>
+
+                      <td className="px-4 py-3">
+                        <div className="text-sm font-medium text-slate-900">{it.contactName ?? "—"}</div>
+                        <div className="text-xs text-slate-600">{it.company ?? "—"}</div>
+                        {it.sourceDeviceName ? <div className="mt-1 text-[11px] text-slate-500">Quelle: {it.sourceDeviceName}</div> : null}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        <div className="text-sm text-slate-900">{it.email ?? "—"}</div>
+                        <div className="text-xs text-slate-600">{it.phone ?? "—"}</div>
+                      </td>
+
+                      <td className="hidden px-4 py-3 md:table-cell">
+                        <div className="text-sm text-slate-900">{it.event?.name ?? "—"}</div>
+                      </td>
+
+                      <td className="px-4 py-3">
+                        <span
+                          className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(it.reviewStatus)}`}
+                        >
+                          {statusLabel(it.reviewStatus)}
+                        </span>
+                      </td>
+
+                      <td className="px-4 py-3 text-sm text-slate-700">{fmtDateTime(it.createdAt)}</td>
+
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          {it.hasCardAttachment ? (
+                            <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700">
+                              Karte
+                            </span>
+                          ) : null}
+                          {it.hasOcr ? (
+                            <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700">
+                              OCR
+                            </span>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {nextCursor ? (
+          <div className="flex items-center justify-center p-4">
+            <Button
+              label={loadingMore ? "Lade…" : "Mehr laden"}
+              kind="secondary"
+              onClick={() => void loadMore()}
+              disabled={loadingMore}
+            />
+          </div>
+        ) : null}
+      </section>
+
+      {/* Drawer */}
+      <DrawerShell open={drawerOpen} title={detail ? (detail.contact?.name ?? "Lead") : "Lead"} onClose={closeDrawer}>
+        {loadingDetail ? (
+          <div className="text-sm text-slate-600">Lade…</div>
+        ) : drawerErr ? (
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+            <div className="text-sm font-medium text-rose-900">Fehler</div>
+            <div className="mt-1 text-sm text-rose-800">{errMessage(drawerErr)}</div>
+            {errTraceId(drawerErr) ? <div className="mt-2 text-xs text-rose-700">Trace: {errTraceId(drawerErr)}</div> : null}
+            <div className="mt-3">
+              {selectedId ? <Button label="Erneut versuchen" kind="secondary" onClick={() => void loadDetail(selectedId)} /> : null}
+            </div>
+          </div>
+        ) : !detail ? (
+          <div className="text-sm text-slate-600">Kein Lead ausgewählt.</div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs text-slate-500">
+                Lead-ID: <span className="font-mono">{detail.id}</span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  label={detail.reviewStatus === "REVIEWED" ? "Als neu markieren" : "Als bearbeitet markieren"}
+                  kind={detail.reviewStatus === "REVIEWED" ? "secondary" : "primary"}
+                  onClick={() => void toggleReviewed()}
+                />
+                <Button
+                  label={saving ? "Speichere…" : "Speichern"}
+                  kind="secondary"
+                  disabled={!isDirtyDetail || saving}
+                  onClick={() => void saveDetail()}
+                />
+              </div>
+            </div>
+
+            <Card title="Kontakt">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Field label="Vorname" value={draftFirst} onChange={setDraftFirst} placeholder="Vorname" />
+                <Field label="Nachname" value={draftLast} onChange={setDraftLast} placeholder="Nachname" />
+                <div className="sm:col-span-2">
+                  <Field label="Firma" value={draftCompany} onChange={setDraftCompany} placeholder="Firma" />
+                </div>
+                <Field label="E-Mail" value={draftEmail} onChange={setDraftEmail} placeholder="E-Mail" />
+                <Field label="Telefon" value={draftPhone} onChange={setDraftPhone} placeholder="Telefon" />
+                <div className="sm:col-span-2">
+                  <Field label="Mobile" value={draftMobile} onChange={setDraftMobile} placeholder="Mobile" />
+                </div>
+              </div>
+
+              <div className="mt-3 text-xs text-slate-500">
+                Kontakt-Quelle: <span className="font-medium text-slate-700">{detail.contact?.source ?? "—"}</span> · aktualisiert:{" "}
+                <span className="font-medium text-slate-700">{fmtDateTime(detail.contact?.updatedAt ?? null)}</span>
+              </div>
+            </Card>
+
+            <Card title="Notizen">
+              <TextArea
+                label="Interne Notiz"
+                value={draftNotes}
+                onChange={setDraftNotes}
+                placeholder="z.B. Danke, will Offerte; Nachfassen am Dienstag…"
+              />
+              <div className="mt-2 text-xs text-slate-500">
+                Notizen werden MVP-lean in <span className="font-mono">meta.adminNotes</span> gespeichert.
+              </div>
+            </Card>
+
+            <Card title="Quelle / Meta">
+              <div className="space-y-1 text-sm text-slate-700">
+                <div>
+                  <span className="text-slate-500">Event:</span> {detail.event?.name ?? "—"}
+                </div>
+                <div>
+                  <span className="text-slate-500">Formular:</span> {detail.form?.name ?? "—"}
+                </div>
+                <div>
+                  <span className="text-slate-500">Device:</span> {detail.sourceDeviceName ?? "—"}
+                </div>
+                <div>
+                  <span className="text-slate-500">Erfasst:</span> {fmtDateTime(detail.createdAt)}
+                </div>
+                <div>
+                  <span className="text-slate-500">Status:</span>{" "}
+                  <span className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(detail.reviewStatus)}`}>
+                    {statusLabel(detail.reviewStatus)}
+                  </span>
+                </div>
+              </div>
+            </Card>
+
+            <Card title="Anhänge / OCR">
+              {pickBusinessCardAttachment ? (
+                <div className="space-y-3">
+                  <div className="text-sm text-slate-700">
+                    <span className="text-slate-500">Business Card:</span> {pickBusinessCardAttachment.filename}
+                  </div>
+
+                  <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                    {String(pickBusinessCardAttachment.mimeType || "").toLowerCase().startsWith("image/") ? (
+                      <>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          alt="Business Card"
+                          className="h-auto w-full object-contain"
+                          src={`/api/admin/v1/leads/${detail.id}/attachments/${pickBusinessCardAttachment.id}/download?disposition=inline`}
+                        />
+                      </>
+                    ) : (
+                      <div className="p-4 text-sm text-slate-600">Vorschau nicht verfügbar.</div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <a
+                      className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                      href={`/api/admin/v1/leads/${detail.id}/attachments/${pickBusinessCardAttachment.id}/download?disposition=attachment`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Download
+                    </a>
+
+                    <Button label={ocrLoading ? "OCR lade…" : "OCR laden"} kind="secondary" onClick={() => void loadOcr()} disabled={ocrLoading} />
+                    <Button
+                      label={ocrApplying ? "Wende an…" : "OCR anwenden"}
+                      kind="secondary"
+                      onClick={() => void applyOcr()}
+                      disabled={!ocrData?.ocr?.id || ocrApplying}
+                      title={!ocrData?.ocr?.id ? "Zuerst OCR laden." : undefined}
+                    />
+                  </div>
+
+                  {ocrError ? (
+                    <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3">
+                      <div className="text-sm font-medium text-rose-900">OCR Fehler</div>
+                      <div className="mt-1 text-sm text-rose-800">{ocrError.message}</div>
+                      {ocrError.traceId ? <div className="mt-2 text-xs text-rose-700">Trace: {ocrError.traceId}</div> : null}
+                    </div>
+                  ) : null}
+
+                  {ocrData?.ocr ? (
+                    <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                      <div className="text-sm font-medium text-slate-900">OCR Summary</div>
+                      <div className="mt-1 text-sm text-slate-700">
+                        Status: <span className="font-medium">{ocrData.ocr.status}</span> · Engine:{" "}
+                        <span className="font-medium">{ocrData.ocr.engine}</span>
+                        {typeof ocrData.ocr.confidence === "number" ? (
+                          <>
+                            {" "}
+                            · Confidence: <span className="font-medium">{Math.round(ocrData.ocr.confidence * 100)}%</span>
+                          </>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="text-sm text-slate-600">Keine Anhänge vorhanden.</div>
+              )}
+            </Card>
+
+            {drawerErr ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                <div className="text-sm font-medium text-rose-900">Fehler</div>
+                <div className="mt-1 text-sm text-rose-800">{errMessage(drawerErr)}</div>
+                {errTraceId(drawerErr) ? <div className="mt-2 text-xs text-rose-700">Trace: {errTraceId(drawerErr)}</div> : null}
+              </div>
+            ) : null}
           </div>
         )}
-      </div>
+      </DrawerShell>
     </div>
   );
 }
