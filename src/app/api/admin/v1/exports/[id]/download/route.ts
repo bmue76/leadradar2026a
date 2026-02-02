@@ -1,48 +1,61 @@
-import { jsonError, getTraceId } from "@/lib/api";
+import type { Prisma } from "@prisma/client";
+
+import { jsonError } from "@/lib/api";
 import { isHttpError } from "@/lib/http";
-import { prisma } from "@/lib/prisma";
 import { requireAdminAuth } from "@/lib/auth";
-import { getAbsolutePath, fileExists, streamFileWeb, statFile } from "@/lib/storage";
+
+import { getExportJobById } from "../../_repo";
+import { existsExportFile, readExportFile } from "../../_storage";
 
 export const runtime = "nodejs";
 
-export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const traceId = getTraceId(req);
+function safeFileName(name: string): string {
+  const cleaned = name.replace(/[^\w.\-() ]+/g, "_");
+  return cleaned.length ? cleaned : "export.csv";
+}
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function getFileNameFromParams(params: Prisma.JsonValue | null): string | undefined {
+  if (!isRecord(params)) return undefined;
+  const v = params.fileName;
+  return typeof v === "string" ? v : undefined;
+}
+
+export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const { tenantId } = await requireAdminAuth(req);
+    const auth = await requireAdminAuth(req);
+    const tenantId = auth.tenantId;
+
     const { id } = await ctx.params;
 
-    const job = await prisma.exportJob.findFirst({
-      where: { id, tenantId },
-      select: {
-        id: true,
-        status: true,
-        resultStorageKey: true,
-        type: true,
-      },
-    });
+    const job = await getExportJobById(tenantId, id);
+    if (!job) return jsonError(req, 404, "NOT_FOUND", "Export not found.");
 
-    if (!job) return jsonError(req, 404, "NOT_FOUND", "Not found.");
-    if (job.status !== "DONE") return jsonError(req, 409, "NOT_READY", "Export is not ready yet.");
-    if (!job.resultStorageKey) return jsonError(req, 409, "NOT_READY", "Export is not ready yet.");
+    if (job.status !== "DONE") {
+      return jsonError(req, 409, "NOT_READY", "Export ist noch nicht fertig.");
+    }
 
-    const abs = getAbsolutePath({ rootDirName: ".tmp_exports", relativeKey: job.resultStorageKey });
-    const exists = await fileExists(abs);
-    if (!exists) return jsonError(req, 404, "NO_FILE", "Export file not found.");
+    if (!job.resultStorageKey) return jsonError(req, 404, "NO_FILE", "Keine Export-Datei gefunden.");
 
-    const st = await statFile(abs);
-    const stream = streamFileWeb(abs);
+    const ok = await existsExportFile(job.resultStorageKey);
+    if (!ok) return jsonError(req, 404, "NO_FILE", "Keine Export-Datei gefunden.");
 
-    const filename = `leadradar-export-${job.id}.csv`;
+    const buf = await readExportFile(job.resultStorageKey);
 
-    return new Response(stream, {
+    // TS-safe BodyInit: return as string (CSV is UTF-8)
+    const body = buf.toString("utf8");
+
+    const fileName = safeFileName(getFileNameFromParams(job.params ?? null) ?? "export.csv");
+
+    return new Response(body, {
       status: 200,
       headers: {
         "content-type": "text/csv; charset=utf-8",
-        "content-disposition": `attachment; filename="${filename}"`,
-        "content-length": String(st.sizeBytes),
-        "x-trace-id": traceId,
+        "content-disposition": `attachment; filename="${fileName}"`,
+        "cache-control": "no-store",
       },
     });
   } catch (e) {

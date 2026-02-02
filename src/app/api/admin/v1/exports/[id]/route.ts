@@ -1,34 +1,34 @@
-import { jsonOk, jsonError } from "@/lib/api";
+import { jsonError, jsonOk } from "@/lib/api";
 import { isHttpError } from "@/lib/http";
-import { prisma } from "@/lib/prisma";
 import { requireAdminAuth } from "@/lib/auth";
+
+import { getExportJobById } from "../_repo";
 
 export const runtime = "nodejs";
 
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const { tenantId } = await requireAdminAuth(req);
+    const auth = await requireAdminAuth(req);
+    const tenantId = auth.tenantId;
+
     const { id } = await ctx.params;
 
-    const job = await prisma.exportJob.findFirst({
-      where: { id, tenantId },
-      select: {
-        id: true,
-        tenantId: true,
-        type: true,
-        status: true,
-        params: true,
-        resultStorageKey: true,
-        queuedAt: true,
-        startedAt: true,
-        finishedAt: true,
-        updatedAt: true,
+    const job = await getExportJobById(tenantId, id);
+    if (!job) return jsonError(req, 404, "NOT_FOUND", "Export not found.");
+
+    return jsonOk(req, {
+      job: {
+        id: job.id,
+        status: job.status,
+        type: job.type,
+        params: job.params ?? {},
+        resultStorageKey: job.resultStorageKey,
+        queuedAt: job.queuedAt ? job.queuedAt.toISOString() : null,
+        startedAt: job.startedAt ? job.startedAt.toISOString() : null,
+        finishedAt: job.finishedAt ? job.finishedAt.toISOString() : null,
+        updatedAt: job.updatedAt.toISOString(),
       },
     });
-
-    if (!job) return jsonError(req, 404, "NOT_FOUND", "Not found.");
-
-    return jsonOk(req, { job });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     return jsonError(req, 500, "INTERNAL", "Unexpected error.");
