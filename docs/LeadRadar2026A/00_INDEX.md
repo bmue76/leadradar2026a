@@ -33,3 +33,6 @@ Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
 
 - **Teilprojekt 5.8** — Betrieb: Exports (CSV) Admin UI + Export Jobs (Liste/Status) + Filter (Active Event)  
   → `docs/teilprojekt-5.8-betrieb-exports-csv-ui-jobs.md`
+
+- **Teilprojekt 5.9** — Betrieb: Integration-Polish (Leads → Exports Prefill) + Busy/State Cleanup (ONLINE-only)  
+  → `docs/teilprojekt-5.9-betrieb-integration-polish-leads-to-exports.md`
