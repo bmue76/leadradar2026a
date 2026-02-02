@@ -2,7 +2,10 @@
 
 Datum: 2026-02-01  
 Status: DONE ✅  
-Git: b38e3a9 — feat(tp5.6): events ui + activate/archive guardrails + active overview counts
+Commits:
+- 0d40fe9 — fix(tp5.6): align events layout with /admin wrapper
+- b38e3a9 — feat(tp5.6): events ui + activate/archive guardrails + active overview counts
+- c8a5ad6 — docs: update tp5.5 billing doc + tp5.6 schlussrapport
 
 ## Ziel
 
@@ -15,13 +18,22 @@ Betrieb → Events GoLive-ready umsetzen, sodass Option 2 operativ verständlich
   - ACTIVE Formulare, die dem aktiven Event zugewiesen sind (Form.status=ACTIVE && Form.assignedEventId=activeEvent.id)
   - Geräte, die ans aktive Event gebunden sind (Device.activeEventId=activeEvent.id)
 - Quick Links/CTAs zu /admin/forms und /admin/devices
+- Layout/Spacing exakt konsistent mit Referenzseite /admin (Wrapper/Typo/States)
 
 ## Umsetzung (Highlights)
+
+### UI Layout Fix (wie /admin)
+- `page.tsx` im exakten /admin-Muster:
+  - Wrapper: `mx-auto w-full max-w-5xl px-6 py-6` (kein `p-6`)
+  - Header im Server-Page (H1 + Hint), Client nur Content
+  - Suspense + LoadingCard Pattern wie Standard
+- ScreenClient ohne Outer-Padding, Content startet mit Card(s)
+- Cards/Divider/Inputs auf Admin-Designleitplanken ausgerichtet
 
 ### API (Admin)
 - **GET /api/admin/v1/events**
   - Filter: q, status (ALL|DRAFT|ACTIVE|ARCHIVED), sort (updatedAt|startsAt|name), dir (asc|desc)
-  - Tenant-scoped, leak-safe über Admin Auth
+  - Tenant-scoped, leak-safe (Admin Auth)
 - **POST /api/admin/v1/events**
   - Create DRAFT Event (startsAt/endsAt/location optional)
 - **PATCH /api/admin/v1/events/:id**
@@ -33,46 +45,47 @@ Betrieb → Events GoLive-ready umsetzen, sodass Option 2 operativ verständlich
 - **POST /api/admin/v1/events/:id/archive**
   - status → ARCHIVED; wenn ACTIVE → danach kein aktives Event
 - **GET /api/admin/v1/events/active/overview**
-  - activeEvent oder null + counts + actions
+  - activeEvent oder null + counts + actions (Quick Links)
 
-### UI (Admin) — /admin/events
-- Apple-clean Screen mit:
-  - Header + Hint: „Ein Event kann aktiv sein. Die App arbeitet immer mit dem aktiven Event.“
-  - Top Card „Aktives Event“:
-    - Name + Zeitraum/Ort (optional)
-    - KPIs: „Formulare zugewiesen“, „Geräte verbunden“
-    - CTAs zu /admin/forms & /admin/devices
-    - Ruhiger Empty State wenn kein aktives Event
-  - Toolbar: Status Pills, Suche (debounced), Sort, Refresh, Reset
-  - Finder-like Liste mit Hover-Actions (Aktivieren / Archivieren / Bearbeiten)
-  - Drawer (rechts) für Create/Edit inkl. Confirm-Dialogen für Aktivieren/Archivieren
+### UI (Admin) — /admin/events (Apple-clean)
+- Top Card „Aktives Event“:
+  - Name + Zeitraum/Ort (optional)
+  - KPIs: „Formulare zugewiesen“, „Geräte verbunden“
+  - CTAs zu /admin/forms & /admin/devices
+  - Ruhiger Empty State wenn kein aktives Event
+- Toolbar (in Card): Status Pills, Suche (debounced), Sort, Refresh, Reset, CTA „Neues Event“
+- Finder-like Liste mit Hover-Actions (Aktivieren / Archivieren / Bearbeiten)
+- Drawer (rechts) für Create/Edit inkl. Confirm-Dialogen
 
 ## Dateien / Änderungen
 
-Neu/angepasst (TP 5.6):
-- src/app/api/admin/v1/events/_repo.ts
-- src/app/api/admin/v1/events/route.ts
-- src/app/api/admin/v1/events/[id]/route.ts
-- src/app/api/admin/v1/events/[id]/activate/route.ts
-- src/app/api/admin/v1/events/[id]/archive/route.ts
-- src/app/api/admin/v1/events/active/overview/route.ts
-- src/app/(admin)/admin/events/page.tsx
-- src/app/(admin)/admin/events/EventsScreenClient.tsx
-- docs/teilprojekt-5.6-betrieb-events-ui-active-overview.md
-- docs/LeadRadar2026A/00_INDEX.md
+API:
+- `src/app/api/admin/v1/events/_repo.ts`
+- `src/app/api/admin/v1/events/route.ts`
+- `src/app/api/admin/v1/events/[id]/route.ts`
+- `src/app/api/admin/v1/events/[id]/activate/route.ts`
+- `src/app/api/admin/v1/events/[id]/archive/route.ts`
+- `src/app/api/admin/v1/events/active/overview/route.ts`
 
-Hinweis:
-- SidebarNav hatte „Betrieb → Events“ bereits korrekt enthalten → keine Änderung nötig.
+UI:
+- `src/app/(admin)/admin/events/page.tsx`
+- `src/app/(admin)/admin/events/ScreenClient.tsx`
+- (cleanup) `src/app/(admin)/admin/events/EventsScreenClient.tsx` (entfernt)
+
+Docs:
+- `docs/teilprojekt-5.6-betrieb-events-ui-active-overview.md`
+- `docs/LeadRadar2026A/00_INDEX.md`
+- `docs/teilprojekt-5.5-billing-stripe-packages-credits.md` (aktualisiert, TP 5.5)
 
 ## Akzeptanzkriterien — Check ✅
-
-- [x] /admin/events lädt Liste (ruhig, Apple-clean)
+- [x] /admin/events Layout identisch zu /admin (Wrapper + Header server-side)
+- [x] Liste lädt ruhig, Apple-clean (keine doppelten Outer-Paddings)
 - [x] Neues Event erstellen → erscheint in Liste (DRAFT)
 - [x] Aktiv setzen → macht Event zum einzigen ACTIVE Event (Guardrail via Transaction)
 - [x] Active Card zeigt aktives Event + Bind Counts + CTAs
 - [x] /admin/forms → ACTIVE + assignedEventId setzen → assignedActiveForms steigt
-- [x] /admin/devices → activeEventId setzen → boundDevices steigt
-- [x] Archivieren → Active Card zeigt „Kein aktives Event“
+- [x] /admin/devices → device.activeEventId setzen → boundDevices steigt
+- [x] Event archivieren → Active Card zeigt „Kein aktives Event“
 - [x] Tenant-scope leak-safe: falscher Tenant/ID → 404 NOT_FOUND
 - [x] API Standards: jsonOk/jsonError + traceId + x-trace-id
 - [x] Validation: Zod + validateBody/validateQuery
@@ -132,17 +145,7 @@ Neues Event erstellen → erscheint in Liste
 Event archivieren → Active Card zeigt „Kein aktives Event“
 
 Offene Punkte / Risiken
-P0
-
-Repo ist aktuell nicht clean: docs/teilprojekt-5.5-billing-stripe-packages-credits.md ist modified (nicht Teil von TP 5.6). Vor GoLive/Release bitte bereinigen oder separat committen.
-
-P1
-
-Device-Count nutzt Delegate-Fallback (mobileDevice/device) — funktioniert robust, kann später mit exaktem Prisma-Modelnamen 100% typisiert werden.
+P1: Device-Count im Overview nutzt Delegate-Fallback (mobileDevice/device) — robust fürs Build, kann später auf exakten Prisma-Modelnamen hart typisiert werden (reines Refactor).
 
 Next Step
-Working Tree bereinigen: TP 5.5-Doku entweder revert oder als eigener docs-Commit abschliessen.
-
-Optional: Device-Modelnamen im Prisma fix identifizieren und den Fallback im Events Overview auf den korrekten Delegate „hart“ typisieren.
-
-Danach weiter mit nächstem Teilprojekt gemäss Roadmap (z. B. Betrieb → Events-Details/Readiness-Verknüpfung auf Admin Home, falls gewünscht).
+Nächstes Teilprojekt gemäss Roadmap weiter ausrollen (GoLive-Fokus). Optional: Delegate im Overview 100% typisieren und Events-Endpoints in docs/LeadRadar2026A/03_API.md aufnehmen.
