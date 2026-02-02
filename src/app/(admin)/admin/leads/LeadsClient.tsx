@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 type ApiOk<T> = { ok: true; data: T; traceId: string };
 type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
@@ -354,6 +355,8 @@ function StatusPills({
 }
 
 export default function LeadsClient() {
+  const router = useRouter();
+
   const [activeEvent, setActiveEvent] = useState<ActiveEventApi["item"]>(null);
 
   const [q, setQ] = useState("");
@@ -390,6 +393,8 @@ export default function LeadsClient() {
   const [ocrError, setOcrError] = useState<UiError | null>(null);
   const [ocrData, setOcrData] = useState<OcrApi | null>(null);
   const [ocrApplying, setOcrApplying] = useState(false);
+
+  const [exportNavBusy, setExportNavBusy] = useState(false);
 
   const autoInitRef = useRef(false);
 
@@ -521,6 +526,24 @@ export default function LeadsClient() {
     setStatus("ALL");
     setSortOpt("CREATED_DESC");
   }, []);
+
+  const goToExportsPrefilled = useCallback(() => {
+    if (exportNavBusy) return;
+
+    setExportNavBusy(true);
+
+    const sp = new URLSearchParams();
+    sp.set("scope", "ACTIVE_EVENT");
+    sp.set("leadStatus", status);
+
+    const qq = q.trim();
+    if (qq) sp.set("q", qq);
+
+    router.push(`/admin/exports?${sp.toString()}`);
+
+    // Safety: in case navigation is blocked/slow, release after a short grace window.
+    window.setTimeout(() => setExportNavBusy(false), 1200);
+  }, [exportNavBusy, router, status, q]);
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -826,7 +849,9 @@ export default function LeadsClient() {
           </div>
         </div>
 
-        <div className="mt-2 text-xs text-slate-500">Hinweis: Wenn kein aktives Event existiert, bleibt die Liste leer (GoLive-safe).</div>
+        <div className="mt-2 text-xs text-slate-500">
+          Hinweis: Wenn kein aktives Event existiert, bleibt die Liste leer (GoLive-safe).
+        </div>
       </section>
 
       {/* Toolbar */}
@@ -843,7 +868,7 @@ export default function LeadsClient() {
             </Select>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3">
             <div className="text-sm text-slate-600">{countLabel}</div>
 
             {selectedCount > 0 ? (
@@ -852,7 +877,16 @@ export default function LeadsClient() {
               </div>
             ) : null}
 
-            <Button label="Export" kind="secondary" disabled title="Kommt in Teilprojekt 5.8 (Exports)." />
+            <div className="flex flex-col items-end gap-1">
+              <Button
+                label={exportNavBusy ? "Exportiere…" : "Exportieren"}
+                kind="secondary"
+                onClick={goToExportsPrefilled}
+                disabled={exportNavBusy}
+                title="Exportiert aktuell gefilterte Leads."
+              />
+              <div className="text-[11px] text-slate-500">Exportiert aktuell gefilterte Leads</div>
+            </div>
 
             {isDirtyFilters ? <Button label="Reset" kind="ghost" onClick={resetFilters} /> : null}
 
@@ -876,8 +910,12 @@ export default function LeadsClient() {
                   />
                 </th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Kontakt</th>
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">E-Mail / Telefon</th>
-                <th className="hidden px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600 md:table-cell">Event</th>
+                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                  E-Mail / Telefon
+                </th>
+                <th className="hidden px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600 md:table-cell">
+                  Event
+                </th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Status</th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Erfasst am</th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Info</th>
@@ -897,7 +935,9 @@ export default function LeadsClient() {
                     <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
                       <div className="text-sm font-medium text-rose-900">Fehler</div>
                       <div className="mt-1 text-sm text-rose-800">{listError.message}</div>
-                      {listError.traceId ? <div className="mt-2 text-xs text-rose-700">Trace: {listError.traceId}</div> : null}
+                      {listError.traceId ? (
+                        <div className="mt-2 text-xs text-rose-700">Trace: {listError.traceId}</div>
+                      ) : null}
                       <div className="mt-3">
                         <Button label="Erneut versuchen" kind="secondary" onClick={() => void loadList()} />
                       </div>
@@ -932,7 +972,9 @@ export default function LeadsClient() {
                       <td className="px-4 py-3">
                         <div className="text-sm font-medium text-slate-900">{it.contactName ?? "—"}</div>
                         <div className="text-xs text-slate-600">{it.company ?? "—"}</div>
-                        {it.sourceDeviceName ? <div className="mt-1 text-[11px] text-slate-500">Quelle: {it.sourceDeviceName}</div> : null}
+                        {it.sourceDeviceName ? (
+                          <div className="mt-1 text-[11px] text-slate-500">Quelle: {it.sourceDeviceName}</div>
+                        ) : null}
                       </td>
 
                       <td className="px-4 py-3">
@@ -978,12 +1020,7 @@ export default function LeadsClient() {
 
         {nextCursor ? (
           <div className="flex items-center justify-center p-4">
-            <Button
-              label={loadingMore ? "Lade…" : "Mehr laden"}
-              kind="secondary"
-              onClick={() => void loadMore()}
-              disabled={loadingMore}
-            />
+            <Button label={loadingMore ? "Lade…" : "Mehr laden"} kind="secondary" onClick={() => void loadMore()} disabled={loadingMore} />
           </div>
         ) : null}
       </section>

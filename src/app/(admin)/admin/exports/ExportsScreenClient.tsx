@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 
 type ExportStatus = "QUEUED" | "RUNNING" | "DONE" | "FAILED";
 type ExportScope = "ACTIVE_EVENT" | "ALL";
@@ -36,6 +37,8 @@ type Props = {
   initialDefaults: { scope: ExportScope; leadStatus: LeadStatusFilter; q: string };
   eventsLinkHref: string;
 };
+
+type Toast = { kind: "success" | "error"; message: string } | null;
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<ApiResp<T>> {
   const res = await fetch(url, init);
@@ -86,18 +89,34 @@ function buttonClass(kind: "primary" | "secondary" | "ghost", disabled?: boolean
     "inline-flex items-center justify-center rounded-md px-3 py-2 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-neutral-300";
   const dis = disabled ? "opacity-50 pointer-events-none" : "";
   if (kind === "primary") return `${base} ${dis} bg-neutral-900 text-white hover:bg-neutral-800`;
-  if (kind === "secondary") return `${base} ${dis} bg-white text-neutral-900 ring-1 ring-inset ring-neutral-300 hover:bg-neutral-50`;
+  if (kind === "secondary")
+    return `${base} ${dis} bg-white text-neutral-900 ring-1 ring-inset ring-neutral-300 hover:bg-neutral-50`;
   return `${base} ${dis} bg-transparent text-neutral-800 hover:bg-neutral-100`;
 }
 
+function parseScope(v: string | null | undefined): ExportScope | null {
+  if (v === "ALL" || v === "ACTIVE_EVENT") return v;
+  return null;
+}
+function parseLeadStatus(v: string | null | undefined): LeadStatusFilter | null {
+  if (v === "ALL" || v === "NEW" || v === "REVIEWED") return v;
+  return null;
+}
+
 export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }: Props) {
+  const sp = useSearchParams();
+
   const [scope, setScope] = useState<ExportScope>(initialDefaults.scope);
   const [leadStatus, setLeadStatus] = useState<LeadStatusFilter>(initialDefaults.leadStatus);
   const [q, setQ] = useState<string>(initialDefaults.q);
 
   const [items, setItems] = useState<ExportListItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
   const [creating, setCreating] = useState<boolean>(false);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
+  const [toast, setToast] = useState<Toast>(null);
 
   const [error, setError] = useState<{ message: string; traceId?: string } | null>(null);
   const [createError, setCreateError] = useState<{ message: string; traceId?: string; code?: string } | null>(null);
@@ -105,24 +124,77 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const pollRef = useRef<number | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+  const didInitPrefillRef = useRef(false);
+  const defaultsRef = useRef<{ scope: ExportScope; leadStatus: LeadStatusFilter; q: string }>(initialDefaults);
 
   const hasRunning = useMemo(() => items.some((i) => i.status === "RUNNING" || i.status === "QUEUED"), [items]);
 
-  const load = useCallback(async () => {
-    setError(null);
-    const data = await fetchJson<ListResp>("/api/admin/v1/exports?take=20");
-    if (!data.ok) {
-      setError({ message: data.error.message, traceId: data.traceId });
-      return;
-    }
-    setItems(data.data.items);
+  const isDirty = useMemo(() => {
+    const d = defaultsRef.current;
+    return scope !== d.scope || leadStatus !== d.leadStatus || q !== d.q;
+  }, [scope, leadStatus, q]);
+
+  const showToast = useCallback((t: Toast) => {
+    setToast(t);
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 2600);
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    };
+  }, []);
+
+  // Prefill query params (first load only)
+  useEffect(() => {
+    if (didInitPrefillRef.current) return;
+    didInitPrefillRef.current = true;
+
+    const qsScope = parseScope(sp.get("scope"));
+    const qsLead = parseLeadStatus(sp.get("leadStatus"));
+    const qsQ = sp.get("q");
+
+    const nextDefaults = {
+      scope: qsScope ?? initialDefaults.scope,
+      leadStatus: qsLead ?? initialDefaults.leadStatus,
+      q: typeof qsQ === "string" ? qsQ : initialDefaults.q,
+    };
+
+    defaultsRef.current = nextDefaults;
+
+    setScope(nextDefaults.scope);
+    setLeadStatus(nextDefaults.leadStatus);
+    setQ(nextDefaults.q);
+  }, [sp, initialDefaults]);
+
+  const load = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      const silent = Boolean(opts?.silent);
+
+      if (!silent) setRefreshing(true);
+      setError(null);
+
+      const data = await fetchJson<ListResp>("/api/admin/v1/exports?take=20");
+      if (!data.ok) {
+        setError({ message: data.error.message, traceId: data.traceId });
+        if (!silent) setRefreshing(false);
+        return;
+      }
+
+      setItems(data.data.items);
+      if (!silent) setRefreshing(false);
+    },
+    []
+  );
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       setLoading(true);
-      await load();
+      await load({ silent: true });
       if (mounted) setLoading(false);
     })();
     return () => {
@@ -138,7 +210,7 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
     if (!hasRunning) return;
 
     pollRef.current = window.setInterval(() => {
-      load().catch(() => {});
+      load({ silent: true }).catch(() => {});
     }, 2500);
 
     return () => {
@@ -147,9 +219,19 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
     };
   }, [hasRunning, load]);
 
+  const onReset = useCallback(() => {
+    const d = defaultsRef.current;
+    setScope(d.scope);
+    setLeadStatus(d.leadStatus);
+    setQ(d.q);
+  }, []);
+
   const onCreate = useCallback(async () => {
+    if (creating) return;
+
     setCreateError(null);
     setCreating(true);
+
     try {
       const payload: { scope: ExportScope; leadStatus: LeadStatusFilter; format: "CSV"; q?: string } = {
         scope,
@@ -167,14 +249,16 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
 
       if (!resp.ok) {
         setCreateError({ message: resp.error.message, traceId: resp.traceId, code: resp.error.code });
+        showToast({ kind: "error", message: "Export fehlgeschlagen." });
         return;
       }
 
-      await load();
+      showToast({ kind: "success", message: "Export erstellt." });
+      await load({ silent: true });
     } finally {
       setCreating(false);
     }
-  }, [scope, leadStatus, q, load]);
+  }, [creating, scope, leadStatus, q, load, showToast]);
 
   const onRetry = useCallback(async () => {
     await onCreate();
@@ -188,8 +272,32 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
     }
   }, []);
 
+  const onDownload = useCallback((it: ExportListItem) => {
+    if (it.status !== "DONE" || !it.fileUrl) return;
+
+    setDownloadingId(it.id);
+    try {
+      window.open(it.fileUrl, "_blank", "noreferrer");
+    } catch {
+      // ignore
+    }
+    window.setTimeout(() => setDownloadingId(null), 650);
+  }, []);
+
   return (
-    <div className="space-y-6">
+    <div className="relative space-y-6">
+      {toast ? (
+        <div className="fixed bottom-4 right-4 z-50">
+          <div
+            className={`rounded-xl border bg-white px-4 py-3 text-sm shadow-lg ${
+              toast.kind === "success" ? "border-emerald-200" : "border-rose-200"
+            }`}
+          >
+            <div className={toast.kind === "success" ? "text-emerald-800" : "text-rose-800"}>{toast.message}</div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="rounded-xl border border-neutral-200 bg-white p-4">
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -198,9 +306,22 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
               Standard: <span className="font-medium">Aktives Event</span>. Optional: Nur neue / Nur bearbeitet / Suche.
             </div>
           </div>
-          <button className={buttonClass("secondary", loading)} onClick={() => load()} type="button">
-            Refresh
-          </button>
+
+          <div className="flex items-center gap-2">
+            {isDirty ? (
+              <button className={buttonClass("ghost", creating || loading || refreshing)} onClick={onReset} type="button">
+                Reset
+              </button>
+            ) : null}
+            <button
+              className={buttonClass("secondary", loading || refreshing)}
+              onClick={() => load()}
+              type="button"
+              title="Liste aktualisieren"
+            >
+              {refreshing ? "Refresh…" : "Refresh"}
+            </button>
+          </div>
         </div>
 
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -210,6 +331,7 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
               className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-300"
               value={scope}
               onChange={(e) => setScope(e.target.value as ExportScope)}
+              disabled={creating}
             >
               <option value="ACTIVE_EVENT">Aktives Event</option>
               <option value="ALL">Alle (tenant)</option>
@@ -222,6 +344,7 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
               className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-300"
               value={leadStatus}
               onChange={(e) => setLeadStatus(e.target.value as LeadStatusFilter)}
+              disabled={creating}
             >
               <option value="ALL">Alle</option>
               <option value="NEW">Nur neue</option>
@@ -236,6 +359,7 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder='z. B. "Müller" oder "Zürich"'
+              disabled={creating}
             />
           </label>
         </div>
@@ -267,8 +391,16 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
           <div className="text-xs text-neutral-500">
             CSV ist Excel-kompatibel (UTF-8). Dynamische Felder werden als <span className="font-mono">field_*</span> exportiert.
           </div>
-          <button className={buttonClass("primary", creating)} onClick={onCreate} type="button">
-            {creating ? "Exportiere…" : "CSV exportieren"}
+
+          <button className={buttonClass("primary", creating)} onClick={onCreate} type="button" aria-busy={creating}>
+            {creating ? (
+              <>
+                <span className="mr-2 inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                Exportiere…
+              </>
+            ) : (
+              "CSV exportieren"
+            )}
           </button>
         </div>
       </div>
@@ -318,6 +450,9 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
               <tbody>
                 {items.map((it) => {
                   const expanded = expandedId === it.id;
+                  const canDownload = it.status === "DONE" && Boolean(it.fileUrl);
+                  const downloading = downloadingId === it.id;
+
                   return (
                     <React.Fragment key={it.id}>
                       <tr className="hover:bg-neutral-50">
@@ -337,19 +472,27 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
                         </td>
                         <td className="border-b border-neutral-100 px-4 py-3 text-sm text-neutral-700">
                           <div className="flex flex-wrap items-center gap-2">
-                            {it.status === "DONE" && it.fileUrl ? (
-                              <a className={buttonClass("secondary")} href={it.fileUrl}>
-                                Download
-                              </a>
-                            ) : null}
+                            <button
+                              className={buttonClass("secondary", !canDownload || downloading)}
+                              type="button"
+                              onClick={() => onDownload(it)}
+                              disabled={!canDownload || downloading}
+                              title={!canDownload ? "Download ist erst bei DONE verfügbar." : "CSV herunterladen"}
+                            >
+                              {downloading ? "Download…" : "Download"}
+                            </button>
 
                             {it.status === "FAILED" ? (
-                              <button className={buttonClass("secondary")} type="button" onClick={onRetry}>
+                              <button className={buttonClass("secondary", creating)} type="button" onClick={onRetry} disabled={creating}>
                                 Retry
                               </button>
                             ) : null}
 
-                            <button className={buttonClass("ghost")} type="button" onClick={() => setExpandedId(expanded ? null : it.id)}>
+                            <button
+                              className={buttonClass("ghost")}
+                              type="button"
+                              onClick={() => setExpandedId(expanded ? null : it.id)}
+                            >
                               Details
                             </button>
                           </div>
