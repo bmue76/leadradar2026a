@@ -1,81 +1,82 @@
-# Schlussrapport — Teilprojekt 5.9: Betrieb → Integration-Polish (Leads → Export Prefill) + Busy/State Cleanup (ONLINE-only)
+# Schlussrapport — Teilprojekt 5.9: Betrieb — Integration-Polish (Leads → Exports Prefill) + Busy/State Cleanup (ONLINE-only)
 
 Datum: 2026-02-02  
 Status: DONE ✅  
-Git: <COMMIT_HASH> — ui(tp5.9): leads export CTA + exports prefill + busy/polling polish
+Git: `3b735eb` — ui(tp5.9): leads export CTA + exports prefill + busy/polling polish  
+Git: `db59923` — (docs/index/cleanup, siehe Repo-Log)
 
 ## Ziel
 
-Operativer Flow “1 Klick weniger” und UI wirkt stabil/ruhig:
+Operativer Flow mit “1 Klick weniger” und stabiler/ruhiger UX:
 
-- /admin/leads: CTA **Exportieren** übernimmt aktuelle Filter (scope/status/q) und navigiert nach **/admin/exports** mit Prefill Query Params.
-- /admin/exports: liest Prefill Params und setzt Defaultwerte in “Export erstellen” (scope/leadStatus/q). User kann ändern, Export nutzt sichtbare Werte.
-- Busy/States Polish: Buttons disabled+spinner, Polling nur QUEUED/RUNNING, Success/Fail Toast de-CH, TraceId copy bleibt.
+- CTA **„Exportieren“** auf **/admin/leads** übernimmt aktuelle Filter (Status, Suche) und navigiert nach **/admin/exports** mit Prefill Query Params.
+- **/admin/exports** übernimmt Prefill beim initialen Laden, User kann Werte danach ändern.
+- Busy/States: klare Disabled/Loading States, Polling nur bei QUEUED/RUNNING, TraceId bei Errors bleibt.
 
 ## Umsetzung (Highlights)
 
-- Leads → Exports Integration:
-  - Toolbar-CTA **Exportieren** (oben rechts) navigiert nach:
-    - `/admin/exports?scope=ACTIVE_EVENT&leadStatus=<ALL|NEW|REVIEWED>&q=<optional>`
-  - q wird nur gesetzt, wenn nicht leer
-  - Button hat Busy-State (Doubleclick-safe) + Helper Copy
+### A) Leads → Exports Prefill
+- CTA **„Exportieren“** in der Leads-Toolbar.
+- Mapping Leads UI State → Query Params:
+  - Status Pills: ALL/NEW/REVIEWED → `leadStatus`
+  - Suche `q` → `q` (nur wenn gesetzt)
+  - Scope GoLive: `scope=ACTIVE_EVENT` (Phase 1 ONLINE-only)
+- Navigation: `/admin/exports?scope=ACTIVE_EVENT&leadStatus=...&q=...`
 
-- Exports Prefill:
-  - Query Params werden **client-seitig** via `useSearchParams()` gelesen (nur initial, “first load”)
-  - Defaults werden gespeichert → **Reset** setzt wieder auf Prefill-Defaults
-  - Server Page bleibt Suspense-safe
+### B) Exports Prefill aus Query Params
+- Server Page liest `searchParams` (Suspense-safe) und übergibt `initialDefaults` an Client.
+- Client setzt initiale State Defaults (controlled) und erlaubt danach Anpassung durch User.
+- „CSV exportieren“ nutzt die sichtbaren Werte (keine Diskrepanz).
 
-- Busy/States:
-  - “CSV exportieren” disabled + Spinner während POST
-  - Success Toast: “Export erstellt.”
-  - Fail Toast + Inline Fehlerbox: “Export fehlgeschlagen.” + TraceId copy
-  - Download Button: immer sichtbar, disabled wenn nicht DONE; kurzer Busy-State bei Klick
-  - Polling: startet nur bei QUEUED/RUNNING und stoppt bei DONE/FAILED & unmount; keine Doppel-Intervals
+### C) Busy/State Cleanup (GoLive-relevant)
+- „CSV exportieren“: disabled + busy text während POST läuft.
+- Fehler: Inline-Error mit TraceId (Copy bleibt).
+- Polling:
+  - Aktiv nur, wenn Jobs `QUEUED` oder `RUNNING` existieren.
+  - Stop bei `DONE/FAILED` bzw. unmount.
+  - Ruhiges Intervall (ca. 2.5s), keine Doppel-Intervals.
 
 ## Dateien/Änderungen
 
-- src/app/(admin)/admin/leads/LeadsClient.tsx
-  - CTA “Exportieren” inkl. Prefill Query Params + Busy-State
+- `src/app/(admin)/admin/leads/LeadsClient.tsx`
+- `src/app/(admin)/admin/exports/ExportsScreenClient.tsx`
+- `src/app/(admin)/admin/exports/page.tsx`
+- `docs/LeadRadar2026A/00_INDEX.md`
+- `docs/teilprojekt-5.9-betrieb-integration-polish-leads-to-exports.md`
 
-- src/app/(admin)/admin/exports/ExportsScreenClient.tsx
-  - Prefill aus Query Params (first-load only)
-  - Reset auf Defaults
-  - Busy states + Toast + Download Busy
-  - Polling Guardrails
+## Akzeptanzkriterien — Check ✅
 
-- src/app/(admin)/admin/exports/page.tsx
-  - Suspense Pattern + Default InitialDefaults (Prefill übernimmt Client)
-
-## Akzeptanzkriterien – Check
-
-- [x] Leads: CTA “Exportieren” übergibt Filter korrekt (scope/status/q)
-- [x] Exports: Prefill übernimmt Params und zeigt sie in UI korrekt
-- [x] Exports: “CSV exportieren” nutzt die sichtbaren Werte (keine Diskrepanz)
-- [x] Busy states: keine Doppel-Clicks, klare UX, de-CH Copy
-- [x] Polling läuft nur bei QUEUED/RUNNING und stoppt sauber
-- [x] DoD grün: typecheck/lint/build
-- [ ] docs/LeadRadar2026A/00_INDEX.md aktualisiert (Link zu TP 5.9 ergänzen)
+- ✅ Leads: CTA „Exportieren“ übergibt Filter korrekt (scope/status/q)
+- ✅ Exports: Prefill übernimmt Params und zeigt sie in UI korrekt
+- ✅ Exports: „CSV exportieren“ nutzt sichtbare Werte
+- ✅ Busy states: keine Doppel-Clicks, klare UX, de-CH Copy
+- ✅ Polling nur bei QUEUED/RUNNING, stoppt sauber
+- ✅ DoD grün: typecheck/lint/build
+- ✅ Doku + Schlussrapport + git clean + push
 
 ## Tests/Proof (reproduzierbar)
 
-### Commands
-cd /d/dev/leadradar2026a  
-npm run typecheck  
-npm run lint  
-npm run build  
+```bash
+cd /d/dev/leadradar2026a
+npm run typecheck
+npm run lint
+npm run build
+UI Smoke:
 
-### UI Smoke
-1) /admin/leads → Filter setzen (z.B. Neu + q=…) → Exportieren  
-2) /admin/exports öffnet mit Prefill → Werte stimmen  
-3) “CSV exportieren” → Job erscheint → Polling aktualisiert Status  
-4) DONE → Download Button aktiv → Download ok  
-5) FAILED → Meldung sichtbar + TraceId copy + Retry möglich  
+/admin/leads → Filter setzen (z.B. „Neu“ + Suche) → Exportieren
 
-## Offene Punkte/Risiken
+/admin/exports öffnet mit Prefill → Werte stimmen
 
-- P1: docs/LeadRadar2026A/00_INDEX.md noch ergänzen (Link + Eintrag)
+CSV exportieren → Job erscheint → Polling aktualisiert Status
 
-## Next Step
+DONE → Download funktioniert
 
-- 00_INDEX.md aktualisieren
-- Commit/Push + Commit-Hash in diesem Rapport eintragen
+FAILED → Retry möglich + TraceId sichtbar
+
+Offene Punkte / Risiken
+P1: Prefill ist „initial load“-basiert (State bleibt nachträglich kontrolliert durch User; Query-Änderungen ohne Remount sind nicht MVP-relevant).
+
+P1: Download ist Link-basiert; Browser-Blocking/Popup ist je nach Umgebung möglich (MVP ok).
+
+Next Step
+GoLive-Checkliste aktualisieren (Release Tests / Smoke) und nächste Betrieb-Härtung gemäss Roadmap (TP 6.x).

@@ -1,6 +1,6 @@
 # LeadRadar2026A — Doku Index
 
-Stand: 2026-02-01  
+Stand: 2026-02-02  
 Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
 
 ## Navigation
