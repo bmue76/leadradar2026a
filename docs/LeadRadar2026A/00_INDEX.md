@@ -36,3 +36,6 @@ Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
 
 - **Teilprojekt 5.9** — Betrieb: Integration-Polish (Leads → Exports Prefill) + Busy/State Cleanup (ONLINE-only)  
   → `docs/teilprojekt-5.9-betrieb-integration-polish-leads-to-exports.md`
+
+## Teilprojekte
+- TP 6.0 — Setup → Branding & Mandantendaten (Logo Upload + Color Picker + Topbar) → ../teilprojekt-6.0-setup-branding-tenant-profile.md
