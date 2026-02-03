@@ -1,40 +1,30 @@
 import { jsonError, jsonOk } from "@/lib/api";
-import { isHttpError } from "@/lib/http";
+import { httpError, isHttpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { requireMobileAuth } from "@/lib/mobileAuth";
 import { enforceRateLimit } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 
-type BrandingPayload = {
-  tenant: { id: string; slug: string; name: string; accentColor: string | null };
-  branding: {
-    hasLogo: boolean;
-    logoMime: string | null;
-    logoSizeBytes: number | null;
-    logoUpdatedAt: string | null;
-  };
-  logoBase64Url: string | null;
-};
-
 export async function GET(req: Request) {
   try {
     const auth = await requireMobileAuth(req);
 
-    enforceRateLimit(`mobile:${auth.apiKeyId}:branding`, { limit: 60, windowMs: 60_000 });
+    enforceRateLimit(`mobile:${auth.apiKeyId}`, { limit: 60, windowMs: 60_000 });
 
     // Ops telemetry
     const now = new Date();
-    await prisma.mobileApiKey.update({
-      where: { id: auth.apiKeyId },
-      data: { lastUsedAt: now },
-    });
-    await prisma.mobileDevice.update({
-      where: { id: auth.deviceId },
-      data: { lastSeenAt: now },
-    });
+    await prisma.mobileApiKey.update({ where: { id: auth.apiKeyId }, data: { lastUsedAt: now } });
+    await prisma.mobileDevice.update({ where: { id: auth.deviceId }, data: { lastSeenAt: now } });
 
-    const t = await prisma.tenant.findUnique({
+    // Leak-safe device scope check
+    const device = await prisma.mobileDevice.findFirst({
+      where: { id: auth.deviceId, tenantId: auth.tenantId },
+      select: { id: true },
+    });
+    if (!device) throw httpError(404, "NOT_FOUND", "Not found.");
+
+    const tenant = await prisma.tenant.findFirst({
       where: { id: auth.tenantId },
       select: {
         id: true,
@@ -43,27 +33,43 @@ export async function GET(req: Request) {
         accentColor: true,
         logoKey: true,
         logoMime: true,
-        logoSizeBytes: true,
         logoUpdatedAt: true,
       },
     });
+    if (!tenant) throw httpError(404, "NOT_FOUND", "Not found.");
 
-    if (!t) return jsonError(req, 404, "NOT_FOUND", "Not found.");
-
-    const hasLogo = Boolean(t.logoKey && t.logoMime && t.logoSizeBytes);
-
-    const payload: BrandingPayload = {
-      tenant: { id: t.id, slug: t.slug, name: t.name, accentColor: t.accentColor ?? null },
-      branding: {
-        hasLogo,
-        logoMime: hasLogo ? t.logoMime : null,
-        logoSizeBytes: hasLogo ? t.logoSizeBytes : null,
-        logoUpdatedAt: t.logoUpdatedAt ? t.logoUpdatedAt.toISOString() : null,
+    const profile = await prisma.tenantProfile.findUnique({
+      where: { tenantId: auth.tenantId },
+      select: {
+        legalName: true,
+        displayName: true,
+        accentColor: true,
       },
-      logoBase64Url: hasLogo ? "/api/mobile/v1/branding/logo-base64" : null,
-    };
+    });
 
-    return jsonOk(req, payload);
+    const displayName = profile?.displayName ?? null;
+    const legalName = profile?.legalName ?? tenant.name;
+    const name = displayName ?? legalName ?? tenant.name;
+
+    const accentColor = profile?.accentColor ?? tenant.accentColor ?? null;
+
+    const hasLogo = !!tenant.logoKey && !!tenant.logoMime;
+
+    return jsonOk(req, {
+      tenant: {
+        slug: tenant.slug,
+      },
+      branding: {
+        name,
+        legalName,
+        displayName,
+        accentColor,
+        hasLogo,
+        logoMime: hasLogo ? tenant.logoMime : null,
+        logoUpdatedAt: tenant.logoUpdatedAt ? tenant.logoUpdatedAt.toISOString() : null,
+        logoUrl: hasLogo ? "/api/mobile/v1/branding/logo" : null,
+      },
+    });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     return jsonError(req, 500, "INTERNAL", "Unexpected error.");

@@ -5,6 +5,7 @@ import Image from "next/image";
 import { SidebarNav } from "./SidebarNav";
 import { SidebarLogoutButton } from "./SidebarLogoutButton";
 import { TenantTopbarBranding } from "./TenantTopbarBranding";
+import { AdminAccentProvider } from "./AdminAccentProvider";
 
 type AdminShellProps = {
   children: ReactNode;
@@ -32,6 +33,9 @@ function IconSettingsNice(props: React.SVGProps<SVGSVGElement>) {
 export function AdminShell({ children }: AdminShellProps) {
   return (
     <div className="min-h-screen bg-white text-slate-900">
+      {/* Accent tokens (CSS vars on :root) */}
+      <AdminAccentProvider />
+
       {/* Topbar */}
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/85 backdrop-blur">
         <div className="mx-auto flex h-14 w-full max-w-[1400px] items-center">
@@ -51,6 +55,13 @@ export function AdminShell({ children }: AdminShellProps) {
                 priority={false}
               />
               <span className="text-base font-semibold">LeadRadar Admin</span>
+
+              {/* subtle accent dot */}
+              <span
+                className="ml-1 inline-block h-2 w-2 rounded-full"
+                style={{ backgroundColor: "var(--lr-accent)" }}
+                aria-hidden="true"
+              />
             </Link>
           </div>
 
