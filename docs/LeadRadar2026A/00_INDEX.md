@@ -39,3 +39,4 @@ Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
 
 ## Teilprojekte
 - TP 6.0 — Setup → Branding & Mandantendaten (Logo Upload + Color Picker + Topbar) → ../teilprojekt-6.0-setup-branding-tenant-profile.md
+- TP 6.1 — Branding Token (accentColor) + Mobile Branding (read-only) → ../teilprojekt-6.1-setup-branding-token-mobile-branding.md
