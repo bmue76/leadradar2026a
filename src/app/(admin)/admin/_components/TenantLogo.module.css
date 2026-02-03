@@ -27,16 +27,16 @@
   display:flex;
   align-items:center;
   justify-content:flex-end;
-  height:32px;
-  min-width:80px;
+  height:44px;
+  min-width:160px;
 }
 
 .topbarImg{
-  max-height:28px;
+  max-height:40px;
   width:auto;
   object-fit:contain;
   display:block;
-  transform: translateY(-2px); /* a few pixels higher */
+  transform: translateY(-1px);
 }
 
 .topbarPlaceholder{

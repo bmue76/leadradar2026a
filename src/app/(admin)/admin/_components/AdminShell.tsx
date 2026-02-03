@@ -3,8 +3,8 @@ import Link from "next/link";
 import Image from "next/image";
 
 import { SidebarNav } from "./SidebarNav";
-import { IconChevronDown, IconLogoMark } from "./icons";
 import { SidebarLogoutButton } from "./SidebarLogoutButton";
+import { TenantTopbarBranding } from "./TenantTopbarBranding";
 
 type AdminShellProps = {
   children: ReactNode;
@@ -30,54 +30,36 @@ function IconSettingsNice(props: React.SVGProps<SVGSVGElement>) {
 }
 
 export function AdminShell({ children }: AdminShellProps) {
-  // ONLINE-only MVP: Placeholders. Später via tenant-scoped APIs ersetzen.
-  const tenantName = "Atlex GmbH";
-  const userName = "Beat";
-
   return (
     <div className="min-h-screen bg-white text-slate-900">
       {/* Topbar */}
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/85 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-[1400px] items-center gap-4 px-4">
-          {/* Brand (left) */}
-          <Link
-            href="/admin"
-            className="flex items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold hover:bg-slate-100"
-            aria-label="LeadRadar Admin"
-          >
-            <span className="grid size-8 place-items-center rounded-full border border-slate-200 bg-slate-50">
-              <IconLogoMark className="size-4 text-slate-700" />
-            </span>
-            <span className="text-base">LeadRadar Admin</span>
-          </Link>
+        <div className="mx-auto flex h-14 w-full max-w-[1400px] items-center">
+          {/* Left column (aligns to sidebar width on md+) */}
+          <div className="flex items-center px-4 md:w-[260px] md:px-4">
+            <Link
+              href="/admin"
+              className="flex items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold hover:bg-slate-100"
+              aria-label="LeadRadar Admin"
+            >
+              <Image
+                src="/brand/leadradar-icon.png"
+                alt="LeadRadar"
+                width={28}
+                height={28}
+                className="h-7 w-7"
+                priority={false}
+              />
+              <span className="text-base font-semibold">LeadRadar Admin</span>
+            </Link>
+          </div>
 
-          <div className="flex-1" />
-
-          {/* Tenant (center/right) */}
-          <button
-            type="button"
-            className="hidden items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-sm hover:bg-slate-50 md:flex"
-            aria-label="Tenant auswählen (Placeholder)"
-          >
-            <span className="grid size-7 place-items-center rounded-full border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700">
-              A
-            </span>
-            <span className="font-medium">{tenantName}</span>
-            <IconChevronDown className="size-4 text-slate-500" />
-          </button>
-
-          {/* User (right) */}
-          <button
-            type="button"
-            className="flex items-center gap-2 rounded-full border border-transparent bg-white px-2 py-2 text-sm hover:border-slate-200 hover:bg-slate-50"
-            aria-label="User-Menü (Placeholder)"
-          >
-            <span className="hidden font-medium text-slate-700 sm:inline">{userName}</span>
-            <IconChevronDown className="hidden size-4 text-slate-500 sm:inline" />
-            <span className="grid size-8 place-items-center rounded-full border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700">
-              B
-            </span>
-          </button>
+          {/* Main column (aligned to page content wrapper: max-w-5xl px-6) */}
+          <div className="min-w-0 flex-1">
+            <div className="mx-auto w-full max-w-5xl px-6">
+              <TenantTopbarBranding />
+            </div>
+          </div>
         </div>
       </header>
 
@@ -120,7 +102,7 @@ export function AdminShell({ children }: AdminShellProps) {
           </div>
         </aside>
 
-        {/* ✅ Kein Padding hier – Pages machen p-6 selber */}
+        {/* ✅ Kein Padding hier – Pages machen mx-auto max-w-5xl px-6 py-6 */}
         <main className="min-w-0 flex-1">{children}</main>
       </div>
     </div>

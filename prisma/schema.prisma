@@ -166,7 +166,12 @@ model Tenant {
 
   // Corporate Accent Color (Tenant) — TP 4.6
   // Format validated server-side: "#RRGGBB" (6-digit hex, case-insensitive).
+  // NOTE: TP 6.0 stores accentColor also on TenantProfile (URL-only branding).
+  // We keep this field for backward compatibility and mirror on PATCH.
   accentColor String?
+
+  // TP 6.0 — Tenant Profile (1:1)
+  profile TenantProfile?
 
   // Relations
   users           User[]
@@ -204,6 +209,37 @@ model Tenant {
   stripeEvents  StripeEvent[]
 
   @@index([country])
+}
+
+//
+// TP 6.0 — Tenant Profile / Branding (URL-only Logo)
+// 1:1 zu Tenant, tenantId ist PK+FK.
+// logoUrl: https-only MVP (Validation in API).
+//
+model TenantProfile {
+  tenantId String @id
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  legalName   String
+  displayName String?
+
+  addressLine1 String?
+  addressLine2 String?
+  postalCode   String?
+  city         String?
+  countryCode  String @default("CH")
+
+  vatId String?
+
+  contactGivenName  String?
+  contactFamilyName String?
+  contactEmail      String?
+
+  logoUrl      String?
+  accentColor  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model User {
