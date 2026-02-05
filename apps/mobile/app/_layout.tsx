@@ -1,51 +1,29 @@
 // apps/mobile/app/_layout.tsx
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useMemo } from "react";
 import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { UI } from "../src/ui/tokens";
-import { getApiKey } from "../src/lib/auth";
-import { fetchMobileBranding, isHexColor } from "../src/lib/branding";
+import { useTenantBranding } from "../src/ui/useTenantBranding";
 
 export default function RootLayout() {
   const insets = useSafeAreaInsets();
 
-  const [accentOverride, setAccentOverride] = useState<string | null>(null);
-
   const tabBarHeight = UI.tabBarBaseHeight + Math.max(insets.bottom, UI.tabBarPadBottomMin);
 
-  const loadBranding = useCallback(async () => {
-    const key = await getApiKey();
-    if (!key) {
-      setAccentOverride(null);
-      return;
-    }
+  const { state } = useTenantBranding();
 
-    const res = await fetchMobileBranding({ apiKey: key });
-    if (!res.ok) {
-      setAccentOverride(null);
-      return;
-    }
-
-    const accent = res.data?.branding?.accentColor ?? null;
-    setAccentOverride(isHexColor(accent) ? accent.toUpperCase() : null);
-  }, []);
-
-  useEffect(() => {
-    const id = setTimeout(() => {
-      void loadBranding();
-    }, 0);
-    return () => clearTimeout(id);
-  }, [loadBranding]);
-
-  const tabAccent = useMemo(() => accentOverride ?? UI.accent, [accentOverride]);
+  const accentColor = useMemo(() => {
+    if (state.status === "ready" && state.accentColor) return state.accentColor;
+    return UI.accent;
+  }, [state]);
 
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: tabAccent,
+        tabBarActiveTintColor: accentColor,
         tabBarInactiveTintColor: "rgba(17,24,39,0.45)",
         tabBarStyle: {
           height: tabBarHeight,
