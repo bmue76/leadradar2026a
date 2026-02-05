@@ -38,11 +38,7 @@ Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
   → `docs/teilprojekt-5.9-betrieb-integration-polish-leads-to-exports.md`
 
 ## Teilprojekte
-- TP 6.0 — Setup → Branding & Mandantendaten (Logo Upload + Color Picker + Topbar)  
-  → `../teilprojekt-6.0-setup-branding-tenant-profile.md`
-
-- TP 6.1 — Branding Token (accentColor) + Mobile Branding (read-only)  
-  → `../teilprojekt-6.1-setup-branding-token-mobile-branding.md`
-
-- TP 6.3 — Mobile → Branding Header (Tenant links + Logo rechts via ScreenScaffold)  
-  → `../teilprojekt-6.3-mobile-branding-header.md`
+- TP 6.0 — Setup → Branding & Mandantendaten (Logo Upload + Color Picker + Topbar) → ../teilprojekt-6.0-setup-branding-tenant-profile.md
+- TP 6.1 — Branding Token (accentColor) + Mobile Branding (read-only) → ../teilprojekt-6.1-setup-branding-token-mobile-branding.md
+- TP 6.3 — Mobile Tenant Header (Name links, Logo rechts) + Branding Cache → ../teilprojekt-6.3-mobile-branding-header.md
+- TP 6.4 — Branding UI Polish (Hydration-safe Logo + ETag Bust + Upload Types) → ../teilprojekt-6.4-branding-hydration-safe-logo-etag-upload-types.md
