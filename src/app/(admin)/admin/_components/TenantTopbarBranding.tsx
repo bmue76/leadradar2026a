@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import styles from "./TenantLogo.module.css";
 
 type ApiOk<T> = { ok: true; data: T; traceId: string };
 type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
@@ -13,41 +12,60 @@ type BrandingGetDto = { tenant: TenantDto; profile: ProfileDto | null };
 
 const BRANDING_UPDATED_EVENT = "lr_tenant_branding_updated";
 
+function pickTenantDisplayName(dto: BrandingGetDto | null): string {
+  if (!dto) return "Tenant";
+  const t = dto.tenant;
+  const p = dto.profile;
+  const display = p?.displayName || p?.legalName || t?.name || "Tenant";
+  return typeof display === "string" && display.trim().length ? display.trim() : "Tenant";
+}
+
+async function fetchLogoVersionTag(): Promise<string | null> {
+  try {
+    const res = await fetch("/api/admin/v1/tenants/current/logo", { method: "HEAD", cache: "no-store" });
+    if (!res.ok) return null;
+    const etag = res.headers.get("etag");
+    if (etag && etag.trim().length) return etag.trim();
+    const lm = res.headers.get("last-modified");
+    if (lm && lm.trim().length) return lm.trim();
+    return "1";
+  } catch {
+    return null;
+  }
+}
+
 export function TenantTopbarBranding() {
   const [loading, setLoading] = useState(true);
   const [tenantName, setTenantName] = useState<string>("Tenant");
 
-  const [logoOk, setLogoOk] = useState(true);
+  const [logoOk, setLogoOk] = useState(false);
+  const [logoTag, setLogoTag] = useState<string | null>(null);
 
-  // IMPORTANT: do NOT use Date.now() in initial state (SSR hydration mismatch)
-  const [bust, setBust] = useState<number>(0);
-
-  const logoSrc = useMemo(() => `/api/admin/v1/tenants/current/logo?ts=${bust}`, [bust]);
+  const logoSrc = useMemo(() => {
+    if (!logoTag) return "/api/admin/v1/tenants/current/logo";
+    return `/api/admin/v1/tenants/current/logo?v=${encodeURIComponent(logoTag)}`;
+  }, [logoTag]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
-    setLogoOk(true);
-    setBust(Date.now());
 
+    // Name
     try {
-      const res = await fetch("/api/admin/v1/branding", { method: "GET" });
+      const res = await fetch("/api/admin/v1/branding", { method: "GET", cache: "no-store" });
       const json = (await res.json()) as ApiResp<BrandingGetDto>;
-
-      if (!json.ok) {
-        setLoading(false);
-        return;
+      if (json.ok) {
+        setTenantName(pickTenantDisplayName(json.data));
       }
-
-      const t = json.data.tenant;
-      const p = json.data.profile;
-
-      const display = p?.displayName || p?.legalName || t?.name || "Tenant";
-      setTenantName(display);
-
-      setLoading(false);
     } catch {
-      setLoading(false);
+      // ignore
     }
+
+    // Logo (hydration-safe): use stable ETag instead of Date.now()
+    const tag = await fetchLogoVersionTag();
+    setLogoTag(tag);
+    setLogoOk(Boolean(tag));
+
+    setLoading(false);
   }, []);
 
   const onUpdated = useCallback(() => {
@@ -55,6 +73,7 @@ export function TenantTopbarBranding() {
   }, [refresh]);
 
   useEffect(() => {
+    // Schedule async AFTER hydration
     const id = window.setTimeout(() => {
       onUpdated();
     }, 0);
@@ -73,17 +92,19 @@ export function TenantTopbarBranding() {
         <div className="truncate text-base font-semibold text-slate-900">{loading ? "…" : tenantName}</div>
       </div>
 
-      {/* Logo: bigger, no frame, right aligned */}
-      <div className={styles.topbarWrap} aria-label="Tenant Logo">
+      {/* Logo: bigger, no frame, right aligned (content aligned via AdminShell wrapper) */}
+      <div className="flex h-9 w-[190px] items-center justify-end" aria-label="Tenant Logo">
         {logoOk ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={logoSrc}
             alt=""
-            className={styles.topbarImg}
+            className="max-h-9 w-auto max-w-[190px] object-contain"
             onError={() => setLogoOk(false)}
           />
-        ) : null}
+        ) : (
+          <div className="h-9 w-[190px]" />
+        )}
       </div>
     </div>
   );

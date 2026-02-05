@@ -47,7 +47,7 @@ export function AdminAccentProvider() {
   }, [refresh]);
 
   useEffect(() => {
-    // Avoid lint rule "set-state-in-effect" patterns; schedule refresh async.
+    // Schedule after hydration
     const id = window.setTimeout(() => {
       onUpdated();
     }, 0);

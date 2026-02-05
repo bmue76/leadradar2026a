@@ -247,9 +247,12 @@ function makeLogoSrc(bust: number) {
 function isAllowedLogoFile(file: File): boolean {
   const mime = (file.type || "").toLowerCase();
   if (mime === "image/png") return true;
-  if (mime === "image/svg+xml") return true;
+  if (mime === "image/jpeg") return true;
+  if (mime === "image/webp") return true;
+
   const name = file.name.toLowerCase();
-  if (!mime && (name.endsWith(".png") || name.endsWith(".svg"))) return true;
+  if (!mime && (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".webp"))) return true;
+
   return false;
 }
 
@@ -442,7 +445,7 @@ export default function BrandingScreenClient() {
     }
 
     if (!isAllowedLogoFile(file)) {
-      setInlineError({ message: "Bitte nur PNG oder SVG als Logo hochladen.", traceId: undefined });
+      setInlineError({ message: "Bitte nur PNG, JPG oder WebP als Logo hochladen.", traceId: undefined });
       if (fileInputRef.current) fileInputRef.current.value = "";
       return;
     }
@@ -566,6 +569,17 @@ export default function BrandingScreenClient() {
     setField("accentColor", rgbToHex(nextRgb));
   }
 
+  async function copyHex() {
+    if (!normalizedHex) return;
+    try {
+      await navigator.clipboard.writeText(normalizedHex);
+      setToast("HEX kopiert.");
+      window.setTimeout(() => setToast(null), 1400);
+    } catch {
+      // ignore
+    }
+  }
+
   return (
     <div className="space-y-6">
       <header className="space-y-2">
@@ -583,13 +597,13 @@ export default function BrandingScreenClient() {
         <ErrorState title="Konnte Branding nicht laden" message={loadError.message} traceId={loadError.traceId} onRetry={() => void load()} />
       ) : (
         <>
-          <Card title="Branding" subtitle="Logo (PNG/SVG) und optionale Akzentfarbe – wird in App & Admin verwendet.">
+          <Card title="Branding" subtitle="Logo (PNG/JPG/WebP) und optionale Akzentfarbe – wird in App & Admin verwendet.">
             <div className="grid gap-6 md:grid-cols-2">
               {/* Logo preview (nice, not tiny icon) */}
               <div className="space-y-3">
                 <Label>Logo Vorschau</Label>
                 <div className="flex items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="flex h-[88px] w-full max-w-[320px] items-center justify-center">
+                  <div className="flex h-[92px] w-full max-w-[340px] items-center justify-center">
                     {logoLocalPreview ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img src={logoLocalPreview} alt="Logo Preview" className="h-full w-auto object-contain" />
@@ -597,7 +611,7 @@ export default function BrandingScreenClient() {
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={logoServerSrc}
-                        alt="Logo"
+                        alt=""
                         className="h-full w-auto object-contain"
                         onError={() => setLogoServerOk(false)}
                       />
@@ -612,11 +626,11 @@ export default function BrandingScreenClient() {
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept="image/png,image/svg+xml"
+                    accept="image/png,image/jpeg,image/webp"
                     className="block w-full text-sm text-slate-700 file:mr-3 file:rounded-xl file:border file:border-slate-200 file:bg-white file:px-4 file:py-2 file:text-sm file:font-medium file:text-slate-800 hover:file:bg-slate-50"
                     onChange={(e) => onPickLogo(e.target.files?.[0] ?? null)}
                   />
-                  <p className="text-xs text-slate-500">Empfohlen: PNG (transparent) oder SVG. Max. 2 MB.</p>
+                  <p className="text-xs text-slate-500">Empfohlen: PNG (transparent). Max. 2 MB. (JPG/WebP ok)</p>
                 </div>
               </div>
 
@@ -652,6 +666,10 @@ export default function BrandingScreenClient() {
                         onBlur={(e) => setField("accentColor", normalizeHexLoose(e.target.value))}
                       />
                     </div>
+
+                    <Button variant="ghost" type="button" onClick={copyHex} disabled={!normalizedHex}>
+                      HEX kopieren
+                    </Button>
 
                     <Button variant="secondary" type="button" onClick={() => setField("accentColor", null)}>
                       Entfernen
