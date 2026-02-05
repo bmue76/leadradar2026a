@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { apiFetch } from "../src/lib/api";
 import { getApiKey } from "../src/lib/auth";
 import { ScreenScaffold } from "../src/ui/ScreenScaffold";
+import { useTenantBranding } from "../src/ui/useTenantBranding";
 import { UI } from "../src/ui/tokens";
 
 type ActiveEventResp = { item?: { id: string; name: string } | null };
@@ -45,6 +46,14 @@ export default function Home() {
   const [todayLeads, setTodayLeads] = useState<number>(0);
   const [todayLph, setTodayLph] = useState<number>(0);
   const [todayAttachments, setTodayAttachments] = useState<number>(0);
+
+  // Central branding (header handled in ScreenScaffold)
+  const { state: brandingState } = useTenantBranding();
+
+  const accentColor = useMemo(() => {
+    if (brandingState.status === "ready" && brandingState.accentColor) return brandingState.accentColor;
+    return UI.accent;
+  }, [brandingState]);
 
   const loadAll = useCallback(async () => {
     const key = await getApiKey();
@@ -149,7 +158,7 @@ export default function Home() {
           <Text style={styles.smallHint}>Weitere Statistiken im „Stats“-Tab</Text>
         </Pressable>
 
-        <Pressable onPress={() => router.push("/forms")} style={[styles.btn, styles.btnAccent]}>
+        <Pressable onPress={() => router.push("/forms")} style={[styles.btn, { backgroundColor: accentColor }]}>
           <Text style={styles.btnAccentText}>Lead erfassen</Text>
         </Pressable>
 
@@ -188,7 +197,6 @@ const styles = StyleSheet.create({
   chev: { fontSize: 22, fontWeight: "900", color: "rgba(17,24,39,0.35)" },
 
   btn: { borderRadius: 18, paddingVertical: 16, alignItems: "center" },
-  btnAccent: { backgroundColor: UI.accent },
   btnAccentText: { color: "white", fontSize: 18, fontWeight: "900" },
   btnLight: { backgroundColor: "rgba(17,24,39,0.06)", marginTop: 12 },
   btnLightText: { fontWeight: "900", color: UI.text },

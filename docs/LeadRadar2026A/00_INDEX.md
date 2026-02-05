@@ -1,6 +1,6 @@
 # LeadRadar2026A — Doku Index
 
-Stand: 2026-02-02  
+Stand: 2026-02-05  
 Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
 
 ## Navigation
@@ -38,5 +38,11 @@ Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
   → `docs/teilprojekt-5.9-betrieb-integration-polish-leads-to-exports.md`
 
 ## Teilprojekte
-- TP 6.0 — Setup → Branding & Mandantendaten (Logo Upload + Color Picker + Topbar) → ../teilprojekt-6.0-setup-branding-tenant-profile.md
-- TP 6.1 — Branding Token (accentColor) + Mobile Branding (read-only) → ../teilprojekt-6.1-setup-branding-token-mobile-branding.md
+- TP 6.0 — Setup → Branding & Mandantendaten (Logo Upload + Color Picker + Topbar)  
+  → `../teilprojekt-6.0-setup-branding-tenant-profile.md`
+
+- TP 6.1 — Branding Token (accentColor) + Mobile Branding (read-only)  
+  → `../teilprojekt-6.1-setup-branding-token-mobile-branding.md`
+
+- TP 6.3 — Mobile → Branding Header (Tenant links + Logo rechts via ScreenScaffold)  
+  → `../teilprojekt-6.3-mobile-branding-header.md`
