@@ -17,6 +17,16 @@ function isHexColor(s: string | null): s is string {
   return /^#[0-9A-Fa-f]{6}$/.test(s);
 }
 
+function hexToSoftRgba(hex: string, alpha: number): string {
+  // expects #RRGGBB
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  const a = Math.max(0, Math.min(1, alpha));
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
 function setAccentVars(accent: string | null) {
   const root = document.documentElement;
 
@@ -25,7 +35,8 @@ function setAccentVars(accent: string | null) {
   const value = isHexColor(accent) ? accent.toUpperCase() : fallback;
 
   root.style.setProperty("--lr-accent", value);
-  root.style.setProperty("--lr-accent-soft", value);
+  // Soft variant (for hover/bg chips etc.)
+  root.style.setProperty("--lr-accent-soft", hexToSoftRgba(value, 0.14));
 }
 
 export function AdminAccentProvider() {
@@ -47,7 +58,6 @@ export function AdminAccentProvider() {
   }, [refresh]);
 
   useEffect(() => {
-    // Schedule after hydration
     const id = window.setTimeout(() => {
       onUpdated();
     }, 0);

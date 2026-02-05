@@ -1,36 +1,54 @@
-import type { MobileBrandingDto } from "./branding";
-
-type CacheEntry = {
-  value: MobileBrandingDto;
-  storedAtMs: number;
+// apps/mobile/src/lib/brandingCache.ts
+export type BrandingCacheDto = {
+  tenantName: string;
+  accentColor: string | null;
+  logoDataUri: string | null;
+  updatedAt: string; // ISO
 };
 
-const KEY = "__LR_BRANDING_CACHE__";
+const KEY = "lr_branding_cache_v1";
 
-function nowMs(): number {
-  return Date.now();
+// MVP: no external storage dependency
+let memCache: BrandingCacheDto | null = null;
+
+function canUseLocalStorage(): boolean {
+  try {
+    return typeof globalThis !== "undefined" && !!(globalThis as unknown as { localStorage?: unknown }).localStorage;
+  } catch {
+    return false;
+  }
 }
 
-function getStore(): { entry: CacheEntry | null } {
-  const g = globalThis as unknown as Record<string, unknown>;
-  if (!g[KEY]) g[KEY] = { entry: null };
-  return g[KEY] as { entry: CacheEntry | null };
+function readLocalStorage(): BrandingCacheDto | null {
+  if (!canUseLocalStorage()) return null;
+  try {
+    const raw = (globalThis as unknown as { localStorage: Storage }).localStorage.getItem(KEY);
+    if (!raw) return null;
+    const json = JSON.parse(raw) as BrandingCacheDto;
+    if (!json || typeof json.tenantName !== "string") return null;
+    return json;
+  } catch {
+    return null;
+  }
 }
 
-export function getBrandingFromCache(ttlMs: number): MobileBrandingDto | null {
-  const store = getStore();
-  const e = store.entry;
-  if (!e) return null;
-  if (nowMs() - e.storedAtMs > ttlMs) return null;
-  return e.value;
+function writeLocalStorage(dto: BrandingCacheDto): void {
+  if (!canUseLocalStorage()) return;
+  try {
+    (globalThis as unknown as { localStorage: Storage }).localStorage.setItem(KEY, JSON.stringify(dto));
+  } catch {
+    // ignore
+  }
 }
 
-export function setBrandingCache(value: MobileBrandingDto): void {
-  const store = getStore();
-  store.entry = { value, storedAtMs: nowMs() };
+export async function getBrandingFromCache(): Promise<BrandingCacheDto | null> {
+  if (memCache) return memCache;
+  const ls = readLocalStorage();
+  if (ls) memCache = ls;
+  return ls;
 }
 
-export function clearBrandingCache(): void {
-  const store = getStore();
-  store.entry = null;
+export async function setBrandingCache(dto: BrandingCacheDto): Promise<void> {
+  memCache = dto;
+  writeLocalStorage(dto);
 }
