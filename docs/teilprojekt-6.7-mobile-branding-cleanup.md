@@ -3,7 +3,7 @@
 Status: DONE ✅  
 Datum: 2026-02-06  
 Commit(s):
-- <COMMIT_HASH> — docs(tp6.7): schlussrapport + index
+- c325208 — docs(tp6.7): schlussrapport + index
 
 ## Ziel
 
