@@ -43,5 +43,10 @@ Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
 - TP 6.3 — Mobile Tenant Header (Name links, Logo rechts) + Branding Cache → ../teilprojekt-6.3-mobile-branding-header.md
 - TP 6.4 — Branding UI Polish (Hydration-safe Logo + ETag Bust + Upload Types) → ../teilprojekt-6.4-branding-hydration-safe-logo-etag-upload-types.md
 - TP 6.6 — Mobile Branding Provider Fix (Error-Shape + Cache-First) → ../teilprojekt-6.6-mobile-branding-provider-fix.md
+- TP 6.7 — Mobile Branding Cleanup (Konsolidierung) → ../teilprojekt-6.7-mobile-branding-cleanup.md
 TP 6.6 — Mobile Branding Provider + Cleanup (nur eine Source of Truth) + Admin Accent Vars soft
 
+
+- TP 6.6 — Setup → Branding Admin Polish (Logo remove + Accent Presets) → ../teilprojekt-6.6-setup-branding-admin-polish.md
+
+- TP 6.7 — Mobile → Branding global (Tabs Accent + Resume Refresh) → ../teilprojekt-6.7-mobile-branding-accent-tabs-resume.md
