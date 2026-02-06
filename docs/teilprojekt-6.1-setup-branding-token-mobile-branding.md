@@ -1,8 +1,11 @@
 # Schlussrapport — Teilprojekt 6.1: Branding Token (accentColor) + Mobile Branding (read-only)
 
-Datum: 2026-02-03  
 Status: DONE ✅  
-Git: 6c5b8db — feat(tp6.1): admin accent token + mobile branding
+Datum: 2026-02-03  
+Branch: main  
+Commit(s):
+- ace36d1 — feat(tp6.1): admin accent token + mobile branding
+- a7fba2c — docs(tp6.1): schlussrapport + index
 
 ## Ziel
 
@@ -53,23 +56,18 @@ cd /d/dev/leadradar2026a
 npm run typecheck
 npm run lint
 npm run build
-```
-
-### API Proof
+API Proof
 (gleicher Auth-Header wie /api/mobile/v1/events/active)
-```bash
+
 curl -i -H "X-API-KEY: DEIN_DEVICE_KEY" "http://localhost:3000/api/mobile/v1/branding"
 curl -i -H "X-API-KEY: DEIN_DEVICE_KEY" "http://localhost:3000/api/mobile/v1/branding/logo"
-```
+UI Smoke
+/admin/branding AccentColor setzen → Speichern → Topbar Accent-Dot aktualisiert
 
-### UI Smoke
-- /admin/branding AccentColor setzen → Speichern → Topbar Accent-Dot aktualisiert
+Offene Punkte / Risiken
+P1: Mobile App Integration (Header/Start) – API ist bereit, UI Hook folgt in TP6.2 oder als kleiner Follow-up.
 
-## Offene Punkte / Risiken
+P2: Token usage ausbauen (Badges/Primary Buttons) – bewusst subtil gehalten (Apple-clean).
 
-- P1: Mobile App Integration (Header/Start) – API ist bereit, UI Hook folgt in TP6.2 oder als kleiner Follow-up.
-- P2: Token usage ausbauen (Badges/Primary Buttons) – bewusst subtil gehalten (Apple-clean).
-
-## Next Step
-
+Next Step
 TP 6.2: Mobile App Integration (Branding fetch + caching + Header), optional: accentColor als Theme in Mobile Components.

@@ -17,9 +17,9 @@ Die Mobile-App soll den Mandanten-Akzent (accentColor) konsistent verwenden, ins
 - Lint-Warnings (alt-text) bereinigt (RN Image) via gezieltem eslint-disable dort, wo nötig (nur dekorativ/label vorhanden).
 
 ## Akzeptanzkriterien
-- `npm run typecheck` ✅
-- `npm run lint` ✅ (0 Errors/Warnungen)
-- `npm run build` ✅
+- ✅ `npm run typecheck`
+- ✅ `npm run lint` (0 Errors)
+- ✅ `npm run build`
 
 ## Smoke Test
 1) Mobile App starten (Provisioning vorhanden).  
@@ -28,5 +28,5 @@ Die Mobile-App soll den Mandanten-Akzent (accentColor) konsistent verwenden, ins
 4) CTA „Lead erfassen“ übernimmt AccentColor.  
 5) Fallback funktioniert (kein Accent gesetzt → UI.accent).
 
-## Notes / Next
-- Als nächstes: Mobile Settings Screen veredeln (Branding anzeigen, Provisioned-Info, Version/Build, Logout/Reset Device) + ggf. Revalidate/TTL fürs Branding-Cache feinjustieren.
+## Next Step
+TP 6.6: Mobile Branding Provider Cleanup + Admin Accent Vars (Soft Token)
