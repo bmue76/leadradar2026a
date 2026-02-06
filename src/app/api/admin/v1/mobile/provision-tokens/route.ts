@@ -55,10 +55,36 @@ function effectiveStatus(row: { status: string; expiresAt: Date }, now: Date): s
   return s || "—";
 }
 
+async function getDeviceLimitSnapshot(tenantId: string): Promise<{ maxDevices: number; activeDevices: number }> {
+  // Ensure entitlement row exists; default maxDevices=1
+  const ent = await prisma.tenantEntitlement.upsert({
+    where: { tenantId },
+    create: { tenantId, validUntil: null, maxDevices: 1 },
+    update: {},
+    select: { maxDevices: true },
+  });
+
+  // Count ACTIVE devices with ACTIVE apiKey
+  const activeDevices = await prisma.mobileDevice.count({
+    where: { tenantId, status: "ACTIVE", apiKey: { status: "ACTIVE" } },
+  });
+
+  return { maxDevices: ent.maxDevices, activeDevices };
+}
+
 export async function POST(req: Request): Promise<Response> {
   try {
     const { tenantId } = await requireTenantContext(req);
     const body = await validateBody(req, CreateSchema);
+
+    // Guardrail: device slots (must be enforced here, because Admin UI calls this endpoint)
+    const { maxDevices, activeDevices } = await getDeviceLimitSnapshot(tenantId);
+    if (activeDevices >= maxDevices) {
+      return jsonError(req, 402, "DEVICE_LIMIT_REACHED", "Maximale Anzahl Geräte erreicht.", {
+        activeDevices,
+        maxDevices,
+      });
+    }
 
     const expiresMin = clampExpiresMinutes(body.expiresInMinutes);
     const expiresAt = new Date(Date.now() + expiresMin * 60_000);
