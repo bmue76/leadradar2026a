@@ -1,6 +1,7 @@
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo } from "react";
 import { Image, ScrollView, StyleSheet, Text, View, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useIsFocused } from "@react-navigation/native";
 
 import { UI } from "./tokens";
 import { useTenantBranding } from "./useTenantBranding";
@@ -20,11 +21,18 @@ export type ScreenScaffoldProps = {
 
 export function ScreenScaffold(props: ScreenScaffoldProps) {
   const insets = useSafeAreaInsets();
+  const isFocused = useIsFocused();
 
   const scroll = props.scroll !== false;
   const subtitle = (props.subtitle ?? "").trim() || null;
 
-  const { state } = useTenantBranding();
+  const { state, refresh } = useTenantBranding();
+
+  // Refresh branding when screen becomes active (rate-limited in provider)
+  useEffect(() => {
+    if (!isFocused) return;
+    void refresh();
+  }, [isFocused, refresh]);
 
   const tenantName = useMemo(() => {
     if (state.status === "ready") return state.tenantName;
@@ -43,12 +51,10 @@ export function ScreenScaffold(props: ScreenScaffoldProps) {
       <View style={[styles.header, { paddingTop: headerPadTop }]}>
         <View style={styles.headerRow}>
           <View style={styles.headerLeft}>
-            {/* Tenant name (prominent) */}
             <Text style={styles.tenantName} numberOfLines={1}>
               {tenantName}
             </Text>
 
-            {/* Screen title (secondary, still visible) */}
             <Text style={styles.title} numberOfLines={1}>
               {props.title}
             </Text>
@@ -60,15 +66,9 @@ export function ScreenScaffold(props: ScreenScaffoldProps) {
             ) : null}
           </View>
 
-          {/* Right: logo (bigger, no frame) */}
           {logoDataUri ? (
             // eslint-disable-next-line jsx-a11y/alt-text
-            <Image
-              source={{ uri: logoDataUri }}
-              style={styles.logo}
-              resizeMode="contain"
-              accessibilityLabel="Tenant Logo"
-            />
+            <Image source={{ uri: logoDataUri }} style={styles.logo} resizeMode="contain" accessibilityLabel="Tenant Logo" />
           ) : (
             <View style={styles.logoPlaceholder} />
           )}
@@ -96,7 +96,6 @@ const styles = StyleSheet.create({
   },
 
   headerRow: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", gap: 12 },
-
   headerLeft: { flex: 1, minWidth: 0 },
 
   tenantName: { fontSize: 20, fontWeight: "900", color: UI.text },
@@ -106,9 +105,6 @@ const styles = StyleSheet.create({
   logo: { height: 34, width: 110 },
   logoPlaceholder: { height: 34, width: 110 },
 
-  // Default content padding (matches your Home screen style baseline)
   content: { paddingHorizontal: UI.padX, paddingTop: 14, paddingBottom: 18, gap: 14 },
-
-  // For scroll=false screens (they usually render their own ScrollView)
   body: { flex: 1 },
 });
