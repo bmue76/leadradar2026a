@@ -55,4 +55,5 @@ Mobile Branding (Tenant Name / Accent / Logo) soll robust & performant sein:
 
 ## Commits
 
-- TODO: (nach dem Commit hier eintragen)
+- 9c0669d — feat(tp6.8): mobile branding ttl + focus revalidate + logo version hint
+- 9c0669d — fix(tp6.8): add async-storage dependency
