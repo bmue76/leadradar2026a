@@ -42,6 +42,24 @@ type FormListItem = { id: string; name: string; status: string; description?: st
 // TP 3.9 — Active Event (single source: /events/active)
 type EventListItem = { id: string; name: string; status: string; startsAt?: string | null; endsAt?: string | null };
 
+type ProvError =
+  | {
+      kind: "LIMIT";
+      code: string;
+      message: string;
+      traceId?: string;
+      status?: number;
+      activeDevices?: number;
+      maxDevices?: number;
+    }
+  | {
+      kind: "GENERIC";
+      code: string;
+      message: string;
+      traceId?: string;
+      status?: number;
+    };
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -132,6 +150,58 @@ function fmtErr(e: { code: string; message: string; traceId?: string; status?: n
   return parts.join(" · ");
 }
 
+function extractDeviceLimitDetails(details: unknown): { activeDevices: number; maxDevices: number } | null {
+  if (!isRecord(details)) return null;
+  const a = details.activeDevices;
+  const m = details.maxDevices;
+  if (typeof a === "number" && typeof m === "number") return { activeDevices: a, maxDevices: m };
+  return null;
+}
+
+function toProvError(res: unknown): ProvError {
+  // adminFetchJson usually returns a consistent shape, but we stay defensive.
+  const r = isRecord(res) ? (res as Record<string, unknown>) : {};
+
+  const code = typeof r.code === "string" ? r.code : "ERROR";
+  const message = typeof r.message === "string" ? r.message : "Request failed.";
+  const traceId = typeof r.traceId === "string" ? r.traceId : undefined;
+  const status = typeof r.status === "number" ? r.status : undefined;
+
+  const details = "details" in r ? (r.details as unknown) : undefined;
+  const nestedDetails =
+    isRecord(r.error) && "details" in r.error ? ((r.error as Record<string, unknown>).details as unknown) : undefined;
+
+  const limit = extractDeviceLimitDetails(details ?? nestedDetails);
+
+  if (String(code).toUpperCase() === "DEVICE_LIMIT_REACHED") {
+    const activeDevices = limit?.activeDevices;
+    const maxDevices = limit?.maxDevices;
+
+    const pretty =
+      typeof activeDevices === "number" && typeof maxDevices === "number"
+        ? `Maximale Anzahl Geräte erreicht (${activeDevices}/${maxDevices}). Deaktiviere ein Gerät oder erhöhe Slots.`
+        : `Maximale Anzahl Geräte erreicht. Deaktiviere ein Gerät oder erhöhe Slots.`;
+
+    return {
+      kind: "LIMIT",
+      code,
+      message: pretty,
+      traceId,
+      status,
+      activeDevices,
+      maxDevices,
+    };
+  }
+
+  return {
+    kind: "GENERIC",
+    code,
+    message: fmtErr({ code, message, traceId, status }),
+    traceId,
+    status,
+  };
+}
+
 function effectiveProvisionStatus(row: ProvisionRow): string {
   const s = (row.status || "—").toUpperCase();
   if (s === "ACTIVE" && row.expiresAt) {
@@ -145,7 +215,7 @@ export default function MobileOpsClient() {
   // Provisioning
   const [provLoading, setProvLoading] = React.useState(true);
   const [provItems, setProvItems] = React.useState<ProvisionRow[]>([]);
-  const [provError, setProvError] = React.useState<string | null>(null);
+  const [provError, setProvError] = React.useState<ProvError | null>(null);
 
   // Create Provision Modal
   const [provCreateOpen, setProvCreateOpen] = React.useState(false);
@@ -214,7 +284,7 @@ export default function MobileOpsClient() {
     const res = await adminFetchJson<unknown>("/api/admin/v1/mobile/provision-tokens?limit=50", { method: "GET" });
     if (!res.ok) {
       setProvItems([]);
-      setProvError(fmtErr(res));
+      setProvError(toProvError(res));
       setProvLoading(false);
       return;
     }
@@ -349,6 +419,7 @@ export default function MobileOpsClient() {
     setProvOneTimeMeta(null);
     setProvOneTimeCopied(false);
     setProvQrDataUrl(null);
+    setProvError(null);
 
     // ensure forms list is available (ACTIVE)
     setShowNonActiveForms(false);
@@ -388,12 +459,12 @@ export default function MobileOpsClient() {
       });
 
       if (!res.ok) {
-        setProvError(fmtErr(res));
+        setProvError(toProvError(res));
         return;
       }
 
       if (!isRecord(res.data)) {
-        setProvError("Unexpected response shape from POST /api/admin/v1/mobile/provision-tokens");
+        setProvError({ kind: "GENERIC", code: "BAD_RESPONSE", message: "Unexpected response shape from POST /api/admin/v1/mobile/provision-tokens" });
         return;
       }
 
@@ -412,7 +483,7 @@ export default function MobileOpsClient() {
       }
 
       if (!token) {
-        setProvError("Create succeeded, but no one-time token returned by API.");
+        setProvError({ kind: "GENERIC", code: "MISSING_TOKEN", message: "Create succeeded, but no one-time token returned by API." });
         return;
       }
 
@@ -438,7 +509,7 @@ export default function MobileOpsClient() {
   async function onRevokeProvisionToken(id: string) {
     const res = await adminFetchJson<unknown>(`/api/admin/v1/mobile/provision-tokens/${id}/revoke`, { method: "POST" });
     if (!res.ok) {
-      setProvError(fmtErr(res));
+      setProvError(toProvError(res));
       return;
     }
     await loadProvisionTokens();
@@ -705,7 +776,7 @@ export default function MobileOpsClient() {
     !!manageActiveEventId && !eventsLoading && activeEvents.every((ev) => ev.id !== manageActiveEventId);
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-6 py-8">
+    <div className="mx-auto w-full max-w-5xl px-6 py-6">
       <div className="mb-6">
         <h1 className="text-xl font-semibold tracking-tight">Mobile Ops</h1>
         <p className="mt-1 text-sm text-neutral-600">
@@ -744,7 +815,23 @@ export default function MobileOpsClient() {
           </button>
         </div>
 
-        {provError ? <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{provError}</div> : null}
+        {provError ? (
+          <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2">
+            <div className="text-sm font-medium text-red-900">{provError.message}</div>
+            {provError.traceId ? <div className="mt-1 text-xs text-red-900/70">TraceId: {provError.traceId}</div> : null}
+            {provError.kind === "LIMIT" ? (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <a
+                  href="/admin/devices"
+                  className="rounded-xl border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-900 hover:bg-red-50"
+                >
+                  Zu Geräten
+                </a>
+                <span className="text-xs text-red-900/70">Gerät deaktivieren → Slot wird frei.</span>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white">
           <table className="w-full text-left text-sm">
@@ -956,6 +1043,24 @@ export default function MobileOpsClient() {
               <div className="text-sm font-medium text-neutral-900">Create Provision Token</div>
               <div className="text-xs text-neutral-600">Klartext Token wird nur 1x angezeigt. Danach nur prefix/hash.</div>
             </div>
+
+            {provError ? (
+              <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2">
+                <div className="text-sm font-medium text-red-900">{provError.message}</div>
+                {provError.traceId ? <div className="mt-1 text-xs text-red-900/70">TraceId: {provError.traceId}</div> : null}
+                {provError.kind === "LIMIT" ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <a
+                      href="/admin/devices"
+                      className="rounded-xl border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-900 hover:bg-red-50"
+                    >
+                      Zu Geräten
+                    </a>
+                    <span className="text-xs text-red-900/70">Gerät deaktivieren → Slot wird frei.</span>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
             {provOneTimeToken ? (
               <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
