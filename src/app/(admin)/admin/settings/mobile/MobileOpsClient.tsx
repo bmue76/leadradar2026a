@@ -42,10 +42,20 @@ type FormListItem = { id: string; name: string; status: string; description?: st
 // TP 3.9 — Active Event (single source: /events/active)
 type EventListItem = { id: string; name: string; status: string; startsAt?: string | null; endsAt?: string | null };
 
-type ProvisionUiError =
+type ProvisionCreateErrorState =
   | null
-  | { kind: "LIMIT"; activeDevices?: number; maxDevices?: number; traceId?: string }
-  | { kind: "GENERIC"; message: string };
+  | {
+      kind: "limit";
+      activeDevices: number;
+      maxDevices: number;
+      message: string;
+      traceId?: string;
+      status?: number;
+    }
+  | {
+      kind: "generic";
+      text: string;
+    };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -130,44 +140,62 @@ function setDemoCaptureKey(token: string) {
   }
 }
 
-function fmtErr(e: { code: string; message: string; traceId?: string; status?: number }): string {
-  const parts = [`${e.code}: ${e.message}`];
-  if (typeof e.status === "number") parts.push(`HTTP ${e.status}`);
-  if (e.traceId) parts.push(`trace ${e.traceId}`);
+function getErrCode(e: unknown): string {
+  if (!isRecord(e)) return "ERROR";
+  if (typeof e.code === "string" && e.code) return e.code;
+  if (isRecord(e.error) && typeof e.error.code === "string" && e.error.code) return e.error.code;
+  return "ERROR";
+}
+
+function getErrMessage(e: unknown): string {
+  if (!isRecord(e)) return "Unexpected error.";
+  if (typeof e.message === "string" && e.message) return e.message;
+  if (isRecord(e.error) && typeof e.error.message === "string" && e.error.message) return e.error.message;
+  return "Unexpected error.";
+}
+
+function getErrTraceId(e: unknown): string | undefined {
+  if (!isRecord(e)) return undefined;
+  if (typeof e.traceId === "string" && e.traceId) return e.traceId;
+  if (isRecord(e.error) && typeof e.error.traceId === "string" && e.error.traceId) return e.error.traceId;
+  return undefined;
+}
+
+function getErrStatus(e: unknown): number | undefined {
+  if (!isRecord(e)) return undefined;
+  if (typeof e.status === "number" && Number.isFinite(e.status)) return e.status;
+  if (isRecord(e.error) && typeof e.error.status === "number" && Number.isFinite(e.error.status)) return e.error.status;
+  return undefined;
+}
+
+function getErrDetails(e: unknown): unknown {
+  if (!isRecord(e)) return null;
+  if ("details" in e) return e.details;
+  if (isRecord(e.error) && "details" in e.error) return e.error.details;
+  return null;
+}
+
+function getDeviceLimitDetails(e: unknown): { activeDevices: number; maxDevices: number } | null {
+  const d = getErrDetails(e);
+  if (!isRecord(d)) return null;
+  const a = d.activeDevices;
+  const m = d.maxDevices;
+  if (typeof a === "number" && Number.isFinite(a) && typeof m === "number" && Number.isFinite(m)) {
+    return { activeDevices: a, maxDevices: m };
+  }
+  return null;
+}
+
+function fmtErr(e: unknown): string {
+  const code = getErrCode(e);
+  const message = getErrMessage(e);
+  const traceId = getErrTraceId(e);
+  const status = getErrStatus(e);
+
+  const parts = [`${code}: ${message}`];
+  if (typeof status === "number") parts.push(`HTTP ${status}`);
+  if (traceId) parts.push(`trace ${traceId}`);
   return parts.join(" · ");
-}
-
-function pickDeviceLimitDetails(res: unknown): { activeDevices?: number; maxDevices?: number } {
-  if (!isRecord(res)) return {};
-
-  let details: unknown = null;
-
-  // adminFetchJson usually normalizes error fields at top-level
-  if (isRecord((res as Record<string, unknown>).details)) details = (res as Record<string, unknown>).details;
-
-  // defensive: some shapes might nest under "error"
-  if (!details && isRecord((res as Record<string, unknown>).error)) {
-    const err = (res as Record<string, unknown>).error as Record<string, unknown>;
-    if (isRecord(err.details)) details = err.details;
-  }
-
-  // defensive: last resort (shouldn't happen)
-  if (!details && isRecord((res as Record<string, unknown>).data)) details = (res as Record<string, unknown>).data;
-
-  if (!isRecord(details)) return {};
-  const d = details as Record<string, unknown>;
-
-  const activeDevices = typeof d.activeDevices === "number" && Number.isFinite(d.activeDevices) ? d.activeDevices : undefined;
-  const maxDevices = typeof d.maxDevices === "number" && Number.isFinite(d.maxDevices) ? d.maxDevices : undefined;
-
-  return { activeDevices, maxDevices };
-}
-
-function deviceLimitMessage(active?: number, max?: number): string {
-  if (typeof active === "number" && typeof max === "number") {
-    return `Maximale Anzahl Geräte erreicht (${active}/${max}). Deaktiviere ein Gerät oder erhöhe Slots.`;
-  }
-  return "Maximale Anzahl Geräte erreicht. Deaktiviere ein Gerät oder erhöhe Slots.";
 }
 
 function effectiveProvisionStatus(row: ProvisionRow): string {
@@ -183,7 +211,7 @@ export default function MobileOpsClient() {
   // Provisioning
   const [provLoading, setProvLoading] = React.useState(true);
   const [provItems, setProvItems] = React.useState<ProvisionRow[]>([]);
-  const [provError, setProvError] = React.useState<ProvisionUiError>(null);
+  const [provError, setProvError] = React.useState<string | null>(null);
 
   // Create Provision Modal
   const [provCreateOpen, setProvCreateOpen] = React.useState(false);
@@ -191,6 +219,7 @@ export default function MobileOpsClient() {
   const [provExpiresMin, setProvExpiresMin] = React.useState<number>(30);
   const [provFormIds, setProvFormIds] = React.useState<Set<string>>(new Set());
   const [provSubmitting, setProvSubmitting] = React.useState(false);
+  const [provCreateError, setProvCreateError] = React.useState<ProvisionCreateErrorState>(null);
 
   const [provOneTimeToken, setProvOneTimeToken] = React.useState<string | null>(null);
   const [provOneTimeMeta, setProvOneTimeMeta] = React.useState<{ prefix?: string; id?: string; expiresAt?: string } | null>(
@@ -252,7 +281,7 @@ export default function MobileOpsClient() {
     const res = await adminFetchJson<unknown>("/api/admin/v1/mobile/provision-tokens?limit=50", { method: "GET" });
     if (!res.ok) {
       setProvItems([]);
-      setProvError({ kind: "GENERIC", message: fmtErr(res) });
+      setProvError(fmtErr(res));
       setProvLoading(false);
       return;
     }
@@ -303,7 +332,7 @@ export default function MobileOpsClient() {
 
     if (!res.ok) {
       // Non-breaking handling: treat 404 as "none"
-      if (res.status === 404) {
+      if ((res as { status?: number }).status === 404) {
         setActiveEvents([]);
         setEventsLoading(false);
         return;
@@ -383,11 +412,11 @@ export default function MobileOpsClient() {
     setProvExpiresMin(30);
     setProvFormIds(new Set());
     setProvSubmitting(false);
+    setProvCreateError(null);
     setProvOneTimeToken(null);
     setProvOneTimeMeta(null);
     setProvOneTimeCopied(false);
     setProvQrDataUrl(null);
-    setProvError(null);
 
     // ensure forms list is available (ACTIVE)
     setShowNonActiveForms(false);
@@ -409,7 +438,7 @@ export default function MobileOpsClient() {
     const formIds = Array.from(provFormIds);
 
     setProvSubmitting(true);
-    setProvError(null);
+    setProvCreateError(null);
     setProvOneTimeToken(null);
     setProvOneTimeMeta(null);
     setProvOneTimeCopied(false);
@@ -427,18 +456,27 @@ export default function MobileOpsClient() {
       });
 
       if (!res.ok) {
-        const code = String((res as unknown as { code?: string }).code || "").toUpperCase();
-        if (res.status === 402 && code === "DEVICE_LIMIT_REACHED") {
-          const { activeDevices, maxDevices } = pickDeviceLimitDetails(res);
-          setProvError({ kind: "LIMIT", activeDevices, maxDevices, traceId: (res as unknown as { traceId?: string }).traceId });
-        } else {
-          setProvError({ kind: "GENERIC", message: fmtErr(res) });
+        const code = getErrCode(res).toUpperCase();
+        if (code === "DEVICE_LIMIT_REACHED") {
+          const lim = getDeviceLimitDetails(res);
+          if (lim) {
+            setProvCreateError({
+              kind: "limit",
+              activeDevices: lim.activeDevices,
+              maxDevices: lim.maxDevices,
+              message: getErrMessage(res) || "Maximale Anzahl Geräte erreicht.",
+              traceId: getErrTraceId(res),
+              status: getErrStatus(res),
+            });
+            return;
+          }
         }
+        setProvCreateError({ kind: "generic", text: fmtErr(res) });
         return;
       }
 
       if (!isRecord(res.data)) {
-        setProvError({ kind: "GENERIC", message: "Unexpected response shape from POST /api/admin/v1/mobile/provision-tokens" });
+        setProvCreateError({ kind: "generic", text: "Unexpected response shape from POST /api/admin/v1/mobile/provision-tokens" });
         return;
       }
 
@@ -457,7 +495,7 @@ export default function MobileOpsClient() {
       }
 
       if (!token) {
-        setProvError({ kind: "GENERIC", message: "Create succeeded, but no one-time token returned by API." });
+        setProvCreateError({ kind: "generic", text: "Create succeeded, but no one-time token returned by API." });
         return;
       }
 
@@ -475,6 +513,7 @@ export default function MobileOpsClient() {
       }
 
       await loadProvisionTokens();
+      await loadDevices(); // refresh devices list too
     } finally {
       setProvSubmitting(false);
     }
@@ -483,7 +522,7 @@ export default function MobileOpsClient() {
   async function onRevokeProvisionToken(id: string) {
     const res = await adminFetchJson<unknown>(`/api/admin/v1/mobile/provision-tokens/${id}/revoke`, { method: "POST" });
     if (!res.ok) {
-      setProvError({ kind: "GENERIC", message: fmtErr(res) });
+      setProvError(fmtErr(res));
       return;
     }
     await loadProvisionTokens();
@@ -718,7 +757,7 @@ export default function MobileOpsClient() {
         body: JSON.stringify({ formIds }),
       });
 
-      if (!res.ok && res.status === 404) {
+      if (!res.ok && (res as { status?: number }).status === 404) {
         res = await adminFetchJson<unknown>(`/api/admin/v1/mobile/devices/${manageDeviceId}/forms`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
@@ -789,24 +828,7 @@ export default function MobileOpsClient() {
           </button>
         </div>
 
-        {provError ? (
-          provError.kind === "LIMIT" ? (
-            <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              <div className="font-medium">Maximale Anzahl Geräte erreicht</div>
-              <div className="mt-1">{deviceLimitMessage(provError.activeDevices, provError.maxDevices)}</div>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <a href="/admin/devices" className="rounded-xl bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800">
-                  Zu Geräten
-                </a>
-                {provError.traceId ? <span className="text-xs text-amber-900/70">trace {provError.traceId}</span> : null}
-              </div>
-            </div>
-          ) : (
-            <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-              {provError.message}
-            </div>
-          )
-        ) : null}
+        {provError ? <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{provError}</div> : null}
 
         <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white">
           <table className="w-full text-left text-sm">
@@ -1019,21 +1041,42 @@ export default function MobileOpsClient() {
               <div className="text-xs text-neutral-600">Klartext Token wird nur 1x angezeigt. Danach nur prefix/hash.</div>
             </div>
 
-            {provError ? (
-              provError.kind === "LIMIT" ? (
-                <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
-                  <div className="text-sm font-medium">Maximale Anzahl Geräte erreicht</div>
-                  <div className="mt-1 text-sm">{deviceLimitMessage(provError.activeDevices, provError.maxDevices)}</div>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <a href="/admin/devices" className="rounded-xl bg-neutral-900 px-3 py-2 text-sm font-medium text-white hover:bg-neutral-800">
+            {provCreateError ? (
+              provCreateError.kind === "limit" ? (
+                <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <div className="text-sm font-medium text-amber-900">Maximale Anzahl Geräte erreicht</div>
+                  <div className="mt-1 text-sm text-amber-900/80">
+                    Aktive Geräte:{" "}
+                    <span className="font-semibold text-amber-950">
+                      {provCreateError.activeDevices} / {provCreateError.maxDevices}
+                    </span>
+                    . Deaktiviere ein Gerät, damit wieder ein Slot frei wird (oder erhöhe Slots via Billing).
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <a
+                      href="/admin/devices"
+                      className="rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"
+                    >
                       Zu Geräten
                     </a>
-                    {provError.traceId ? <span className="text-xs text-amber-900/70">trace {provError.traceId}</span> : null}
+                    <button
+                      type="button"
+                      className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-sm text-amber-900 hover:bg-amber-100/40"
+                      onClick={() => {
+                        void loadDevices();
+                        void loadProvisionTokens();
+                      }}
+                    >
+                      Refresh
+                    </button>
                   </div>
+                  {provCreateError.traceId ? (
+                    <div className="mt-2 text-xs text-amber-900/70">trace {provCreateError.traceId}</div>
+                  ) : null}
                 </div>
               ) : (
-                <div className="mb-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-                  {provError.message}
+                <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                  {provCreateError.text}
                 </div>
               )
             ) : null}
@@ -1061,6 +1104,12 @@ export default function MobileOpsClient() {
                     href={`/admin/demo/provision?token=${encodeURIComponent(provOneTimeToken)}`}
                   >
                     Open Demo Provision
+                  </a>
+                  <a
+                    className="rounded-xl border border-neutral-200 px-3 py-2 text-sm text-neutral-800 hover:bg-neutral-50"
+                    href="/admin/devices"
+                  >
+                    Zu Geräten
                   </a>
                 </div>
 
