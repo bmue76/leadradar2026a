@@ -46,8 +46,6 @@ Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
 - TP 6.6 — Mobile Branding Provider Fix (Error-Shape + Cache-First) → ../teilprojekt-6.6-mobile-branding-provider-fix.md
 - TP 6.7 — Mobile Branding Cleanup (Konsolidierung) → ../teilprojekt-6.7-mobile-branding-cleanup.md
 TP 6.6 — Mobile Branding Provider + Cleanup (nur eine Source of Truth) + Admin Accent Vars soft
-
-
 - TP 6.6 — Setup → Branding Admin Polish (Logo remove + Accent Presets) → ../teilprojekt-6.6-setup-branding-admin-polish.md
-
 - TP 6.7 — Mobile → Branding global (Tabs Accent + Resume Refresh) → ../teilprojekt-6.7-mobile-branding-accent-tabs-resume.md
+- teilprojekt-6.9-mobile-ops-device-slot-limit.md — TP6.9 Mobile Ops: Device Slot Limit (Guard + UX)
