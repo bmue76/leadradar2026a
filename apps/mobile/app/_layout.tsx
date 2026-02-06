@@ -26,13 +26,8 @@ export default function RootLayout() {
             backgroundColor: UI.bg,
             borderTopColor: UI.border,
           },
-          tabBarItemStyle: {
-            flex: 1,
-          },
-          tabBarLabelStyle: {
-            fontSize: 11,
-            fontWeight: "700",
-          },
+          tabBarItemStyle: { flex: 1 },
+          tabBarLabelStyle: { fontSize: 11, fontWeight: "700" },
         }}
       >
         {/* Visible Tabs */}

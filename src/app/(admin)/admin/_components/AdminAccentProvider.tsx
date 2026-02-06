@@ -17,14 +17,14 @@ function isHexColor(s: string | null): s is string {
   return /^#[0-9A-Fa-f]{6}$/.test(s);
 }
 
-function hexToSoftRgba(hex: string, alpha: number): string {
-  // expects #RRGGBB
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  if (!/^#[0-9A-Fa-f]{6}$/.test(hex)) return null;
   const h = hex.replace("#", "");
   const r = parseInt(h.slice(0, 2), 16);
   const g = parseInt(h.slice(2, 4), 16);
   const b = parseInt(h.slice(4, 6), 16);
-  const a = Math.max(0, Math.min(1, alpha));
-  return `rgba(${r}, ${g}, ${b}, ${a})`;
+  if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) return null;
+  return { r, g, b };
 }
 
 function setAccentVars(accent: string | null) {
@@ -34,9 +34,11 @@ function setAccentVars(accent: string | null) {
   const fallback = "#0F172A"; // slate-900
   const value = isHexColor(accent) ? accent.toUpperCase() : fallback;
 
+  const rgb = hexToRgb(value) ?? { r: 15, g: 23, b: 42 };
+  const soft = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.14)`;
+
   root.style.setProperty("--lr-accent", value);
-  // Soft variant (for hover/bg chips etc.)
-  root.style.setProperty("--lr-accent-soft", hexToSoftRgba(value, 0.14));
+  root.style.setProperty("--lr-accent-soft", soft);
 }
 
 export function AdminAccentProvider() {
@@ -58,6 +60,7 @@ export function AdminAccentProvider() {
   }, [refresh]);
 
   useEffect(() => {
+    // Avoid SSR/client drift patterns; schedule refresh async.
     const id = window.setTimeout(() => {
       onUpdated();
     }, 0);

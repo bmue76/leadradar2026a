@@ -14,7 +14,9 @@ export const runtime = "nodejs";
 
 const BRANDING_ROOT_DIR = ".tmp_branding";
 const MAX_LOGO_BYTES = 2 * 1024 * 1024; // 2 MB
-const ALLOWED_MIMES = new Set(["image/png", "image/jpeg", "image/webp"]);
+
+// Allow SVG (with basic safety checks). PNG/JPG/WebP as before.
+const ALLOWED_MIMES = new Set(["image/png", "image/jpeg", "image/webp", "image/svg+xml"]);
 
 type JsonErrorArgs = {
   status: number;
@@ -70,7 +72,7 @@ async function resolveTenantIdFromSession(req: Request): Promise<string> {
   return tenantId;
 }
 
-function extFromMime(mime: string): "png" | "jpg" | "webp" {
+function extFromMime(mime: string): "png" | "jpg" | "webp" | "svg" {
   switch (mime) {
     case "image/png":
       return "png";
@@ -78,6 +80,8 @@ function extFromMime(mime: string): "png" | "jpg" | "webp" {
       return "jpg";
     case "image/webp":
       return "webp";
+    case "image/svg+xml":
+      return "svg";
     default:
       return "png";
   }
@@ -85,6 +89,32 @@ function extFromMime(mime: string): "png" | "jpg" | "webp" {
 
 function etagFrom(sizeBytes: number, mtimeMs: number): string {
   return `W/"${sizeBytes}-${Math.floor(mtimeMs)}"`;
+}
+
+function securityHeadersForLogo(mime: string): Record<string, string> {
+  const base: Record<string, string> = {
+    "X-Content-Type-Options": "nosniff",
+    "Cross-Origin-Resource-Policy": "same-origin",
+  };
+
+  // Extra hardening for SVG.
+  if (mime === "image/svg+xml") {
+    base["Content-Security-Policy"] = "default-src 'none'; style-src 'none'; script-src 'none'; sandbox";
+  }
+
+  return base;
+}
+
+// Basic SVG guard: reject common active content vectors.
+// (Not a full sanitizer, but good MVP hardening.)
+function assertSvgIsSafe(bytes: Uint8Array) {
+  const text = Buffer.from(bytes).toString("utf8");
+
+  // Block scripts + foreignObject + event handlers + javascript: links
+  if (/<script[\s>]/i.test(text)) throw new Error("SVG_UNSAFE");
+  if (/<foreignObject[\s>]/i.test(text)) throw new Error("SVG_UNSAFE");
+  if (/\son\w+\s*=/i.test(text)) throw new Error("SVG_UNSAFE");
+  if (/javascript:/i.test(text)) throw new Error("SVG_UNSAFE");
 }
 
 async function checkHasLogo(tenantId: string): Promise<{ absPath: string; mime: string; etag: string } | null> {
@@ -126,6 +156,7 @@ export async function HEAD(req: Request): Promise<Response> {
       "Cache-Control": "private, max-age=3600",
       ETag: found.etag,
       "Content-Type": found.mime,
+      ...securityHeadersForLogo(found.mime),
     },
   });
 }
@@ -152,6 +183,7 @@ export async function GET(req: Request): Promise<Response> {
         "x-trace-id": makeTraceId(),
         "Cache-Control": "private, max-age=3600",
         ETag: found.etag,
+        ...securityHeadersForLogo(found.mime),
       },
     });
   }
@@ -165,6 +197,7 @@ export async function GET(req: Request): Promise<Response> {
       "Content-Type": found.mime,
       "Cache-Control": "private, max-age=3600",
       ETag: found.etag,
+      ...securityHeadersForLogo(found.mime),
     },
   });
 }
@@ -196,7 +229,7 @@ export async function POST(req: Request): Promise<Response> {
     return jsonError({
       status: 400,
       code: "INVALID_FILE_TYPE",
-      message: "Unsupported file type. Allowed: PNG, JPG, WebP.",
+      message: "Unsupported file type. Allowed: PNG, JPG, WebP, SVG.",
       details: { mime },
     });
   }
@@ -220,6 +253,18 @@ export async function POST(req: Request): Promise<Response> {
 
   // NO image transformation!
   const bytes = new Uint8Array(await file.arrayBuffer());
+
+  if (mime === "image/svg+xml") {
+    try {
+      assertSvgIsSafe(bytes);
+    } catch {
+      return jsonError({
+        status: 400,
+        code: "INVALID_SVG",
+        message: "SVG enthält potentiell unsichere Inhalte (script/handlers/foreignObject). Bitte als PNG exportieren.",
+      });
+    }
+  }
 
   const stored = await putBinaryFile({
     rootDirName: BRANDING_ROOT_DIR,
