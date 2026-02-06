@@ -42,23 +42,10 @@ type FormListItem = { id: string; name: string; status: string; description?: st
 // TP 3.9 — Active Event (single source: /events/active)
 type EventListItem = { id: string; name: string; status: string; startsAt?: string | null; endsAt?: string | null };
 
-type ProvError =
-  | {
-      kind: "LIMIT";
-      code: string;
-      message: string;
-      traceId?: string;
-      status?: number;
-      activeDevices?: number;
-      maxDevices?: number;
-    }
-  | {
-      kind: "GENERIC";
-      code: string;
-      message: string;
-      traceId?: string;
-      status?: number;
-    };
+type ProvisionUiError =
+  | null
+  | { kind: "LIMIT"; activeDevices?: number; maxDevices?: number; traceId?: string }
+  | { kind: "GENERIC"; message: string };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -150,56 +137,37 @@ function fmtErr(e: { code: string; message: string; traceId?: string; status?: n
   return parts.join(" · ");
 }
 
-function extractDeviceLimitDetails(details: unknown): { activeDevices: number; maxDevices: number } | null {
-  if (!isRecord(details)) return null;
-  const a = details.activeDevices;
-  const m = details.maxDevices;
-  if (typeof a === "number" && typeof m === "number") return { activeDevices: a, maxDevices: m };
-  return null;
-}
+function pickDeviceLimitDetails(res: unknown): { activeDevices?: number; maxDevices?: number } {
+  if (!isRecord(res)) return {};
 
-function toProvError(res: unknown): ProvError {
-  // adminFetchJson usually returns a consistent shape, but we stay defensive.
-  const r = isRecord(res) ? (res as Record<string, unknown>) : {};
+  let details: unknown = null;
 
-  const code = typeof r.code === "string" ? r.code : "ERROR";
-  const message = typeof r.message === "string" ? r.message : "Request failed.";
-  const traceId = typeof r.traceId === "string" ? r.traceId : undefined;
-  const status = typeof r.status === "number" ? r.status : undefined;
+  // adminFetchJson usually normalizes error fields at top-level
+  if (isRecord((res as Record<string, unknown>).details)) details = (res as Record<string, unknown>).details;
 
-  const details = "details" in r ? (r.details as unknown) : undefined;
-  const nestedDetails =
-    isRecord(r.error) && "details" in r.error ? ((r.error as Record<string, unknown>).details as unknown) : undefined;
-
-  const limit = extractDeviceLimitDetails(details ?? nestedDetails);
-
-  if (String(code).toUpperCase() === "DEVICE_LIMIT_REACHED") {
-    const activeDevices = limit?.activeDevices;
-    const maxDevices = limit?.maxDevices;
-
-    const pretty =
-      typeof activeDevices === "number" && typeof maxDevices === "number"
-        ? `Maximale Anzahl Geräte erreicht (${activeDevices}/${maxDevices}). Deaktiviere ein Gerät oder erhöhe Slots.`
-        : `Maximale Anzahl Geräte erreicht. Deaktiviere ein Gerät oder erhöhe Slots.`;
-
-    return {
-      kind: "LIMIT",
-      code,
-      message: pretty,
-      traceId,
-      status,
-      activeDevices,
-      maxDevices,
-    };
+  // defensive: some shapes might nest under "error"
+  if (!details && isRecord((res as Record<string, unknown>).error)) {
+    const err = (res as Record<string, unknown>).error as Record<string, unknown>;
+    if (isRecord(err.details)) details = err.details;
   }
 
-  return {
-    kind: "GENERIC",
-    code,
-    message: fmtErr({ code, message, traceId, status }),
-    traceId,
-    status,
-  };
+  // defensive: last resort (shouldn't happen)
+  if (!details && isRecord((res as Record<string, unknown>).data)) details = (res as Record<string, unknown>).data;
+
+  if (!isRecord(details)) return {};
+  const d = details as Record<string, unknown>;
+
+  const activeDevices = typeof d.activeDevices === "number" && Number.isFinite(d.activeDevices) ? d.activeDevices : undefined;
+  const maxDevices = typeof d.maxDevices === "number" && Number.isFinite(d.maxDevices) ? d.maxDevices : undefined;
+
+  return { activeDevices, maxDevices };
+}
+
+function deviceLimitMessage(active?: number, max?: number): string {
+  if (typeof active === "number" && typeof max === "number") {
+    return `Maximale Anzahl Geräte erreicht (${active}/${max}). Deaktiviere ein Gerät oder erhöhe Slots.`;
+  }
+  return "Maximale Anzahl Geräte erreicht. Deaktiviere ein Gerät oder erhöhe Slots.";
 }
 
 function effectiveProvisionStatus(row: ProvisionRow): string {
@@ -215,7 +183,7 @@ export default function MobileOpsClient() {
   // Provisioning
   const [provLoading, setProvLoading] = React.useState(true);
   const [provItems, setProvItems] = React.useState<ProvisionRow[]>([]);
-  const [provError, setProvError] = React.useState<ProvError | null>(null);
+  const [provError, setProvError] = React.useState<ProvisionUiError>(null);
 
   // Create Provision Modal
   const [provCreateOpen, setProvCreateOpen] = React.useState(false);
@@ -284,7 +252,7 @@ export default function MobileOpsClient() {
     const res = await adminFetchJson<unknown>("/api/admin/v1/mobile/provision-tokens?limit=50", { method: "GET" });
     if (!res.ok) {
       setProvItems([]);
-      setProvError(toProvError(res));
+      setProvError({ kind: "GENERIC", message: fmtErr(res) });
       setProvLoading(false);
       return;
     }
@@ -459,12 +427,18 @@ export default function MobileOpsClient() {
       });
 
       if (!res.ok) {
-        setProvError(toProvError(res));
+        const code = String((res as unknown as { code?: string }).code || "").toUpperCase();
+        if (res.status === 402 && code === "DEVICE_LIMIT_REACHED") {
+          const { activeDevices, maxDevices } = pickDeviceLimitDetails(res);
+          setProvError({ kind: "LIMIT", activeDevices, maxDevices, traceId: (res as unknown as { traceId?: string }).traceId });
+        } else {
+          setProvError({ kind: "GENERIC", message: fmtErr(res) });
+        }
         return;
       }
 
       if (!isRecord(res.data)) {
-        setProvError({ kind: "GENERIC", code: "BAD_RESPONSE", message: "Unexpected response shape from POST /api/admin/v1/mobile/provision-tokens" });
+        setProvError({ kind: "GENERIC", message: "Unexpected response shape from POST /api/admin/v1/mobile/provision-tokens" });
         return;
       }
 
@@ -483,7 +457,7 @@ export default function MobileOpsClient() {
       }
 
       if (!token) {
-        setProvError({ kind: "GENERIC", code: "MISSING_TOKEN", message: "Create succeeded, but no one-time token returned by API." });
+        setProvError({ kind: "GENERIC", message: "Create succeeded, but no one-time token returned by API." });
         return;
       }
 
@@ -509,7 +483,7 @@ export default function MobileOpsClient() {
   async function onRevokeProvisionToken(id: string) {
     const res = await adminFetchJson<unknown>(`/api/admin/v1/mobile/provision-tokens/${id}/revoke`, { method: "POST" });
     if (!res.ok) {
-      setProvError(toProvError(res));
+      setProvError({ kind: "GENERIC", message: fmtErr(res) });
       return;
     }
     await loadProvisionTokens();
@@ -816,21 +790,22 @@ export default function MobileOpsClient() {
         </div>
 
         {provError ? (
-          <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2">
-            <div className="text-sm font-medium text-red-900">{provError.message}</div>
-            {provError.traceId ? <div className="mt-1 text-xs text-red-900/70">TraceId: {provError.traceId}</div> : null}
-            {provError.kind === "LIMIT" ? (
+          provError.kind === "LIMIT" ? (
+            <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <div className="font-medium">Maximale Anzahl Geräte erreicht</div>
+              <div className="mt-1">{deviceLimitMessage(provError.activeDevices, provError.maxDevices)}</div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <a
-                  href="/admin/devices"
-                  className="rounded-xl border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-900 hover:bg-red-50"
-                >
+                <a href="/admin/devices" className="rounded-xl bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800">
                   Zu Geräten
                 </a>
-                <span className="text-xs text-red-900/70">Gerät deaktivieren → Slot wird frei.</span>
+                {provError.traceId ? <span className="text-xs text-amber-900/70">trace {provError.traceId}</span> : null}
               </div>
-            ) : null}
-          </div>
+            </div>
+          ) : (
+            <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {provError.message}
+            </div>
+          )
         ) : null}
 
         <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white">
@@ -1045,21 +1020,22 @@ export default function MobileOpsClient() {
             </div>
 
             {provError ? (
-              <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2">
-                <div className="text-sm font-medium text-red-900">{provError.message}</div>
-                {provError.traceId ? <div className="mt-1 text-xs text-red-900/70">TraceId: {provError.traceId}</div> : null}
-                {provError.kind === "LIMIT" ? (
+              provError.kind === "LIMIT" ? (
+                <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
+                  <div className="text-sm font-medium">Maximale Anzahl Geräte erreicht</div>
+                  <div className="mt-1 text-sm">{deviceLimitMessage(provError.activeDevices, provError.maxDevices)}</div>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <a
-                      href="/admin/devices"
-                      className="rounded-xl border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-900 hover:bg-red-50"
-                    >
+                    <a href="/admin/devices" className="rounded-xl bg-neutral-900 px-3 py-2 text-sm font-medium text-white hover:bg-neutral-800">
                       Zu Geräten
                     </a>
-                    <span className="text-xs text-red-900/70">Gerät deaktivieren → Slot wird frei.</span>
+                    {provError.traceId ? <span className="text-xs text-amber-900/70">trace {provError.traceId}</span> : null}
                   </div>
-                ) : null}
-              </div>
+                </div>
+              ) : (
+                <div className="mb-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+                  {provError.message}
+                </div>
+              )
             ) : null}
 
             {provOneTimeToken ? (
