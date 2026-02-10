@@ -21,8 +21,9 @@ export default function Page() {
       <header className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">Formulare</h1>
         <p className="mt-1 text-sm text-slate-600">
-          Erstelle Formulare und weise sie dem aktiven Event zu. Mobile zeigt nur{" "}
-          <span className="font-semibold">ACTIVE</span> Formulare, die dem aktiven Event zugewiesen sind.
+          Bereite dein Messeformular vor. Damit es in der App erscheint, muss es{" "}
+          <span className="font-semibold">Aktiv</span> sein und dem <span className="font-semibold">aktiven Event</span>{" "}
+          zugewiesen werden.
         </p>
       </header>
 

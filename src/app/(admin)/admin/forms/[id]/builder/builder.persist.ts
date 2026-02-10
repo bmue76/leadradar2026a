@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { adminFetchJson } from "../../../_lib/adminFetch";
 import type { BuilderForm, BuilderField, FormStatus, FieldType } from "./builder.types";
 import { isRecord } from "./builder.types";

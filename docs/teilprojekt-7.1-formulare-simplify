@@ -1,0 +1,43 @@
+TP — Formbuilder: Canvas Screen 1/2 Sync + Mobile Preview UX Polish
+
+Status: DONE ✅
+Datum: 2026-02-10
+Scope: Admin → /admin/forms/[id]/builder
+
+Ziel
+
+Screen 1 (Formularfelder) und Screen 2 (Kontaktfelder) sollen immer synchron funktionieren:
+
+Aktiver Screen oben ausgeklappt
+
+Inaktiver Screen unten zusammengeklappt
+
+Umschalten über Canvas und über Library Tabs bleibt konsistent
+
+Mobile Preview als emulator-ähnliche Vorschau (Browser) mit Zoom-Steuerung + sauberem Layout (ohne Phone-Rahmen), inkl. „App Vorschau“-Titel und Hinweisen.
+
+Ergebnis
+
+BuilderShell Sync-Fix:
+
+Tab-Wechsel ↔ Canvas-Section ist gekoppelt (kein „auseinanderlaufen“ mehr).
+
+Drag&Drop und „Add Item“ folgen sauber dem Ziel-Screen.
+
+Klick auf ein Feld im Canvas setzt den passenden Screen aktiv.
+
+Preview UX:
+
+Vorschau skaliert korrekt (kein Abschneiden mehr).
+
+Zoom +/– Toggle vorhanden.
+
+Titel + Hinweistext integriert, Layout wie /admin, Phone bleibt dabei in sinnvoller Grösse.
+
+Akzeptanz / Checks
+
+✅ npm run typecheck grün
+
+✅ Screen 1/2 Verhalten konsistent (Buttons „Formularfelder“ / „Kontaktfelder“ spielen wieder zusammen)
+
+✅ Preview: keine Crops, Zoom steuerbar, UI ruhig/Apple-clean

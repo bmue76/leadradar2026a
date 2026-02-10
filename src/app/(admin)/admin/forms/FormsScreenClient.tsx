@@ -10,12 +10,17 @@ type ApiOk<T> = { ok: true; data: T; traceId: string };
 type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
 type ApiResp<T> = ApiOk<T> | ApiErr;
 
-type ActiveEventApi = {
-  item: null | {
-    id: string;
-    name: string;
-    status: "ACTIVE" | "DRAFT" | "ARCHIVED";
-  };
+type ActiveEvent = null | { id: string; name: string };
+
+type ReadinessState = "NO_ACTIVE_EVENT" | "NO_ASSIGNED_FORM" | "ASSIGNED_BUT_INACTIVE" | "READY" | "READY_MULTI";
+
+type Readiness = {
+  state: ReadinessState;
+  headline: string;
+  text: string;
+  primary: { label: string; href: string };
+  recommendedFormId?: string | null;
+  activeAssignedCount?: number;
 };
 
 type FormListItem = {
@@ -28,6 +33,8 @@ type FormListItem = {
 };
 
 type FormsListApi = {
+  activeEvent: ActiveEvent;
+  readiness?: Readiness;
   items?: FormListItem[];
   forms?: FormListItem[]; // backward compat
 };
@@ -214,11 +221,81 @@ function DrawerShell({
   );
 }
 
+function ReadyCard(props: {
+  activeEvent: ActiveEvent;
+  readiness: Readiness | null;
+  onPrimary: () => void;
+  onOpenTemplates: () => void;
+  onOpenEvents: () => void;
+  onOpenDevices: () => void;
+}) {
+  const evName = props.activeEvent?.name ?? null;
+  const r = props.readiness;
+
+  const badge = (() => {
+    const base = "inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold";
+    if (!r) return `${base} border-slate-200 bg-slate-50 text-slate-700`;
+    if (r.state === "READY" || r.state === "READY_MULTI")
+      return `${base} border-emerald-200 bg-emerald-50 text-emerald-800`;
+    if (r.state === "ASSIGNED_BUT_INACTIVE") return `${base} border-amber-200 bg-amber-50 text-amber-900`;
+    return `${base} border-slate-200 bg-slate-50 text-slate-700`;
+  })();
+
+  const badgeText = (() => {
+    if (!r) return "Status";
+    if (r.state === "READY") return "Bereit";
+    if (r.state === "READY_MULTI") return "Bereit (mehrere)";
+    if (r.state === "ASSIGNED_BUT_INACTIVE") return "Fast bereit";
+    if (r.state === "NO_ASSIGNED_FORM") return "Aktion nötig";
+    if (r.state === "NO_ACTIVE_EVENT") return "Aktion nötig";
+    return "Status";
+  })();
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <div className="text-sm font-semibold text-slate-900">Bereit für die Messe</div>
+            <span className={badge}>{badgeText}</span>
+          </div>
+
+          <div className="mt-2 text-lg font-semibold text-slate-900">{r?.headline ?? "Status wird geladen…"}</div>
+
+          <div className="mt-1 text-sm text-slate-600">{r?.text ?? "Bitte kurz warten."}</div>
+
+          <div className="mt-2 text-xs text-slate-500">
+            Aktives Event: <span className="font-semibold text-slate-700">{evName ? evName : "—"}</span>
+          </div>
+        </div>
+
+        <div className="flex flex-col items-stretch gap-2">
+          <Button label={r?.primary?.label ?? "…"} kind="primary" disabled={!r?.primary?.href} onClick={props.onPrimary} />
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button type="button" className="text-xs font-medium text-slate-500 hover:text-slate-900" onClick={props.onOpenTemplates}>
+              Vorlagen
+            </button>
+            <span className="text-xs text-slate-300">•</span>
+            <button type="button" className="text-xs font-medium text-slate-500 hover:text-slate-900" onClick={props.onOpenEvents}>
+              Events
+            </button>
+            <span className="text-xs text-slate-300">•</span>
+            <button type="button" className="text-xs font-medium text-slate-500 hover:text-slate-900" onClick={props.onOpenDevices}>
+              Geräte
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function FormsScreenClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const [activeEvent, setActiveEvent] = useState<ActiveEventApi["item"]>(null);
+  const [activeEvent, setActiveEvent] = useState<ActiveEvent>(null);
+  const [readiness, setReadiness] = useState<Readiness | null>(null);
 
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<"ALL" | FormStatus>("ALL");
@@ -262,17 +339,6 @@ export function FormsScreenClient() {
     return `/api/admin/v1/forms?${sp.toString()}`;
   }, [q, status, sort, dir]);
 
-  const loadActiveEvent = useCallback(async () => {
-    try {
-      const res = await fetch("/api/admin/v1/events/active", { method: "GET", cache: "no-store" });
-      const json = (await res.json()) as ApiResp<ActiveEventApi>;
-      if (json.ok) setActiveEvent(json.data.item);
-      else setActiveEvent(null);
-    } catch {
-      setActiveEvent(null);
-    }
-  }, []);
-
   const loadList = useCallback(async () => {
     setLoadingList(true);
     setListError(null);
@@ -299,6 +365,9 @@ export function FormsScreenClient() {
         return;
       }
 
+      setActiveEvent((json.data.activeEvent ?? null) as ActiveEvent);
+      setReadiness((json.data.readiness ?? null) as Readiness | null);
+
       const list = (json.data.items ?? json.data.forms ?? []) as FormListItem[];
       setItems(Array.isArray(list) ? list : []);
       setLoadingList(false);
@@ -310,8 +379,8 @@ export function FormsScreenClient() {
   }, [buildListUrl]);
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([loadActiveEvent(), loadList()]);
-  }, [loadActiveEvent, loadList]);
+    await loadList();
+  }, [loadList]);
 
   useEffect(() => {
     const t = setTimeout(() => void refreshAll(), 0);
@@ -336,8 +405,6 @@ export function FormsScreenClient() {
     setLoadingDetail(false);
   }, []);
 
-  // Auto-open from redirect: /admin/forms?open=FORM_ID
-  // Lint rule: avoid synchronous setState inside effect -> defer with setTimeout + useRef.
   useEffect(() => {
     if (autoOpenConsumedRef.current) return;
     const openId = searchParams.get("open");
@@ -470,7 +537,7 @@ export function FormsScreenClient() {
 
     try {
       const res = await fetch(`/api/admin/v1/forms/${detail.id}/duplicate`, { method: "POST" });
-      const json = (await res.json()) as ApiResp<{ id: string }>;
+      const json = (await res.json()) as ApiResp<{ item: { id: string } }>;
 
       if (!json || typeof json !== "object") {
         setDetailError({ message: "Ungültige Serverantwort." });
@@ -486,12 +553,51 @@ export function FormsScreenClient() {
         return;
       }
 
+      const newId = String(json.data.item?.id ?? "");
+      if (!newId) {
+        setDetailError({ message: "Duplizieren fehlgeschlagen (keine ID erhalten)." });
+        return;
+      }
+
       await loadList();
-      openDrawer(String(json.data.id));
+      openDrawer(newId);
     } catch {
       setDetailError({ message: "Duplizieren fehlgeschlagen. Bitte erneut versuchen." });
     }
   }, [detail, loadList, openDrawer]);
+
+  const onDelete = useCallback(async () => {
+    if (!detail) return;
+
+    const ok = window.confirm('Formular wirklich löschen?\n\nHinweis: Felder werden ebenfalls gelöscht.');
+    if (!ok) return;
+
+    setDetailError(null);
+
+    try {
+      const res = await fetch(`/api/admin/v1/forms/${detail.id}/delete`, { method: "POST" });
+      const json = (await res.json()) as ApiResp<{ deleted: boolean }>;
+
+      if (!json || typeof json !== "object") {
+        setDetailError({ message: "Ungültige Serverantwort." });
+        return;
+      }
+
+      if (!json.ok) {
+        setDetailError({
+          message: json.error?.message || "Löschen fehlgeschlagen.",
+          code: json.error?.code,
+          traceId: json.traceId,
+        });
+        return;
+      }
+
+      await loadList();
+      closeDrawer();
+    } catch {
+      setDetailError({ message: "Löschen fehlgeschlagen. Bitte erneut versuchen." });
+    }
+  }, [detail, loadList, closeDrawer]);
 
   const onOpenBuilder = useCallback(() => {
     if (!detail) return;
@@ -503,8 +609,16 @@ export function FormsScreenClient() {
     router.push(`/admin/forms/${detail.id}/builder?mode=preview`);
   }, [detail, router]);
 
-  const onCreateNew = useCallback(() => {
+  const onOpenTemplates = useCallback(() => {
     router.push("/admin/templates?intent=create");
+  }, [router]);
+
+  const onOpenEvents = useCallback(() => {
+    router.push("/admin/events");
+  }, [router]);
+
+  const onOpenDevices = useCallback(() => {
+    router.push("/admin/devices");
   }, [router]);
 
   const reset = useCallback(() => {
@@ -522,276 +636,287 @@ export function FormsScreenClient() {
   );
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white">
-      {/* Toolbar (SumUp-clean) */}
-      <div className="p-5">
-        <div className="flex flex-wrap items-center gap-3">
-          <StatusPills value={status} onChange={setStatus} />
+    <div className="space-y-4">
+      <ReadyCard
+        activeEvent={activeEvent}
+        readiness={readiness}
+        onPrimary={() => {
+          const href = readiness?.primary?.href;
+          if (href) router.push(href);
+        }}
+        onOpenTemplates={onOpenTemplates}
+        onOpenEvents={onOpenEvents}
+        onOpenDevices={onOpenDevices}
+      />
 
-          {isDirty ? (
-            <button
-              type="button"
-              className="text-sm font-medium text-slate-500 hover:text-slate-900"
-              onClick={reset}
-            >
-              Zurücksetzen
-            </button>
-          ) : null}
+      <section className="rounded-2xl border border-slate-200 bg-white">
+        <div className="p-5">
+          <div className="flex flex-wrap items-center gap-3">
+            <StatusPills value={status} onChange={setStatus} />
 
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            <Input value={q} onChange={setQ} placeholder="Suchen…" />
-            <IconButton title="Aktualisieren" onClick={() => void refreshAll()} />
-            <Button label="Neues Formular" kind="primary" onClick={onCreateNew} />
+            {isDirty ? (
+              <button type="button" className="text-sm font-medium text-slate-500 hover:text-slate-900" onClick={reset}>
+                Zurücksetzen
+              </button>
+            ) : null}
+
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <Input value={q} onChange={setQ} placeholder="Suchen…" />
+              <IconButton title="Aktualisieren" onClick={() => void refreshAll()} />
+            </div>
+          </div>
+
+          <div className="mt-3 flex items-center justify-between">
+            <div className="text-sm text-slate-500">{countLabel}</div>
+
+            <div className="hidden md:flex items-center gap-2">
+              <div className="text-sm text-slate-500">Sortieren</div>
+              <Select value={sortOpt} onChange={(v) => setSortOpt(v as SortOption)} ariaLabel="Sortieren">
+                <option value="UPDATED_DESC">Aktualisiert</option>
+                <option value="UPDATED_ASC">Aktualisiert (älteste)</option>
+                <option value="NAME_ASC">Name (A–Z)</option>
+                <option value="NAME_DESC">Name (Z–A)</option>
+              </Select>
+            </div>
           </div>
         </div>
 
-        <div className="mt-3 flex items-center justify-between">
-          <div className="text-sm text-slate-500">{countLabel}</div>
+        <div className="h-px w-full bg-slate-200" />
 
-          <div className="hidden md:flex items-center gap-2">
-            <div className="text-sm text-slate-500">Sortieren</div>
-            <Select value={sortOpt} onChange={(v) => setSortOpt(v as SortOption)} ariaLabel="Sortieren">
-              <option value="UPDATED_DESC">Aktualisiert</option>
-              <option value="UPDATED_ASC">Aktualisiert (älteste)</option>
-              <option value="NAME_ASC">Name (A–Z)</option>
-              <option value="NAME_DESC">Name (Z–A)</option>
-            </Select>
-          </div>
-        </div>
-      </div>
+        <div className="w-full overflow-hidden">
+          <table className="w-full table-auto">
+            <thead>
+              <tr className="text-left text-xs font-semibold text-slate-600">
+                <th className="px-5 py-3">Name</th>
+                <th className="px-5 py-3">Status</th>
+                <th className="px-5 py-3">Zuweisung</th>
+                <th className="hidden md:table-cell px-5 py-3">Aktualisiert</th>
+                <th className="w-12 px-2 py-3" aria-label="Aktionen" />
+              </tr>
+            </thead>
 
-      <div className="h-px w-full bg-slate-200" />
-
-      {/* Table (no scrollbar) */}
-      <div className="w-full overflow-hidden">
-        <table className="w-full table-auto">
-          <thead>
-            <tr className="text-left text-xs font-semibold text-slate-600">
-              <th className="px-5 py-3">Name</th>
-              <th className="px-5 py-3">Status</th>
-              <th className="px-5 py-3">Zuweisung</th>
-              <th className="hidden md:table-cell px-5 py-3">Aktualisiert</th>
-              <th className="w-12 px-2 py-3" aria-label="Aktionen" />
-            </tr>
-          </thead>
-
-          <tbody className="divide-y divide-slate-100">
-            {loadingList ? (
-              Array.from({ length: 6 }).map((_, i) => (
-                <tr key={`sk_${i}`} className="animate-pulse">
-                  <td className="px-5 py-4">
-                    <div className="h-4 w-3/4 rounded bg-slate-100" />
-                  </td>
-                  <td className="px-5 py-4">
-                    <div className="h-6 w-24 rounded-full bg-slate-100" />
-                  </td>
-                  <td className="px-5 py-4">
-                    <div className="h-4 w-32 rounded bg-slate-100" />
-                  </td>
-                  <td className="hidden md:table-cell px-5 py-4">
-                    <div className="h-4 w-28 rounded bg-slate-100" />
-                  </td>
-                  <td className="px-2 py-4">
-                    <div className="h-6 w-6 rounded bg-slate-100" />
+            <tbody className="divide-y divide-slate-100">
+              {loadingList ? (
+                Array.from({ length: 6 }).map((_, i) => (
+                  <tr key={`sk_${i}`} className="animate-pulse">
+                    <td className="px-5 py-4">
+                      <div className="h-4 w-3/4 rounded bg-slate-100" />
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="h-6 w-24 rounded-full bg-slate-100" />
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="h-4 w-32 rounded bg-slate-100" />
+                    </td>
+                    <td className="hidden md:table-cell px-5 py-4">
+                      <div className="h-4 w-28 rounded bg-slate-100" />
+                    </td>
+                    <td className="px-2 py-4">
+                      <div className="h-6 w-6 rounded bg-slate-100" />
+                    </td>
+                  </tr>
+                ))
+              ) : listError ? (
+                <tr>
+                  <td colSpan={5} className="px-5 py-6">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="text-sm font-semibold text-slate-900">Konnte nicht laden</div>
+                      <div className="mt-1 text-sm text-slate-600">{listError.message}</div>
+                      {listError.code || listError.traceId ? (
+                        <div className="mt-2 text-xs text-slate-500">
+                          {listError.code ? `Code: ${listError.code}` : null}
+                          {listError.code && listError.traceId ? " • " : null}
+                          {listError.traceId ? `Trace: ${listError.traceId}` : null}
+                        </div>
+                      ) : null}
+                      <div className="mt-3">
+                        <Button label="Erneut versuchen" kind="secondary" onClick={() => void refreshAll()} />
+                      </div>
+                    </div>
                   </td>
                 </tr>
-              ))
-            ) : listError ? (
-              <tr>
-                <td colSpan={5} className="px-5 py-6">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="text-sm font-semibold text-slate-900">Konnte nicht laden</div>
-                    <div className="mt-1 text-sm text-slate-600">{listError.message}</div>
-                    {(listError.code || listError.traceId) ? (
-                      <div className="mt-2 text-xs text-slate-500">
-                        {listError.code ? `Code: ${listError.code}` : null}
-                        {listError.code && listError.traceId ? " • " : null}
-                        {listError.traceId ? `Trace: ${listError.traceId}` : null}
-                      </div>
-                    ) : null}
+              ) : items.length <= 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-5 py-10">
+                    <div className="text-sm font-semibold text-slate-900">Keine Formulare</div>
+                    <div className="mt-1 text-sm text-slate-600">Starte mit einer Vorlage oder erstelle ein neues Formular.</div>
                     <div className="mt-3">
-                      <Button label="Erneut versuchen" kind="secondary" onClick={() => void refreshAll()} />
+                      <Button label="Formular vorbereiten" kind="secondary" onClick={onOpenTemplates} />
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                items.map((it) => (
+                  <tr key={it.id} className="cursor-pointer hover:bg-slate-50" onClick={() => openDrawer(it.id)}>
+                    <td className="px-5 py-4">
+                      <div className="truncate text-sm font-semibold text-slate-900">{it.name}</div>
+                    </td>
+
+                    <td className="px-5 py-4">
+                      <span className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold ${statusPillClasses(it.status)}`}>
+                        {statusLabel(it.status)}
+                      </span>
+                    </td>
+
+                    <td className="px-5 py-4">
+                      <div className="truncate text-sm text-slate-700">{assignedLabelForRow(it)}</div>
+                    </td>
+
+                    <td className="hidden md:table-cell px-5 py-4">
+                      <div className="truncate text-sm text-slate-700">{fmtDateTime(it.updatedAt)}</div>
+                    </td>
+
+                    <td className="px-2 py-4">
+                      <button
+                        type="button"
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                        aria-label="Details öffnen"
+                        title="Details öffnen"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openDrawer(it.id);
+                        }}
+                      >
+                        ⋯
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+
+          <div className="px-5 py-4 text-xs text-slate-500">
+            In der App sichtbar: <span className="font-semibold text-slate-700">Aktiv</span> + dem{" "}
+            <span className="font-semibold text-slate-700">aktiven Event</span> zugewiesen.
+          </div>
+        </div>
+
+        <DrawerShell open={drawerOpen} title={detail?.name ?? "Formular"} onClose={closeDrawer}>
+          {loadingDetail ? (
+            <div className="space-y-3">
+              <div className="h-6 w-2/3 rounded bg-slate-100 animate-pulse" />
+              <div className="h-4 w-full rounded bg-slate-100 animate-pulse" />
+              <div className="h-4 w-5/6 rounded bg-slate-100 animate-pulse" />
+              <div className="h-10 w-40 rounded bg-slate-100 animate-pulse" />
+            </div>
+          ) : !detail ? (
+            detailError ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm font-semibold text-slate-900">Konnte nicht laden</div>
+                <div className="mt-1 text-sm text-slate-600">{detailError.message}</div>
+                {detailError.code || detailError.traceId ? (
+                  <div className="mt-2 text-xs text-slate-500">
+                    {detailError.code ? `Code: ${detailError.code}` : null}
+                    {detailError.code && detailError.traceId ? " • " : null}
+                    {detailError.traceId ? `Trace: ${detailError.traceId}` : null}
+                  </div>
+                ) : null}
+                <div className="mt-3 flex gap-2">
+                  <Button
+                    label="Erneut versuchen"
+                    kind="secondary"
+                    onClick={() => {
+                      if (selectedId) void loadDetail(selectedId);
+                    }}
+                  />
+                  <Button label="Schliessen" kind="ghost" onClick={closeDrawer} />
+                </div>
+              </div>
+            ) : (
+              <div className="text-sm text-slate-600">Kein Formular ausgewählt.</div>
+            )
+          ) : (
+            <div className="space-y-5">
+              <div>
+                <div className="text-xs font-semibold text-slate-600">Status</div>
+                <div className="mt-2">
+                  <Select value={detail.status} onChange={(v) => void onChangeStatus(v as FormStatus)} ariaLabel="Status ändern">
+                    <option value="DRAFT">Entwurf</option>
+                    <option value="ACTIVE">Aktiv</option>
+                    <option value="ARCHIVED">Archiviert</option>
+                  </Select>
+                </div>
+                <div className="mt-2 text-xs text-slate-500">
+                  In der App sichtbar: <span className="font-semibold text-slate-700">Aktiv</span> + zugewiesen.
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-slate-900">
+                      Für das aktive Event sichtbar{" "}
+                      <span className="text-slate-500">({activeEventName ? activeEventName : "kein aktives Event"})</span>
+                    </div>
+                    <div className="mt-1 text-sm text-slate-600">
+                      Wenn das Formular zugewiesen ist, erscheint es (bei Status „Aktiv“) in der App.
                     </div>
                   </div>
-                </td>
-              </tr>
-            ) : items.length <= 0 ? (
-              <tr>
-                <td colSpan={5} className="px-5 py-10">
-                  <div className="text-sm font-semibold text-slate-900">Keine Formulare</div>
-                  <div className="mt-1 text-sm text-slate-600">Passe Filter an oder erstelle ein neues Formular.</div>
-                </td>
-              </tr>
-            ) : (
-              items.map((it) => (
-                <tr key={it.id} className="cursor-pointer hover:bg-slate-50" onClick={() => openDrawer(it.id)}>
-                  <td className="px-5 py-4">
-                    <div className="truncate text-sm font-semibold text-slate-900">{it.name}</div>
-                  </td>
 
-                  <td className="px-5 py-4">
-                    <span
-                      className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold ${statusPillClasses(
-                        it.status
-                      )}`}
-                    >
-                      {statusLabel(it.status)}
-                    </span>
-                  </td>
-
-                  <td className="px-5 py-4">
-                    <div className="truncate text-sm text-slate-700">{assignedLabelForRow(it)}</div>
-                  </td>
-
-                  <td className="hidden md:table-cell px-5 py-4">
-                    <div className="truncate text-sm text-slate-700">{fmtDateTime(it.updatedAt)}</div>
-                  </td>
-
-                  <td className="px-2 py-4">
-                    <button
-                      type="button"
-                      className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-200"
-                      aria-label="Details öffnen"
-                      title="Details öffnen"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openDrawer(it.id);
-                      }}
-                    >
-                      ⋯
-                    </button>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-
-        <div className="px-5 py-4 text-xs text-slate-500">
-          Mobile zeigt nur <span className="font-semibold text-slate-700">ACTIVE</span> + zugewiesen (Option 2).
-        </div>
-      </div>
-
-      <DrawerShell open={drawerOpen} title={detail?.name ?? "Formular"} onClose={closeDrawer}>
-        {loadingDetail ? (
-          <div className="space-y-3">
-            <div className="h-6 w-2/3 rounded bg-slate-100 animate-pulse" />
-            <div className="h-4 w-full rounded bg-slate-100 animate-pulse" />
-            <div className="h-4 w-5/6 rounded bg-slate-100 animate-pulse" />
-            <div className="h-10 w-40 rounded bg-slate-100 animate-pulse" />
-          </div>
-        ) : !detail ? (
-          detailError ? (
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-semibold text-slate-900">Konnte nicht laden</div>
-              <div className="mt-1 text-sm text-slate-600">{detailError.message}</div>
-              {(detailError.code || detailError.traceId) ? (
-                <div className="mt-2 text-xs text-slate-500">
-                  {detailError.code ? `Code: ${detailError.code}` : null}
-                  {detailError.code && detailError.traceId ? " • " : null}
-                  {detailError.traceId ? `Trace: ${detailError.traceId}` : null}
-                </div>
-              ) : null}
-              <div className="mt-3 flex gap-2">
-                <Button
-                  label="Erneut versuchen"
-                  kind="secondary"
-                  onClick={() => {
-                    if (selectedId) void loadDetail(selectedId);
-                  }}
-                />
-                <Button label="Schliessen" kind="ghost" onClick={closeDrawer} />
-              </div>
-            </div>
-          ) : (
-            <div className="text-sm text-slate-600">Kein Formular ausgewählt.</div>
-          )
-        ) : (
-          <div className="space-y-5">
-            <div>
-              <div className="text-xs font-semibold text-slate-600">Status</div>
-              <div className="mt-2">
-                <Select value={detail.status} onChange={(v) => void onChangeStatus(v as FormStatus)} ariaLabel="Status ändern">
-                  <option value="DRAFT">Entwurf</option>
-                  <option value="ACTIVE">Aktiv</option>
-                  <option value="ARCHIVED">Archiviert</option>
-                </Select>
-              </div>
-              <div className="mt-2 text-xs text-slate-500">
-                Nur <span className="font-semibold text-slate-700">ACTIVE</span> + zugewiesen = in der App sichtbar.
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-slate-900">
-                    Im aktiven Event verfügbar{" "}
-                    <span className="text-slate-500">({activeEventName ? activeEventName : "kein aktives Event"})</span>
-                  </div>
-                  <div className="mt-1 text-sm text-slate-600">Nur ACTIVE + zugewiesen ist in der Mobile App sichtbar (Option 2).</div>
-                </div>
-
-                <button
-                  type="button"
-                  className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-slate-200 ${
-                    detail.assignedEventId && activeEvent?.id && detail.assignedEventId === activeEvent.id
-                      ? "border-emerald-200 bg-emerald-500"
-                      : "border-slate-200 bg-slate-100"
-                  } ${!activeEvent?.id || detail.status === "ARCHIVED" ? "opacity-50 pointer-events-none" : ""}`}
-                  aria-label="Zuweisung umschalten"
-                  title={
-                    !activeEvent?.id
-                      ? "Kein aktives Event verfügbar."
-                      : detail.status === "ARCHIVED"
+                  <button
+                    type="button"
+                    className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-slate-200 ${
+                      detail.assignedEventId && activeEvent?.id && detail.assignedEventId === activeEvent.id
+                        ? "border-emerald-200 bg-emerald-500"
+                        : "border-slate-200 bg-slate-100"
+                    } ${!activeEvent?.id || detail.status === "ARCHIVED" ? "opacity-50 pointer-events-none" : ""}`}
+                    aria-label="Zuweisung umschalten"
+                    title={
+                      !activeEvent?.id
+                        ? "Kein aktives Event verfügbar."
+                        : detail.status === "ARCHIVED"
                         ? "Archivierte Formulare können nicht zugewiesen werden."
                         : "Zuweisung umschalten"
-                  }
-                  onClick={() => void onToggleAssigned()}
-                >
-                  <span
-                    className={`inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${
-                      detail.assignedEventId && activeEvent?.id && detail.assignedEventId === activeEvent.id
-                        ? "translate-x-5"
-                        : "translate-x-0.5"
-                    }`}
-                  />
-                </button>
+                    }
+                    onClick={() => void onToggleAssigned()}
+                  >
+                    <span
+                      className={`inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${
+                        detail.assignedEventId && activeEvent?.id && detail.assignedEventId === activeEvent.id
+                          ? "translate-x-5"
+                          : "translate-x-0.5"
+                      }`}
+                    />
+                  </button>
+                </div>
               </div>
-            </div>
 
-            <div className="text-xs text-slate-500">
-              Aktualisiert: <span className="text-slate-700">{fmtDateTime(detail.updatedAt)}</span> • Erstellt:{" "}
-              <span className="text-slate-700">{fmtDateTime(detail.createdAt)}</span>
-              {Array.isArray(detail.fields) ? (
-                <>
-                  {" • "}
-                  Felder: <span className="text-slate-700">{detail.fields.length}</span>
-                </>
+              <div className="text-xs text-slate-500">
+                Aktualisiert: <span className="text-slate-700">{fmtDateTime(detail.updatedAt)}</span> • Erstellt:{" "}
+                <span className="text-slate-700">{fmtDateTime(detail.createdAt)}</span>
+                {Array.isArray(detail.fields) ? (
+                  <>
+                    {" • "}
+                    Felder: <span className="text-slate-700">{detail.fields.length}</span>
+                  </>
+                ) : null}
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button label="Formular bearbeiten" kind="primary" onClick={onOpenBuilder} />
+                <Button label="Vorschau (wie in der App)" kind="secondary" onClick={onOpenPreview} />
+                <Button label="Duplizieren" kind="secondary" onClick={() => void onDuplicate()} />
+
+                {detail.status === "ARCHIVED" ? (
+                  <Button label="Wiederherstellen" kind="secondary" onClick={() => void onChangeStatus("DRAFT")} />
+                ) : (
+                  <Button label="Archivieren" kind="danger" onClick={() => void onChangeStatus("ARCHIVED")} />
+                )}
+
+                <Button label="Löschen" kind="danger" onClick={() => void onDelete()} />
+              </div>
+
+              {detailError ? (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                  <div className="text-sm font-semibold text-rose-900">Hinweis</div>
+                  <div className="mt-1 text-sm text-rose-800">{detailError.message}</div>
+                </div>
               ) : null}
             </div>
-
-            <div className="flex flex-wrap gap-2">
-              <Button label="Im Builder öffnen" kind="primary" onClick={onOpenBuilder} />
-              <Button label="Vorschau" kind="secondary" onClick={onOpenPreview} />
-              <Button label="Duplizieren" kind="secondary" onClick={() => void onDuplicate()} />
-
-              {detail.status === "ARCHIVED" ? (
-                <Button label="Wiederherstellen" kind="secondary" onClick={() => void onChangeStatus("DRAFT")} />
-              ) : (
-                <Button label="Archivieren" kind="danger" onClick={() => void onChangeStatus("ARCHIVED")} />
-              )}
-            </div>
-
-            {detailError ? (
-              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
-                <div className="text-sm font-semibold text-rose-900">Hinweis</div>
-                <div className="mt-1 text-sm text-rose-800">{detailError.message}</div>
-              </div>
-            ) : null}
-          </div>
-        )}
-      </DrawerShell>
-    </section>
+          )}
+        </DrawerShell>
+      </section>
+    </div>
   );
 }

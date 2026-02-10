@@ -1,78 +1,70 @@
-import * as React from "react";
+"use client";
+
+import React, { useMemo } from "react";
 import type { BuilderField } from "../builder.types";
 import IPhonePreviewFrame from "./IPhonePreviewFrame";
 import PreviewFieldRenderer from "./PreviewFieldRenderer";
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+function pickUiTitle(formName: string, formConfig: Record<string, unknown> | null): string {
+  const cfg = (formConfig ?? {}) as any;
+  return (cfg?.ui?.header?.title as string) || formName || "Formular";
 }
 
-function pickUiTitle(formName: string, config: unknown): { title: string; subtitle?: string } {
-  const baseTitle = formName || "Form";
-  if (!isRecord(config)) return { title: baseTitle };
-  const ui = config.ui;
-  if (!isRecord(ui)) return { title: baseTitle };
-  const header = ui.header;
-  if (!isRecord(header)) return { title: baseTitle };
-  const t = typeof header.title === "string" && header.title.trim() ? header.title.trim() : baseTitle;
-  const s = typeof header.subtitle === "string" && header.subtitle.trim() ? header.subtitle.trim() : undefined;
-  return { title: t, ...(s ? { subtitle: s } : {}) };
+function pickUiSubtitle(formDescription: string | null, formConfig: Record<string, unknown> | null): string | null {
+  const cfg = (formConfig ?? {}) as any;
+  const v = (cfg?.ui?.header?.subtitle as string) ?? null;
+  return v ?? formDescription ?? null;
 }
 
-function pickAccent(config: unknown): string | null {
-  if (!isRecord(config)) return null;
-  const ui = config.ui;
-  if (!isRecord(ui)) return null;
-  const c = ui.accentColor;
-  if (typeof c === "string" && /^#[0-9A-Fa-f]{6}$/.test(c.trim())) return c.trim();
-  return null;
+function pickAccent(formConfig: Record<string, unknown> | null): string | null {
+  const cfg = (formConfig ?? {}) as any;
+  return (cfg?.ui?.accentColor as string) ?? null;
 }
 
-export default function BuilderPreviewPanel(props: {
+export default function BuilderPreviewPanel({
+  formName,
+  formDescription,
+  formConfig,
+  fields,
+}: {
   formName: string;
   formDescription: string | null;
-  formConfig: unknown | null;
+  formConfig: Record<string, unknown> | null;
   fields: BuilderField[];
 }) {
-  const activeFields = React.useMemo(() => props.fields.filter((f) => !!f.isActive), [props.fields]);
-  const header = React.useMemo(() => pickUiTitle(props.formName, props.formConfig), [props.formName, props.formConfig]);
-  const accent = React.useMemo(() => pickAccent(props.formConfig), [props.formConfig]);
+  const title = pickUiTitle(formName, formConfig);
+  const subtitle = pickUiSubtitle(formDescription, formConfig);
+  const accent = pickAccent(formConfig);
+
+  const activeFields = useMemo(() => fields.filter((f) => f.isActive), [fields]);
 
   return (
-    <div className="w-full">
-      <IPhonePreviewFrame>
-        <div className="px-4 pb-6 pt-5">
-          <div className="mb-4">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">LeadRadar</div>
-            <div className="mt-1 text-xl font-semibold text-slate-900">{header.title}</div>
-            {header.subtitle ? <div className="mt-1 text-sm text-slate-600">{header.subtitle}</div> : null}
-            {props.formDescription ? <div className="mt-2 text-sm text-slate-500">{props.formDescription}</div> : null}
-            <div className="mt-4 h-px w-full bg-slate-100" />
-            {accent ? <div className="mt-3 h-1 w-16 rounded-full" style={{ backgroundColor: accent }} /> : null}
-          </div>
-
-          <div className="flex flex-col gap-3">
-            {activeFields.length === 0 ? (
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-                No active fields. Enable fields in Build mode.
-              </div>
-            ) : (
-              activeFields.map((f) => <PreviewFieldRenderer key={f.id} field={f} />)
-            )}
-          </div>
-
-          <div className="mt-6">
-            <button
-              type="button"
-              disabled
-              className="h-12 w-full rounded-xl bg-slate-900 text-sm font-semibold text-white opacity-60"
-            >
-              Submit (disabled in preview)
-            </button>
-            <div className="mt-2 text-center text-xs text-slate-400">Preview is read-only — no data is saved.</div>
-          </div>
+    <IPhonePreviewFrame>
+      <div className="px-4 pb-5 pt-6">
+        <div className="text-center">
+          <div className="text-lg font-semibold text-slate-900">{title}</div>
+          {subtitle ? <div className="mt-1 text-sm text-slate-600">{subtitle}</div> : null}
         </div>
-      </IPhonePreviewFrame>
-    </div>
+
+        <div className="mt-5 grid gap-3">
+          {activeFields.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-700">
+              Keine aktiven Felder. Aktiviere rechts Felder oder fuege neue hinzu.
+            </div>
+          ) : (
+            activeFields.map((f) => <PreviewFieldRenderer key={f.id} field={f} accent={accent} />)
+          )}
+        </div>
+
+        <button
+          className="mt-5 w-full rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white opacity-70"
+          disabled
+        >
+          Absenden (in Vorschau deaktiviert)
+        </button>
+
+        <div className="mt-3 text-center text-xs text-slate-500">Powered by LeadRadar</div>
+      </div>
+    </IPhonePreviewFrame>
   );
 }

@@ -33,13 +33,9 @@ const FieldKeySchema = z
   .regex(/^[a-zA-Z][a-zA-Z0-9_]*$/, "key must match /^[a-zA-Z][a-zA-Z0-9_]*$/");
 
 const NullableTrimmedString = (max: number) =>
-  z.preprocess(
-    (v) => (typeof v === "string" ? v.trim() : v),
-    z.string().max(max).nullable().optional()
-  );
+  z.preprocess((v) => (typeof v === "string" ? v.trim() : v), z.string().max(max).nullable().optional());
 
-const NullableBoolean = () =>
-  z.preprocess((v) => (v === null ? undefined : v), z.boolean().optional());
+const NullableBoolean = () => z.preprocess((v) => (v === null ? undefined : v), z.boolean().optional());
 
 const CoercedNullableInt = () =>
   z.preprocess((v) => {
@@ -75,18 +71,12 @@ function normalizeOptionsFromConfig(config: unknown): string[] {
 
   const opts = config.options ?? config.selectOptions;
   if (Array.isArray(opts)) {
-    return opts
-      .map((x) => String(x))
-      .map((s) => s.trim())
-      .filter(Boolean);
+    return opts.map((x) => String(x)).map((s) => s.trim()).filter(Boolean);
   }
 
   const ot = config.optionsText;
   if (typeof ot === "string") {
-    return ot
-      .split(/\r?\n/g)
-      .map((s) => s.trim())
-      .filter(Boolean);
+    return ot.split(/\r?\n/g).map((s) => s.trim()).filter(Boolean);
   }
 
   return [];
@@ -105,7 +95,6 @@ function normalizeFieldConfig(type: FieldType, config: unknown): unknown {
 
   if (type === FieldType.CHECKBOX) {
     const out: Record<string, unknown> = { ...config };
-
     const raw = out.defaultValue ?? out.defaultBoolean ?? out.checkboxDefault;
     const parsed = coerceBooleanLoose(raw);
     const def = parsed ?? false;
@@ -142,13 +131,9 @@ function ensureCheckboxDefaults(config: unknown): Prisma.InputJsonValue {
 const CreateFieldSchema = z
   .object({
     key: FieldKeySchema,
-    label: z.preprocess(
-      (v) => (typeof v === "string" ? v.trim() : v),
-      z.string().min(1).max(200)
-    ),
+    label: z.preprocess((v) => (typeof v === "string" ? v.trim() : v), z.string().min(1).max(200)),
     type: z.nativeEnum(FieldType),
 
-    // tolerate null coming from UI drafts
     required: NullableBoolean(),
     isActive: NullableBoolean(),
     sortOrder: CoercedNullableInt(),
@@ -156,12 +141,9 @@ const CreateFieldSchema = z
     placeholder: NullableTrimmedString(300),
     helpText: NullableTrimmedString(500),
 
-    // tolerate null / unknown shapes
     config: z.unknown().nullable().optional(),
   })
   .superRefine((d, ctx) => {
-    // Enforce: if config is provided for select, it must contain >= 1 option.
-    // If config is omitted, we will set a sensible default in the handler.
     if (d.type === FieldType.SINGLE_SELECT || d.type === FieldType.MULTI_SELECT) {
       if (d.config !== undefined && d.config !== null) {
         const opts = normalizeOptionsFromConfig(d.config);
@@ -173,10 +155,6 @@ const CreateFieldSchema = z
           });
         }
       }
-    }
-    if (d.type === FieldType.CHECKBOX) {
-      // no strict validation needed; handler will default to false if missing
-      return;
     }
   });
 
@@ -200,6 +178,43 @@ function mapKeyConflict(e: unknown): { status: number; code: string; message: st
     }
   }
   return null;
+}
+
+export async function GET(req: Request, ctx: unknown) {
+  try {
+    const { tenantId } = await requireAdminAuth(req);
+    const { id: formId } = await getParams<{ id: string }>(ctx);
+
+    if (!IdSchema.safeParse(formId).success) throw httpError(404, "NOT_FOUND", "Not found.");
+
+    const form = await prisma.form.findFirst({
+      where: { id: formId, tenantId },
+      select: { id: true },
+    });
+    if (!form) throw httpError(404, "NOT_FOUND", "Not found.");
+
+    const items = await prisma.formField.findMany({
+      where: { tenantId, formId },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: {
+        id: true,
+        key: true,
+        label: true,
+        type: true,
+        required: true,
+        isActive: true,
+        sortOrder: true,
+        placeholder: true,
+        helpText: true,
+        config: true,
+      },
+    });
+
+    return jsonOk(req, { items });
+  } catch (e) {
+    if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
+    return jsonError(req, 500, "INTERNAL_ERROR", "Unexpected error.");
+  }
 }
 
 export async function POST(req: Request, ctx: unknown) {
@@ -231,8 +246,8 @@ export async function POST(req: Request, ctx: unknown) {
       const normalizedConfig =
         rawConfig === undefined ? undefined : (normalizeFieldConfig(body.type, rawConfig) as Prisma.InputJsonValue);
 
-      // MVP defaults (so creating/selecting types is stable even if UI didn't send config yet)
-      let finalConfig: Prisma.InputJsonValue | undefined = (normalizedConfig ?? undefined) as Prisma.InputJsonValue | undefined;
+      let finalConfig: Prisma.InputJsonValue | undefined =
+        (normalizedConfig ?? undefined) as Prisma.InputJsonValue | undefined;
 
       if (body.type === FieldType.SINGLE_SELECT || body.type === FieldType.MULTI_SELECT) {
         finalConfig = ensureSelectDefaults(finalConfig);

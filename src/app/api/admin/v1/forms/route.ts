@@ -13,6 +13,8 @@ type AssignedFilter = "YES" | "NO" | "ALL";
 type SortKey = "updatedAt" | "name";
 type SortDir = "asc" | "desc";
 
+type ReadinessState = "NO_ACTIVE_EVENT" | "NO_ASSIGNED_FORM" | "ASSIGNED_BUT_INACTIVE" | "READY" | "READY_MULTI";
+
 function firstString(v: unknown): string | undefined {
   if (typeof v === "string") return v;
   if (Array.isArray(v)) return typeof v[0] === "string" ? v[0] : undefined;
@@ -94,6 +96,66 @@ function mapStatusToPrisma(s: ListStatus): FormStatus | undefined {
   return s as unknown as FormStatus;
 }
 
+function readinessForNoActiveEvent() {
+  return {
+    state: "NO_ACTIVE_EVENT" as const,
+    headline: "Kein aktives Event",
+    text: "Aktiviere zuerst deine Messe unter Betrieb → Events. Danach kannst du ein Formular zuweisen.",
+    primary: { label: "Event aktivieren", href: "/admin/events" },
+    recommendedFormId: null as string | null,
+  };
+}
+
+async function computeReadiness(tenantId: string, activeEvent: { id: string; name: string } | null) {
+  if (!activeEvent) return readinessForNoActiveEvent();
+
+  const [anyAssigned, activeAssignedCount, firstActiveAssigned] = await Promise.all([
+    prisma.form.findFirst({
+      where: { tenantId, assignedEventId: activeEvent.id },
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+      select: { id: true, status: true },
+    }),
+    prisma.form.count({
+      where: { tenantId, assignedEventId: activeEvent.id, status: "ACTIVE" },
+    }),
+    prisma.form.findFirst({
+      where: { tenantId, assignedEventId: activeEvent.id, status: "ACTIVE" },
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+      select: { id: true },
+    }),
+  ]);
+
+  if (!anyAssigned) {
+    return {
+      state: "NO_ASSIGNED_FORM" as const,
+      headline: "Noch kein Formular zugewiesen",
+      text: `Wähle ein Formular aus und weise es dem aktiven Event „${activeEvent.name}“ zu.`,
+      primary: { label: "Formular vorbereiten", href: "/admin/templates?intent=create" },
+      recommendedFormId: null as string | null,
+    };
+  }
+
+  if (activeAssignedCount <= 0 || !firstActiveAssigned) {
+    return {
+      state: "ASSIGNED_BUT_INACTIVE" as const,
+      headline: "Fast bereit",
+      text: "Ein Formular ist zugewiesen, aber noch nicht aktiv. Stelle den Status auf „Aktiv“, damit es in der App erscheint.",
+      primary: { label: "Formular aktivieren", href: `/admin/forms?open=${anyAssigned.id}` },
+      recommendedFormId: anyAssigned.id,
+    };
+  }
+
+  const recommended = firstActiveAssigned.id;
+  return {
+    state: (activeAssignedCount > 1 ? "READY_MULTI" : "READY") as ReadinessState,
+    headline: "Bereit für die Messe",
+    text: `In der App ist ein Formular für „${activeEvent.name}“ sichtbar. Du kannst Leads erfassen.`,
+    primary: { label: "Formular bearbeiten", href: `/admin/forms?open=${recommended}` },
+    recommendedFormId: recommended,
+    activeAssignedCount,
+  };
+}
+
 export async function GET(req: Request) {
   try {
     const { tenantId } = await requireAdminAuth(req);
@@ -108,10 +170,14 @@ export async function GET(req: Request) {
 
     const activeEventId = activeEvent?.id ?? null;
 
+    // Readiness is independent of UI filters (consumer-first)
+    const readiness = await computeReadiness(tenantId, activeEvent ? { id: activeEvent.id, name: activeEvent.name } : null);
+
     // Special-case: assigned=YES but no active event => empty list (not an error)
     if (query.assigned === "YES" && !activeEventId) {
       return jsonOk(req, {
         activeEvent: null,
+        readiness,
         forms: [],
         items: [],
       });
@@ -174,6 +240,7 @@ export async function GET(req: Request) {
     // - items: alias for generic clients
     return jsonOk(req, {
       activeEvent: activeEvent ? { id: activeEvent.id, name: activeEvent.name } : null,
+      readiness,
       forms: items,
       items,
     });
