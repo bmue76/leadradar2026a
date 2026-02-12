@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 
 import { jsonError, jsonOk } from "@/lib/api";
 import { validateQuery, isHttpError, httpError } from "@/lib/http";
@@ -162,13 +163,14 @@ const LeadListQuerySchema = z
     };
   });
 
-async function resolveActiveEventId(tenantId: string): Promise<string | null> {
-  const ev = await prisma.event.findFirst({
+async function resolveActiveEventIds(tenantId: string): Promise<string[]> {
+  const evs = await prisma.event.findMany({
     where: { tenantId, status: "ACTIVE" },
     select: { id: true },
-    orderBy: { updatedAt: "desc" },
+    orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+    take: 50,
   });
-  return ev?.id ?? null;
+  return evs.map((e) => e.id);
 }
 
 export async function GET(req: Request) {
@@ -185,10 +187,14 @@ export async function GET(req: Request) {
       if (!form) return jsonError(req, 404, "NOT_FOUND", "Not found.");
     }
 
-    // leak-safe: if eventId provided, ensure it belongs to tenant else 404
+    // leak-safe: if eventId provided, ensure it belongs to tenant
+    // If event=ACTIVE, additionally require it to be ACTIVE (like Forms selection)
     if (query.eventId) {
       const ev = await prisma.event.findFirst({
-        where: { id: query.eventId, tenantId: auth.tenantId },
+        where:
+          query.event === "ACTIVE"
+            ? { id: query.eventId, tenantId: auth.tenantId, status: "ACTIVE" }
+            : { id: query.eventId, tenantId: auth.tenantId },
         select: { id: true },
       });
       if (!ev) return jsonError(req, 404, "NOT_FOUND", "Not found.");
@@ -204,11 +210,12 @@ export async function GET(req: Request) {
           }
         : undefined;
 
-    const activeEventId =
-      !query.eventId && query.event === "ACTIVE" ? await resolveActiveEventId(auth.tenantId) : null;
+    // Multi-ACTIVE: if event=ACTIVE and no explicit eventId => filter all ACTIVE events
+    const activeEventIds =
+      !query.eventId && query.event === "ACTIVE" ? await resolveActiveEventIds(auth.tenantId) : [];
 
-    // If event=ACTIVE requested but no active event exists: return empty list (GoLive: predictable).
-    if (!query.eventId && query.event === "ACTIVE" && !activeEventId) {
+    // Predictable: if event=ACTIVE requested but no active events exist -> empty list
+    if (!query.eventId && query.event === "ACTIVE" && activeEventIds.length === 0) {
       return jsonOk(req, { items: [], nextCursor: null });
     }
 
@@ -244,16 +251,19 @@ export async function GET(req: Request) {
           }
         : undefined;
 
-    const where = {
+    const andClauses: Prisma.LeadWhereInput[] = [];
+    if (qWhere) andClauses.push(qWhere as Prisma.LeadWhereInput);
+    if (cursorWhere) andClauses.push(cursorWhere as Prisma.LeadWhereInput);
+
+    const where: Prisma.LeadWhereInput = {
       tenantId: auth.tenantId,
       ...(query.includeDeleted ? {} : { isDeleted: false }),
       ...(query.formId ? { formId: query.formId } : {}),
       ...(query.eventId ? { eventId: query.eventId } : {}),
-      ...(!query.eventId && activeEventId ? { eventId: activeEventId } : {}),
+      ...(!query.eventId && query.event === "ACTIVE" ? { eventId: { in: activeEventIds } } : {}),
       ...(capturedAtFilter ? { capturedAt: capturedAtFilter } : {}),
-      ...(qWhere ? { AND: [qWhere] } : {}),
-      ...(cursorWhere ? { AND: [cursorWhere] } : {}),
-    } as const;
+      ...(andClauses.length ? { AND: andClauses } : {}),
+    };
 
     const orderBy =
       query.sort === "name"
@@ -263,10 +273,7 @@ export async function GET(req: Request) {
             { capturedAt: "desc" as const },
             { id: "desc" as const },
           ]
-        : [
-            { capturedAt: query.dir },
-            { id: query.dir },
-          ];
+        : [{ capturedAt: query.dir }, { id: query.dir }];
 
     // For status filtering (meta.reviewedAt) we may need to fetch extra rows.
     // Keep it bounded for GoLive MVP.
@@ -336,7 +343,9 @@ export async function GET(req: Request) {
 
         sourceDeviceName: extractSourceDeviceName(r.meta),
 
-        ...(query.includeValues ? ({ values: (r as unknown as { values?: unknown }).values ?? {} } as const) : ({} as const)),
+        ...(query.includeValues
+          ? ({ values: (r as unknown as { values?: unknown }).values ?? {} } as const)
+          : ({} as const)),
       };
 
       return { row: r, item };
@@ -345,13 +354,17 @@ export async function GET(req: Request) {
     const filtered =
       query.status === "ALL"
         ? mapped
-        : mapped.filter((x) => (query.status === "REVIEWED" ? Boolean(x.item.reviewedAt) : !x.item.reviewedAt));
+        : mapped.filter((x) =>
+            query.status === "REVIEWED" ? Boolean(x.item.reviewedAt) : !x.item.reviewedAt
+          );
 
     const hasMore = filtered.length > query.take;
     const page = hasMore ? filtered.slice(0, query.take) : filtered;
 
     const nextCursor =
-      hasMore && page.length > 0 ? encodeCursor(page[page.length - 1].row.capturedAt, page[page.length - 1].row.id) : null;
+      hasMore && page.length > 0
+        ? encodeCursor(page[page.length - 1].row.capturedAt, page[page.length - 1].row.id)
+        : null;
 
     return jsonOk(req, { items: page.map((p) => p.item), nextCursor });
   } catch (e) {

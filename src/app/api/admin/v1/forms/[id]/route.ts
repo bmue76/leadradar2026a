@@ -11,12 +11,7 @@ export const runtime = "nodejs";
 const IdSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9]+$/i);
 
 function isPromiseLike<T>(v: unknown): v is Promise<T> {
-  return (
-    typeof v === "object" &&
-    v !== null &&
-    "then" in v &&
-    typeof (v as { then?: unknown }).then === "function"
-  );
+  return typeof v === "object" && v !== null && "then" in v && typeof (v as { then?: unknown }).then === "function";
 }
 
 async function getParams<T extends Record<string, string>>(ctx: unknown): Promise<T> {
@@ -35,24 +30,32 @@ function toNullableJsonInput(
 
 const UpdateFormSchema = z
   .object({
-    // backward-compatible fields
     name: z.string().trim().min(1).max(200).optional(),
     description: z.string().trim().max(2000).nullable().optional(),
     config: z.unknown().nullable().optional(),
 
-    // TP 5.2 fields
     status: z.nativeEnum(FormStatus).optional(),
+
+    // Multi-ACTIVE:
+    // Explicitly assign to a specific event (or null to unassign).
+    setAssignedToEventId: IdSchema.nullable().optional(),
+
+    // Backward compat (deprecated):
+    // Only works if exactly 1 ACTIVE event exists, otherwise 400.
     setAssignedToActiveEvent: z.boolean().optional(),
   })
   .refine((d) => Object.keys(d).length > 0, { message: "No fields to update." });
 
-async function getActiveEventForTenant(tenantId: string): Promise<{ id: string; name: string } | null> {
-  const ev = await prisma.event.findFirst({
+async function loadSingleActiveEventForTenant(tenantId: string): Promise<{ id: string; name: string } | null> {
+  const active = await prisma.event.findMany({
     where: { tenantId, status: "ACTIVE" },
     orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
     select: { id: true, name: true },
+    take: 2,
   });
-  return ev ? { id: ev.id, name: ev.name } : null;
+
+  if (active.length === 1) return { id: active[0].id, name: active[0].name };
+  return null;
 }
 
 export async function GET(req: Request, ctx: unknown) {
@@ -86,32 +89,59 @@ export async function PATCH(req: Request, ctx: unknown) {
 
     const wantsArchive = body.status === FormStatus.ARCHIVED;
 
-    // setAssignedToActiveEvent=true needs:
-    // - active event exists
-    // - form is not archived (guardrail)
+    // Assignment guardrails:
+    // - archived => assignment removed
+    // - cannot assign an archived form
     let assignEventId: string | null | undefined = undefined;
 
     if (wantsArchive) {
-      // MVP guardrail: archived => assignment removed
       assignEventId = null;
-    } else if (body.setAssignedToActiveEvent === true) {
+    } else if (body.setAssignedToEventId !== undefined) {
       const existing = await prisma.form.findFirst({
         where: { id, tenantId },
         select: { status: true },
       });
       if (!existing) throw httpError(404, "NOT_FOUND", "Not found.");
       if (existing.status === FormStatus.ARCHIVED) {
-        throw httpError(400, "BAD_REQUEST", "Archivierte Formulare können nicht dem aktiven Event zugewiesen werden.");
+        throw httpError(400, "BAD_REQUEST", "Archivierte Formulare können nicht einem Event zugewiesen werden.");
       }
 
-      const activeEvent = await getActiveEventForTenant(tenantId);
-      if (!activeEvent) {
-        throw httpError(400, "BAD_REQUEST", "Kein aktives Event. Bitte zuerst ein Event aktivieren.");
+      if (body.setAssignedToEventId === null) {
+        assignEventId = null;
+      } else {
+        // Must be a tenant-owned event. We keep it strict to ACTIVE events for MVP readiness flow.
+        const ev = await prisma.event.findFirst({
+          where: { id: body.setAssignedToEventId, tenantId, status: "ACTIVE" },
+          select: { id: true },
+        });
+        if (!ev) throw httpError(404, "NOT_FOUND", "Not found.");
+        assignEventId = ev.id;
+      }
+    } else if (body.setAssignedToActiveEvent !== undefined) {
+      // Deprecated behavior:
+      // Only ok if exactly one ACTIVE event exists.
+      const existing = await prisma.form.findFirst({
+        where: { id, tenantId },
+        select: { status: true },
+      });
+      if (!existing) throw httpError(404, "NOT_FOUND", "Not found.");
+      if (existing.status === FormStatus.ARCHIVED) {
+        throw httpError(400, "BAD_REQUEST", "Archivierte Formulare können nicht einem Event zugewiesen werden.");
       }
 
-      assignEventId = activeEvent.id;
-    } else if (body.setAssignedToActiveEvent === false) {
-      assignEventId = null;
+      if (body.setAssignedToActiveEvent === false) {
+        assignEventId = null;
+      } else {
+        const single = await loadSingleActiveEventForTenant(tenantId);
+        if (!single) {
+          throw httpError(
+            400,
+            "AMBIGUOUS_ACTIVE_EVENT",
+            "Mehrere (oder keine) aktive Events. Bitte Event explizit wählen."
+          );
+        }
+        assignEventId = single.id;
+      }
     }
 
     const res = await prisma.form.updateMany({

@@ -32,28 +32,32 @@ export async function POST(req: Request) {
       });
     }
 
-    // Option 2: active event must exist, and device.activeEventId must match it
-    const activeEvent = await prisma.event.findFirst({
-      where: { tenantId: auth.tenantId, status: "ACTIVE" },
-      select: { id: true },
-    });
-    if (!activeEvent) return jsonError(req, 404, "NOT_FOUND", "Not found.");
-
+    // Multi-ACTIVE: capture context is per device (MobileDevice.activeEventId).
+    // If device not bound OR event not ACTIVE => leak-safe 404.
     const device = await prisma.mobileDevice.findFirst({
       where: { id: auth.deviceId, tenantId: auth.tenantId },
-      select: { activeEventId: true },
+      select: {
+        activeEventId: true,
+        activeEvent: { select: { id: true, status: true } },
+      },
     });
-    if (!device?.activeEventId || device.activeEventId !== activeEvent.id) {
+
+    if (!device?.activeEventId) {
+      return jsonError(req, 404, "NOT_FOUND", "Not found.");
+    }
+    if (!device.activeEvent || device.activeEvent.status !== "ACTIVE") {
       return jsonError(req, 404, "NOT_FOUND", "Not found.");
     }
 
-    // leak-safe: require assignment (and ACTIVE form) AND form assigned to active event
+    const eventId = device.activeEventId;
+
+    // leak-safe: require assignment (and ACTIVE form) AND form assigned to this device event
     const assignment = await prisma.mobileDeviceForm.findFirst({
       where: {
         tenantId: auth.tenantId,
         deviceId: auth.deviceId,
         formId: body.formId,
-        form: { status: "ACTIVE", assignedEventId: activeEvent.id },
+        form: { status: "ACTIVE", assignedEventId: eventId },
       },
       select: { formId: true },
     });
@@ -87,7 +91,7 @@ export async function POST(req: Request) {
         capturedAt,
         values: valuesJson,
         meta: metaJson,
-        eventId: activeEvent.id,
+        eventId,
       },
       select: { id: true },
     });

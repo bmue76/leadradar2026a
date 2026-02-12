@@ -140,14 +140,7 @@ async function upsertDemoForm(prisma: PrismaClient, tenantId: string) {
   const fields: Array<{
     key: string;
     label: string;
-    type:
-      | "TEXT"
-      | "TEXTAREA"
-      | "SINGLE_SELECT"
-      | "MULTI_SELECT"
-      | "EMAIL"
-      | "PHONE"
-      | "CHECKBOX";
+    type: "TEXT" | "TEXTAREA" | "SINGLE_SELECT" | "MULTI_SELECT" | "EMAIL" | "PHONE" | "CHECKBOX";
     required: boolean;
     sortOrder: number;
     placeholder?: string;
@@ -212,8 +205,15 @@ async function upsertDemoForm(prisma: PrismaClient, tenantId: string) {
   return form;
 }
 
-async function upsertDemoEvent(prisma: PrismaClient, tenantId: string) {
-  const name = env("SEED_EVENT_NAME", "Demo Messe");
+/**
+ * TP 6.10 — Multi-ACTIVE events:
+ * We intentionally allow multiple ACTIVE events per tenant.
+ * Seed creates 2 ACTIVE events by default (Demo Messe + Demo Messe 2).
+ */
+async function upsertDemoEvents(prisma: PrismaClient, tenantId: string) {
+  const name1 = env("SEED_EVENT_NAME", "Demo Messe");
+  const name2 = env("SEED_EVENT_NAME_2", "Demo Messe 2");
+
   const locationRaw = env("SEED_EVENT_LOCATION", ""); // optional
   const location = locationRaw.trim() ? locationRaw.trim() : null;
 
@@ -221,35 +221,43 @@ async function upsertDemoEvent(prisma: PrismaClient, tenantId: string) {
   const startsAt = now;
   const endsAt = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
 
-  const existing = await prisma.event.findFirst({
-    where: { tenantId, name },
-    select: { id: true },
-  });
+  const names = [name1, name2].map((s) => s.trim()).filter(Boolean);
 
-  const event = existing
-    ? await prisma.event.update({
-        where: { id: existing.id },
-        data: {
-          status: "ACTIVE",
-          location: location ?? undefined,
-          startsAt,
-          endsAt,
-        },
-        select: { id: true, name: true, status: true },
-      })
-    : await prisma.event.create({
-        data: {
-          tenantId,
-          name,
-          status: "ACTIVE",
-          location: location ?? undefined,
-          startsAt,
-          endsAt,
-        },
-        select: { id: true, name: true, status: true },
-      });
+  const out: Array<{ id: string; name: string; status: string }> = [];
 
-  return event;
+  for (const name of names) {
+    const existing = await prisma.event.findFirst({
+      where: { tenantId, name },
+      select: { id: true },
+    });
+
+    const ev = existing
+      ? await prisma.event.update({
+          where: { id: existing.id },
+          data: {
+            status: "ACTIVE",
+            location, // allow clearing to NULL
+            startsAt,
+            endsAt,
+          },
+          select: { id: true, name: true, status: true },
+        })
+      : await prisma.event.create({
+          data: {
+            tenantId,
+            name,
+            status: "ACTIVE",
+            location, // allow NULL
+            startsAt,
+            endsAt,
+          },
+          select: { id: true, name: true, status: true },
+        });
+
+    out.push({ id: ev.id, name: ev.name, status: String(ev.status) });
+  }
+
+  return out;
 }
 
 async function recreateDemoMobileKeyAndDevice(
@@ -329,18 +337,26 @@ async function main() {
     const tenant = await upsertTenant(db.prisma);
     const owner = await upsertOwnerUser(db.prisma, tenant.id);
     const form = await upsertDemoForm(db.prisma, tenant.id);
-    const event = await upsertDemoEvent(db.prisma, tenant.id);
+    const events = await upsertDemoEvents(db.prisma, tenant.id);
 
     console.log("[seed] Tenant:", tenant.slug, tenant.id);
     console.log("[seed] Owner:", owner.email, owner.id, `(role=${owner.role})`);
     console.log("[seed] Form:", form.name, form.id, `(status=${form.status})`);
-    console.log("[seed] Event:", event.name, event.id, `(status=${event.status})`);
+
+    if (events.length) {
+      for (const ev of events) console.log("[seed] Event:", ev.name, ev.id, `(status=${ev.status})`);
+    } else {
+      console.log("[seed] Event: none");
+    }
+
+    // Bind device to the first seeded event (if any)
+    const primaryEventId = events[0]?.id;
 
     await recreateDemoMobileKeyAndDevice(db.prisma, {
       tenantId: tenant.id,
       ownerUserId: owner.id,
       formId: form.id,
-      activeEventId: event.id,
+      activeEventId: primaryEventId,
     });
 
     console.log("[seed] Done.");

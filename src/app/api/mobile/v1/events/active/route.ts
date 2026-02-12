@@ -23,10 +23,13 @@ export async function GET(req: Request) {
       data: { lastSeenAt: now },
     });
 
-    // Leak-safe device scope check
+    // Leak-safe device scope check (+ join activeEvent for status)
     const device = await prisma.mobileDevice.findFirst({
       where: { id: auth.deviceId, tenantId: auth.tenantId },
-      select: { activeEventId: true },
+      select: {
+        activeEventId: true,
+        activeEvent: { select: { id: true, status: true } },
+      },
     });
     if (!device) throw httpError(404, "NOT_FOUND", "Not found.");
 
@@ -34,9 +37,14 @@ export async function GET(req: Request) {
       return jsonOk(req, { activeEvent: null });
     }
 
-    // Fetch active event (if it exists under this tenant)
+    // If the bound event is not ACTIVE (or missing), treat as null (leak-safe)
+    if (!device.activeEvent || device.activeEvent.status !== "ACTIVE") {
+      return jsonOk(req, { activeEvent: null });
+    }
+
+    // Fetch ACTIVE event (under this tenant)
     const activeEvent = await prisma.event.findFirst({
-      where: { id: device.activeEventId, tenantId: auth.tenantId },
+      where: { id: device.activeEventId, tenantId: auth.tenantId, status: "ACTIVE" },
       select: {
         id: true,
         name: true,

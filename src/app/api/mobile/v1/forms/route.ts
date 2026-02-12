@@ -27,18 +27,19 @@ export async function GET(req: Request) {
       data: { lastSeenAt: now },
     });
 
-    // Option 2: active event must exist, and device.activeEventId must match it
-    const activeEvent = await prisma.event.findFirst({
-      where: { tenantId: auth.tenantId, status: "ACTIVE" },
-      select: { id: true },
-    });
-    if (!activeEvent) return jsonOk(req, []);
-
+    // Multi-ACTIVE: capture context is per device (MobileDevice.activeEventId)
+    // If device not bound OR event not ACTIVE => return []
     const device = await prisma.mobileDevice.findFirst({
       where: { id: auth.deviceId, tenantId: auth.tenantId },
-      select: { activeEventId: true },
+      select: {
+        activeEventId: true,
+        activeEvent: { select: { id: true, status: true } },
+      },
     });
-    if (!device?.activeEventId || device.activeEventId !== activeEvent.id) return jsonOk(req, []);
+    if (!device?.activeEventId) return jsonOk(req, []);
+    if (!device.activeEvent || device.activeEvent.status !== "ACTIVE") return jsonOk(req, []);
+
+    const eventId = device.activeEventId;
 
     const assignments = await prisma.mobileDeviceForm.findMany({
       where: {
@@ -46,7 +47,7 @@ export async function GET(req: Request) {
         deviceId: auth.deviceId,
         form: {
           status: "ACTIVE",
-          assignedEventId: activeEvent.id,
+          assignedEventId: eventId,
         },
       },
       select: {

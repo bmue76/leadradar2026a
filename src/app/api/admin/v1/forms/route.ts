@@ -27,6 +27,8 @@ function cleanEnum(v: unknown): string | undefined {
   return t ? t : undefined;
 }
 
+const IdSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9]+$/i);
+
 const ListFormsQuerySchema = z
   .object({
     q: z.preprocess(
@@ -38,24 +40,22 @@ const ListFormsQuerySchema = z
       z.string().min(1).max(200).optional()
     ),
 
-    status: z.preprocess(
-      (v) => cleanEnum(v),
-      z.enum(["DRAFT", "ACTIVE", "ARCHIVED", "ALL"]).default("ALL")
-    ),
+    status: z.preprocess((v) => cleanEnum(v), z.enum(["DRAFT", "ACTIVE", "ARCHIVED", "ALL"]).default("ALL")),
 
-    assigned: z.preprocess(
-      (v) => cleanEnum(v),
-      z.enum(["YES", "NO", "ALL"]).default("ALL")
-    ),
+    assigned: z.preprocess((v) => cleanEnum(v), z.enum(["YES", "NO", "ALL"]).default("ALL")),
 
-    sort: z.preprocess(
-      (v) => cleanEnum(v),
-      z.enum(["updatedAt", "name"]).default("updatedAt")
-    ),
+    sort: z.preprocess((v) => cleanEnum(v), z.enum(["updatedAt", "name"]).default("updatedAt")),
 
-    dir: z.preprocess(
-      (v) => cleanEnum(v),
-      z.enum(["asc", "desc"]).default("desc")
+    dir: z.preprocess((v) => cleanEnum(v), z.enum(["asc", "desc"]).default("desc")),
+
+    // Multi-ACTIVE: UI may pass an explicit event context
+    eventId: z.preprocess(
+      (v) => {
+        const s = firstString(v);
+        const t = (s ?? "").trim();
+        return t ? t : undefined;
+      },
+      IdSchema.optional()
     ),
   })
   .strict();
@@ -106,20 +106,20 @@ function readinessForNoActiveEvent() {
   };
 }
 
-async function computeReadiness(tenantId: string, activeEvent: { id: string; name: string } | null) {
-  if (!activeEvent) return readinessForNoActiveEvent();
+async function computeReadiness(tenantId: string, contextEvent: { id: string; name: string } | null) {
+  if (!contextEvent) return readinessForNoActiveEvent();
 
   const [anyAssigned, activeAssignedCount, firstActiveAssigned] = await Promise.all([
     prisma.form.findFirst({
-      where: { tenantId, assignedEventId: activeEvent.id },
+      where: { tenantId, assignedEventId: contextEvent.id },
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
       select: { id: true, status: true },
     }),
     prisma.form.count({
-      where: { tenantId, assignedEventId: activeEvent.id, status: "ACTIVE" },
+      where: { tenantId, assignedEventId: contextEvent.id, status: "ACTIVE" },
     }),
     prisma.form.findFirst({
-      where: { tenantId, assignedEventId: activeEvent.id, status: "ACTIVE" },
+      where: { tenantId, assignedEventId: contextEvent.id, status: "ACTIVE" },
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
       select: { id: true },
     }),
@@ -129,7 +129,7 @@ async function computeReadiness(tenantId: string, activeEvent: { id: string; nam
     return {
       state: "NO_ASSIGNED_FORM" as const,
       headline: "Noch kein Formular zugewiesen",
-      text: `Wähle ein Formular aus und weise es dem aktiven Event „${activeEvent.name}“ zu.`,
+      text: `Wähle ein Formular aus und weise es dem Event „${contextEvent.name}“ zu.`,
       primary: { label: "Formular vorbereiten", href: "/admin/templates?intent=create" },
       recommendedFormId: null as string | null,
     };
@@ -149,8 +149,8 @@ async function computeReadiness(tenantId: string, activeEvent: { id: string; nam
   return {
     state: (activeAssignedCount > 1 ? "READY_MULTI" : "READY") as ReadinessState,
     headline: "Bereit für die Messe",
-    text: `In der App ist ein Formular für „${activeEvent.name}“ sichtbar. Du kannst Leads erfassen.`,
-    primary: { label: "Formular bearbeiten", href: `/admin/forms?open=${recommended}` },
+    text: `In der App ist ein Formular für „${contextEvent.name}“ sichtbar. Du kannst Leads erfassen.`,
+    primary: { label: "Formular bearbeiten", href: `/admin/forms?open=${recommended}&eventId=${contextEvent.id}` },
     recommendedFormId: recommended,
     activeAssignedCount,
   };
@@ -161,22 +161,44 @@ export async function GET(req: Request) {
     const { tenantId } = await requireAdminAuth(req);
     const query = await validateQuery(req, ListFormsQuerySchema);
 
-    // Active event context (Option 2 filter + assignedToActiveEvent)
-    const activeEvent = await prisma.event.findFirst({
+    // Multi-ACTIVE: load all active events
+    const activeEvents = await prisma.event.findMany({
       where: { tenantId, status: "ACTIVE" },
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
       select: { id: true, name: true },
     });
 
-    const activeEventId = activeEvent?.id ?? null;
+    // Resolve contextEvent:
+    // - if eventId is given: must be among activeEvents (leak-safe 404)
+    // - else: default to most recently updated active event
+    let contextEvent = null as null | { id: string; name: string };
 
-    // Readiness is independent of UI filters (consumer-first)
-    const readiness = await computeReadiness(tenantId, activeEvent ? { id: activeEvent.id, name: activeEvent.name } : null);
+    if (query.eventId) {
+      const found = activeEvents.find((e) => e.id === query.eventId);
+      if (!found) {
+        // leak-safe
+        return jsonOk(req, {
+          activeEvents,
+          contextEvent: null,
+          activeEvent: null, // backward compat
+          readiness: readinessForNoActiveEvent(),
+          forms: [],
+          items: [],
+        });
+      }
+      contextEvent = { id: found.id, name: found.name };
+    } else if (activeEvents[0]) {
+      contextEvent = { id: activeEvents[0].id, name: activeEvents[0].name };
+    }
 
-    // Special-case: assigned=YES but no active event => empty list (not an error)
-    if (query.assigned === "YES" && !activeEventId) {
+    const readiness = await computeReadiness(tenantId, contextEvent);
+
+    // Special-case: assigned=YES but no contextEvent => empty list (not an error)
+    if (query.assigned === "YES" && !contextEvent?.id) {
       return jsonOk(req, {
-        activeEvent: null,
+        activeEvents,
+        contextEvent,
+        activeEvent: contextEvent, // backward compat
         readiness,
         forms: [],
         items: [],
@@ -192,11 +214,11 @@ export async function GET(req: Request) {
 
     const assigned = query.assigned as AssignedFilter;
 
-    // assigned filter is relative to ACTIVE event (Option 2)
-    if (assigned === "YES" && activeEventId) {
-      where.assignedEventId = activeEventId;
-    } else if (assigned === "NO" && activeEventId) {
-      where.OR = [{ assignedEventId: null }, { assignedEventId: { not: activeEventId } }];
+    // assigned filter is relative to context event
+    if (assigned === "YES" && contextEvent?.id) {
+      where.assignedEventId = contextEvent.id;
+    } else if (assigned === "NO" && contextEvent?.id) {
+      where.OR = [{ assignedEventId: null }, { assignedEventId: { not: contextEvent.id } }];
     }
 
     const sort = query.sort as SortKey;
@@ -232,14 +254,13 @@ export async function GET(req: Request) {
       updatedAt: r.updatedAt,
       fieldsCount: r._count.fields,
       assignedEventId: r.assignedEventId ?? null,
-      assignedToActiveEvent: activeEventId ? r.assignedEventId === activeEventId : false,
+      assignedToActiveEvent: contextEvent?.id ? r.assignedEventId === contextEvent.id : false,
     }));
 
-    // Backward compatible:
-    // - forms: historical contract used by existing admin screens
-    // - items: alias for generic clients
     return jsonOk(req, {
-      activeEvent: activeEvent ? { id: activeEvent.id, name: activeEvent.name } : null,
+      activeEvents,
+      contextEvent,
+      activeEvent: contextEvent, // backward compat: previously singular
       readiness,
       forms: items,
       items,

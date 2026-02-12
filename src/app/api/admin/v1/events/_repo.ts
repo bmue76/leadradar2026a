@@ -1,3 +1,4 @@
+// src\app\api\admin\v1\events\_repo.ts
 import { Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
 
@@ -165,7 +166,12 @@ export async function createEvent(prisma: PrismaClient, tenantId: string, body: 
   return mapEventListItem(created);
 }
 
-export async function updateEvent(prisma: PrismaClient, tenantId: string, id: string, patch: EventUpdateBody): Promise<EventListItem | null> {
+export async function updateEvent(
+  prisma: PrismaClient,
+  tenantId: string,
+  id: string,
+  patch: EventUpdateBody
+): Promise<EventListItem | null> {
   const existing = await prisma.event.findFirst({
     where: { id, tenantId },
     select: { id: true },
@@ -198,6 +204,7 @@ export async function updateEvent(prisma: PrismaClient, tenantId: string, id: st
 }
 
 export type ActiveOverview = {
+  // Backward-compat: "primary" ACTIVE event = most recently updated/created
   activeEvent: null | {
     id: string;
     name: string;
@@ -206,10 +213,23 @@ export type ActiveOverview = {
     endsAt?: string;
     location?: string;
   };
+
+  // New: all ACTIVE events (Multi-ACTIVE)
+  activeEvents: Array<{
+    id: string;
+    name: string;
+    status: "ACTIVE";
+    startsAt?: string;
+    endsAt?: string;
+    location?: string;
+  }>;
+
+  // Aggregated across ALL ACTIVE events
   counts: {
     assignedActiveForms: number;
     boundDevices: number;
   };
+
   actions: { href: string; label: string }[];
 };
 
@@ -228,9 +248,11 @@ function getCountDelegate(prisma: unknown, candidates: string[]): CountDelegate 
 }
 
 export async function getActiveOverview(prisma: PrismaClient, tenantId: string): Promise<ActiveOverview> {
-  const active = await prisma.event.findFirst({
+  const actives = await prisma.event.findMany({
     where: { tenantId, status: "ACTIVE" },
+    orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
     select: { id: true, name: true, status: true, startsAt: true, endsAt: true, location: true },
+    take: 50,
   });
 
   const actions = [
@@ -238,13 +260,27 @@ export async function getActiveOverview(prisma: PrismaClient, tenantId: string):
     { href: "/admin/devices", label: "Geräte prüfen" },
   ];
 
-  if (!active) {
+  const activeEvents = actives.map((e) => ({
+    id: e.id,
+    name: e.name,
+    status: "ACTIVE" as const,
+    startsAt: dateToIsoDay(e.startsAt) ?? undefined,
+    endsAt: dateToIsoDay(e.endsAt) ?? undefined,
+    location: e.location ?? undefined,
+  }));
+
+  const primary = activeEvents[0] ?? null;
+
+  if (activeEvents.length === 0) {
     return {
       activeEvent: null,
+      activeEvents: [],
       counts: { assignedActiveForms: 0, boundDevices: 0 },
       actions,
     };
   }
+
+  const activeIds = actives.map((a) => a.id);
 
   const deviceDelegate = getCountDelegate(prisma, [
     "mobileDevice", // likely model name
@@ -253,28 +289,26 @@ export async function getActiveOverview(prisma: PrismaClient, tenantId: string):
 
   const [assignedActiveForms, boundDevices] = await Promise.all([
     prisma.form.count({
-      where: { tenantId, status: "ACTIVE", assignedEventId: active.id },
+      where: { tenantId, status: "ACTIVE", assignedEventId: { in: activeIds } },
     }),
     deviceDelegate
-      ? deviceDelegate.count({ where: { tenantId, activeEventId: active.id } })
+      ? deviceDelegate.count({ where: { tenantId, activeEventId: { in: activeIds } } })
       : Promise.resolve(0),
   ]);
 
   return {
-    activeEvent: {
-      id: active.id,
-      name: active.name,
-      status: "ACTIVE",
-      startsAt: dateToIsoDay(active.startsAt) ?? undefined,
-      endsAt: dateToIsoDay(active.endsAt) ?? undefined,
-      location: active.location ?? undefined,
-    },
+    activeEvent: primary,
+    activeEvents,
     counts: { assignedActiveForms, boundDevices },
     actions,
   };
 }
 
-export async function activateEvent(prisma: PrismaClient, tenantId: string, id: string): Promise<"OK" | "NOT_FOUND" | "ARCHIVED"> {
+export async function activateEvent(
+  prisma: PrismaClient,
+  tenantId: string,
+  id: string
+): Promise<"OK" | "NOT_FOUND" | "ARCHIVED"> {
   return await prisma.$transaction(async (tx) => {
     const target = await tx.event.findFirst({
       where: { id, tenantId },
@@ -285,12 +319,7 @@ export async function activateEvent(prisma: PrismaClient, tenantId: string, id: 
     if (target.status === "ARCHIVED") return "ARCHIVED";
     if (target.status === "ACTIVE") return "OK";
 
-    // Ensure unique guardrail: deactivate any currently ACTIVE event first.
-    await tx.event.updateMany({
-      where: { tenantId, status: "ACTIVE", id: { not: id } },
-      data: { status: "DRAFT" },
-    });
-
+    // Multi-ACTIVE: do NOT deactivate other ACTIVE events.
     await tx.event.update({
       where: { id },
       data: { status: "ACTIVE" },
@@ -300,9 +329,19 @@ export async function activateEvent(prisma: PrismaClient, tenantId: string, id: 
   });
 }
 
-export async function archiveEvent(prisma: PrismaClient, tenantId: string, id: string): Promise<"OK" | "NOT_FOUND"> {
+export async function archiveEvent(
+  prisma: PrismaClient,
+  tenantId: string,
+  id: string
+): Promise<"OK" | "NOT_FOUND"> {
   const existing = await prisma.event.findFirst({ where: { id, tenantId }, select: { id: true } });
   if (!existing) return "NOT_FOUND";
+
+  // (Optional ops-safe) unbind devices pointing to this event
+  await prisma.mobileDevice.updateMany({
+    where: { tenantId, activeEventId: id },
+    data: { activeEventId: null },
+  });
 
   await prisma.event.update({
     where: { id },
