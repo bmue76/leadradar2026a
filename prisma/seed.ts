@@ -91,6 +91,61 @@ async function createSeedDb(): Promise<SeedDb> {
   }
 }
 
+async function tableExists(prisma: PrismaClient, tableName: string): Promise<boolean> {
+  try {
+    const rows = await prisma.$queryRaw<Array<{ exists: boolean }>>`
+      SELECT EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = ${tableName}
+      ) AS "exists";
+    `;
+    return Boolean(rows?.[0]?.exists);
+  } catch (e) {
+    console.warn("[seed] tableExists check failed -> assume missing:", tableName, e);
+    return false;
+  }
+}
+
+type DemoField = {
+  key: string;
+  label: string;
+  type: "TEXT" | "TEXTAREA" | "SINGLE_SELECT" | "MULTI_SELECT" | "EMAIL" | "PHONE" | "CHECKBOX";
+  required: boolean;
+  sortOrder: number;
+  placeholder?: string;
+  helpText?: string;
+  config?: unknown;
+};
+
+function demoFields(): DemoField[] {
+  return [
+    { key: "firstName", label: "Vorname", type: "TEXT", required: true, sortOrder: 10, placeholder: "Vorname" },
+    { key: "lastName", label: "Nachname", type: "TEXT", required: true, sortOrder: 20, placeholder: "Nachname" },
+    { key: "company", label: "Firma", type: "TEXT", required: false, sortOrder: 30, placeholder: "Firma" },
+    { key: "email", label: "E-Mail", type: "EMAIL", required: false, sortOrder: 40, placeholder: "name@firma.ch" },
+    { key: "phone", label: "Telefon", type: "PHONE", required: false, sortOrder: 50, placeholder: "+41 ..." },
+    {
+      key: "interest",
+      label: "Interesse",
+      type: "SINGLE_SELECT",
+      required: false,
+      sortOrder: 60,
+      config: { options: ["Produktinfo", "Demo", "Preis", "Sonstiges"] },
+    },
+    {
+      key: "newsletter",
+      label: "Newsletter ok",
+      type: "CHECKBOX",
+      required: false,
+      sortOrder: 70,
+      helpText: "DEV: Checkbox default=false",
+      config: { defaultValue: false },
+    },
+    { key: "note", label: "Notiz", type: "TEXTAREA", required: false, sortOrder: 80, placeholder: "Kurznotiz" },
+  ];
+}
+
 async function upsertTenant(prisma: PrismaClient) {
   const slug = env("SEED_TENANT_SLUG", "atlex").toLowerCase();
   const name = env("SEED_TENANT_NAME", "Atlex GmbH");
@@ -137,40 +192,7 @@ async function upsertDemoForm(prisma: PrismaClient, tenantId: string) {
         select: { id: true, name: true, status: true },
       });
 
-  const fields: Array<{
-    key: string;
-    label: string;
-    type: "TEXT" | "TEXTAREA" | "SINGLE_SELECT" | "MULTI_SELECT" | "EMAIL" | "PHONE" | "CHECKBOX";
-    required: boolean;
-    sortOrder: number;
-    placeholder?: string;
-    helpText?: string;
-    config?: unknown;
-  }> = [
-    { key: "firstName", label: "Vorname", type: "TEXT", required: true, sortOrder: 10, placeholder: "Vorname" },
-    { key: "lastName", label: "Nachname", type: "TEXT", required: true, sortOrder: 20, placeholder: "Nachname" },
-    { key: "company", label: "Firma", type: "TEXT", required: false, sortOrder: 30, placeholder: "Firma" },
-    { key: "email", label: "E-Mail", type: "EMAIL", required: false, sortOrder: 40, placeholder: "name@firma.ch" },
-    { key: "phone", label: "Telefon", type: "PHONE", required: false, sortOrder: 50, placeholder: "+41 ..." },
-    {
-      key: "interest",
-      label: "Interesse",
-      type: "SINGLE_SELECT",
-      required: false,
-      sortOrder: 60,
-      config: { options: ["Produktinfo", "Demo", "Preis", "Sonstiges"] },
-    },
-    {
-      key: "newsletter",
-      label: "Newsletter ok",
-      type: "CHECKBOX",
-      required: false,
-      sortOrder: 70,
-      helpText: "DEV: Checkbox default=false",
-      config: { defaultValue: false },
-    },
-    { key: "note", label: "Notiz", type: "TEXTAREA", required: false, sortOrder: 80, placeholder: "Kurznotiz" },
-  ];
+  const fields = demoFields();
 
   for (const f of fields) {
     await prisma.formField.upsert({
@@ -203,6 +225,76 @@ async function upsertDemoForm(prisma: PrismaClient, tenantId: string) {
   }
 
   return form;
+}
+
+/**
+ * TP 7.0 — Seed Preset (tenant-owned)
+ * - Uses JSON config snapshot (fields included) for later "create-from-preset".
+ * - Safe: skips if FormPreset table does not exist yet.
+ */
+async function upsertDemoPreset(prisma: PrismaClient, tenantId: string) {
+  const ok = await tableExists(prisma, "FormPreset");
+  if (!ok) {
+    console.log("[seed] FormPreset table missing -> skip preset seed.");
+    return null;
+  }
+
+  const name = env("SEED_PRESET_NAME", "Kontakt – Basic");
+  const category = env("SEED_PRESET_CATEGORY", "Standard");
+  const description = env("SEED_PRESET_DESCRIPTION", "DEV Preset für 'Aus Vorlage erstellen' (TP 7.0).");
+
+  const imageUrlRaw = env("SEED_PRESET_IMAGE_URL", "");
+  const imageUrl = imageUrlRaw.trim() ? imageUrlRaw.trim() : null;
+
+  const fields = demoFields();
+
+  const config = {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    form: { name, description },
+    fields: fields.map((f) => ({
+      key: f.key,
+      label: f.label,
+      type: f.type,
+      required: f.required,
+      sortOrder: f.sortOrder,
+      placeholder: f.placeholder ?? null,
+      helpText: f.helpText ?? null,
+      config: typeof f.config === "undefined" ? null : f.config,
+    })),
+  };
+
+  const existing = await prisma.formPreset.findFirst({
+    where: { tenantId, name, isPublic: false },
+    select: { id: true },
+  });
+
+  const preset = existing
+    ? await prisma.formPreset.update({
+        where: { id: existing.id },
+        data: {
+          category,
+          description,
+          imageUrl,
+          isPublic: false,
+          config: asInputJson(config),
+        },
+        select: { id: true, name: true, category: true, isPublic: true },
+      })
+    : await prisma.formPreset.create({
+        data: {
+          tenantId,
+          name,
+          category,
+          description,
+          imageUrl,
+          isPublic: false,
+          config: asInputJson(config),
+        },
+        select: { id: true, name: true, category: true, isPublic: true },
+      });
+
+  return preset;
 }
 
 /**
@@ -339,9 +431,17 @@ async function main() {
     const form = await upsertDemoForm(db.prisma, tenant.id);
     const events = await upsertDemoEvents(db.prisma, tenant.id);
 
+    const preset = await upsertDemoPreset(db.prisma, tenant.id);
+
     console.log("[seed] Tenant:", tenant.slug, tenant.id);
     console.log("[seed] Owner:", owner.email, owner.id, `(role=${owner.role})`);
     console.log("[seed] Form:", form.name, form.id, `(status=${form.status})`);
+
+    if (preset) {
+      console.log("[seed] Preset:", preset.name, preset.id, `(category=${preset.category}, public=${preset.isPublic})`);
+    } else {
+      console.log("[seed] Preset: none");
+    }
 
     if (events.length) {
       for (const ev of events) console.log("[seed] Event:", ev.name, ev.id, `(status=${ev.status})`);

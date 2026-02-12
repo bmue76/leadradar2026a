@@ -184,7 +184,7 @@ model Tenant {
   // TP 4.8 — Templates
   formTemplates FormTemplate[]
 
-  // TP 7.0 — Presets (public + tenant-owned)
+  // TP 7.0 — Presets (tenant-owned now; public gallery later via tenantId=NULL + isPublic=true)
   formPresets FormPreset[]
 
   // TP 3.3 — Events
@@ -417,26 +417,22 @@ model FormTemplate {
 }
 
 //
-// TP 7.0 — Form Presets (public + tenant-owned)
-// - Public presets: tenantId=NULL + isPublic=true (readable by all tenants, not editable by foreign tenants).
-// - Internal presets: tenantId set + isPublic=false.
-// - Snapshot must be deterministic (fields sorted by sortOrder, createdAt, id).
+// TP 7.0 — Form Presets (tenant-owned; public later)
+// - MVP: tenant-scoped CRUD (API enforces tenantId).
+// - Future: public gallery can be represented as tenantId=NULL + isPublic=true.
 //
 model FormPreset {
   id       String  @id @default(cuid())
   tenantId String?
 
   name        String
-  category    String?
+  category    String
   description String?
-  isPublic    Boolean @default(false)
+  config      Json
 
   // MVP: URL-only preview image (upload/storage later)
-  previewImageUrl String?
-
-  // Snapshot payload
-  config         Json
-  fieldsSnapshot Json
+  imageUrl  String?
+  isPublic  Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -444,14 +440,12 @@ model FormPreset {
   tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, createdAt])
+  @@index([tenantId, updatedAt])
   @@index([tenantId, name])
   @@index([tenantId, category, createdAt])
 
   @@index([isPublic, createdAt])
   @@index([isPublic, name])
-
-  @@index([category, createdAt])
-  @@index([tenantId, isPublic, createdAt])
 }
 
 model FormField {
