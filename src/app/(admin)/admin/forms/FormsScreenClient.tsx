@@ -10,7 +10,7 @@ type ApiOk<T> = { ok: true; data: T; traceId: string };
 type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
 type ApiResp<T> = ApiOk<T> | ApiErr;
 
-type ActiveEvent = null | { id: string; name: string };
+type ActiveEvent = { id: string; name: string };
 
 type ReadinessState = "NO_ACTIVE_EVENT" | "NO_ASSIGNED_FORM" | "ASSIGNED_BUT_INACTIVE" | "READY" | "READY_MULTI";
 
@@ -33,10 +33,15 @@ type FormListItem = {
 };
 
 type FormsListApi = {
-  activeEvent: ActiveEvent;
+  activeEvents?: ActiveEvent[];
+  contextEvent?: ActiveEvent | null;
+
+  // backward compat:
+  activeEvent?: ActiveEvent | null;
+
   readiness?: Readiness;
   items?: FormListItem[];
-  forms?: FormListItem[]; // backward compat
+  forms?: FormListItem[];
 };
 
 type FormDetail = {
@@ -122,18 +127,23 @@ function Select({
   onChange,
   ariaLabel,
   children,
+  disabled,
 }: {
   value: string;
   onChange: (v: string) => void;
   ariaLabel: string;
   children: React.ReactNode;
+  disabled?: boolean;
 }) {
   return (
     <select
-      className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
+      className={`h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200 ${
+        disabled ? "opacity-50" : ""
+      }`}
       value={value}
       aria-label={ariaLabel}
       onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
     >
       {children}
     </select>
@@ -151,7 +161,7 @@ function Input({
 }) {
   return (
     <input
-      className="h-9 w-[260px] rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+      className="h-9 w-[240px] rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
       value={value}
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
@@ -222,15 +232,17 @@ function DrawerShell({
 }
 
 function ReadyCard(props: {
-  activeEvent: ActiveEvent;
+  activeEvents: ActiveEvent[];
+  contextEventId: string | null;
   readiness: Readiness | null;
   onPrimary: () => void;
   onOpenTemplates: () => void;
   onOpenEvents: () => void;
   onOpenDevices: () => void;
 }) {
-  const evName = props.activeEvent?.name ?? null;
   const r = props.readiness;
+
+  const ctx = props.activeEvents.find((e) => e.id === props.contextEventId) ?? null;
 
   const badge = (() => {
     const base = "inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold";
@@ -265,22 +277,36 @@ function ReadyCard(props: {
           <div className="mt-1 text-sm text-slate-600">{r?.text ?? "Bitte kurz warten."}</div>
 
           <div className="mt-2 text-xs text-slate-500">
-            Aktives Event: <span className="font-semibold text-slate-700">{evName ? evName : "—"}</span>
+            Aktive Events: <span className="font-semibold text-slate-700">{props.activeEvents.length}</span>
+            {" • "}
+            Kontext: <span className="font-semibold text-slate-700">{ctx ? ctx.name : "—"}</span>
           </div>
         </div>
 
         <div className="flex flex-col items-stretch gap-2">
           <Button label={r?.primary?.label ?? "…"} kind="primary" disabled={!r?.primary?.href} onClick={props.onPrimary} />
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <button type="button" className="text-xs font-medium text-slate-500 hover:text-slate-900" onClick={props.onOpenTemplates}>
+            <button
+              type="button"
+              className="text-xs font-medium text-slate-500 hover:text-slate-900"
+              onClick={props.onOpenTemplates}
+            >
               Vorlagen
             </button>
             <span className="text-xs text-slate-300">•</span>
-            <button type="button" className="text-xs font-medium text-slate-500 hover:text-slate-900" onClick={props.onOpenEvents}>
+            <button
+              type="button"
+              className="text-xs font-medium text-slate-500 hover:text-slate-900"
+              onClick={props.onOpenEvents}
+            >
               Events
             </button>
             <span className="text-xs text-slate-300">•</span>
-            <button type="button" className="text-xs font-medium text-slate-500 hover:text-slate-900" onClick={props.onOpenDevices}>
+            <button
+              type="button"
+              className="text-xs font-medium text-slate-500 hover:text-slate-900"
+              onClick={props.onOpenDevices}
+            >
               Geräte
             </button>
           </div>
@@ -294,7 +320,7 @@ export function FormsScreenClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const [activeEvent, setActiveEvent] = useState<ActiveEvent>(null);
+  const [activeEvents, setActiveEvents] = useState<ActiveEvent[]>([]);
   const [readiness, setReadiness] = useState<Readiness | null>(null);
 
   const [q, setQ] = useState("");
@@ -314,7 +340,22 @@ export function FormsScreenClient() {
 
   const autoOpenConsumedRef = useRef(false);
 
-  const activeEventName = activeEvent?.name ?? null;
+  // URL ist Source-of-Truth (kein setState im Effect)
+  const selectedEventId = useMemo(() => {
+    const urlEventId = (searchParams.get("eventId") ?? "").trim();
+    return urlEventId ? urlEventId : null;
+  }, [searchParams]);
+
+  const eventNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const ev of activeEvents) m.set(ev.id, ev.name);
+    return m;
+  }, [activeEvents]);
+
+  const selectedEventName = useMemo(() => {
+    if (!selectedEventId) return null;
+    return eventNameById.get(selectedEventId) ?? null;
+  }, [selectedEventId, eventNameById]);
 
   const { sort, dir } = useMemo(() => {
     if (sortOpt === "UPDATED_ASC") return { sort: "updatedAt" as const, dir: "asc" as const };
@@ -330,14 +371,25 @@ export function FormsScreenClient() {
     return n === 1 ? "1 Formular" : `${n} Formulare`;
   }, [items.length]);
 
+  const syncUrlEventId = useCallback(
+    (nextEventId: string | null) => {
+      const sp = new URLSearchParams(searchParams.toString());
+      if (nextEventId) sp.set("eventId", nextEventId);
+      else sp.delete("eventId");
+      router.replace(`/admin/forms?${sp.toString()}`);
+    },
+    [router, searchParams]
+  );
+
   const buildListUrl = useCallback((): string => {
     const sp = new URLSearchParams();
     if (q.trim()) sp.set("q", q.trim());
     sp.set("status", status);
     sp.set("sort", sort);
     sp.set("dir", dir);
+    if (selectedEventId) sp.set("eventId", selectedEventId);
     return `/api/admin/v1/forms?${sp.toString()}`;
-  }, [q, status, sort, dir]);
+  }, [q, status, sort, dir, selectedEventId]);
 
   const loadList = useCallback(async () => {
     setLoadingList(true);
@@ -365,10 +417,27 @@ export function FormsScreenClient() {
         return;
       }
 
-      setActiveEvent((json.data.activeEvent ?? null) as ActiveEvent);
-      setReadiness((json.data.readiness ?? null) as Readiness | null);
+      const data = json.data;
 
-      const list = (json.data.items ?? json.data.forms ?? []) as FormListItem[];
+      const evs = Array.isArray(data.activeEvents) ? data.activeEvents : [];
+      setActiveEvents(evs);
+
+      const ctx = (data.contextEvent ?? data.activeEvent ?? null) as ActiveEvent | null;
+
+      // Wenn URL eventId fehlt/ungültig -> auf ctx korrigieren (URL-only, kein setState)
+      if (ctx?.id) {
+        const isValid = selectedEventId ? evs.some((e) => e.id === selectedEventId) : false;
+        if (!selectedEventId || !isValid) {
+          syncUrlEventId(ctx.id);
+        }
+      } else {
+        // kein ACTIVE event -> eventId aus URL entfernen
+        if (selectedEventId) syncUrlEventId(null);
+      }
+
+      setReadiness((data.readiness ?? null) as Readiness | null);
+
+      const list = (data.items ?? data.forms ?? []) as FormListItem[];
       setItems(Array.isArray(list) ? list : []);
       setLoadingList(false);
     } catch {
@@ -376,7 +445,7 @@ export function FormsScreenClient() {
       setListError({ message: "Konnte Formulare nicht laden. Bitte erneut versuchen." });
       setLoadingList(false);
     }
-  }, [buildListUrl]);
+  }, [buildListUrl, selectedEventId, syncUrlEventId]);
 
   const refreshAll = useCallback(async () => {
     await loadList();
@@ -390,7 +459,7 @@ export function FormsScreenClient() {
   useEffect(() => {
     const t = setTimeout(() => void loadList(), 220);
     return () => clearTimeout(t);
-  }, [q, status, sortOpt, loadList]);
+  }, [q, status, sortOpt, selectedEventId, loadList]);
 
   const openDrawer = useCallback((id: string) => {
     setSelectedId(id);
@@ -516,11 +585,12 @@ export function FormsScreenClient() {
 
   const onToggleAssigned = useCallback(async () => {
     if (!detail) return;
+    if (!selectedEventId) return;
     setDetailError(null);
 
-    const currentlyAssigned = !!detail.assignedEventId && !!activeEvent?.id && detail.assignedEventId === activeEvent.id;
-    await patchForm(detail.id, { setAssignedToActiveEvent: !currentlyAssigned });
-  }, [detail, activeEvent, patchForm]);
+    const currentlyAssigned = detail.assignedEventId === selectedEventId;
+    await patchForm(detail.id, { setAssignedToEventId: currentlyAssigned ? null : selectedEventId });
+  }, [detail, selectedEventId, patchForm]);
 
   const onChangeStatus = useCallback(
     async (next: FormStatus) => {
@@ -606,8 +676,11 @@ export function FormsScreenClient() {
 
   const onOpenPreview = useCallback(() => {
     if (!detail) return;
-    router.push(`/admin/forms/${detail.id}/builder?mode=preview`);
-  }, [detail, router]);
+    const sp = new URLSearchParams();
+    sp.set("mode", "preview");
+    if (selectedEventId) sp.set("eventId", selectedEventId);
+    router.push(`/admin/forms/${detail.id}/builder?${sp.toString()}`);
+  }, [detail, router, selectedEventId]);
 
   const onOpenTemplates = useCallback(() => {
     router.push("/admin/templates?intent=create");
@@ -629,16 +702,19 @@ export function FormsScreenClient() {
 
   const assignedLabelForRow = useCallback(
     (it: FormListItem): string => {
-      if (!activeEventName) return "—";
-      return it.assignedToActiveEvent ? activeEventName : "—";
+      if (!it.assignedEventId) return "—";
+      const name = eventNameById.get(it.assignedEventId);
+      if (name) return name;
+      return "Zugewiesen (inaktiv)";
     },
-    [activeEventName]
+    [eventNameById]
   );
 
   return (
     <div className="space-y-4">
       <ReadyCard
-        activeEvent={activeEvent}
+        activeEvents={activeEvents}
+        contextEventId={selectedEventId}
         readiness={readiness}
         onPrimary={() => {
           const href = readiness?.primary?.href;
@@ -661,6 +737,26 @@ export function FormsScreenClient() {
             ) : null}
 
             <div className="ml-auto flex flex-wrap items-center gap-2">
+              <div className="hidden md:flex items-center gap-2">
+                <div className="text-sm text-slate-500">Event</div>
+                <Select
+                  value={selectedEventId ?? ""}
+                  onChange={(v) => {
+                    const next = v.trim() ? v.trim() : null;
+                    syncUrlEventId(next);
+                  }}
+                  ariaLabel="Event wählen"
+                  disabled={activeEvents.length <= 0}
+                >
+                  <option value="">{activeEvents.length ? "Event wählen…" : "Keine aktiven Events"}</option>
+                  {activeEvents.map((ev) => (
+                    <option key={ev.id} value={ev.id}>
+                      {ev.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+
               <Input value={q} onChange={setQ} placeholder="Suchen…" />
               <IconButton title="Aktualisieren" onClick={() => void refreshAll()} />
             </div>
@@ -679,6 +775,16 @@ export function FormsScreenClient() {
               </Select>
             </div>
           </div>
+
+          {selectedEventName ? (
+            <div className="mt-2 text-xs text-slate-500">
+              Kontext-Event: <span className="font-semibold text-slate-700">{selectedEventName}</span>
+            </div>
+          ) : (
+            <div className="mt-2 text-xs text-slate-500">
+              Kontext-Event: <span className="font-semibold text-slate-700">—</span>
+            </div>
+          )}
         </div>
 
         <div className="h-px w-full bg-slate-200" />
@@ -753,7 +859,11 @@ export function FormsScreenClient() {
                     </td>
 
                     <td className="px-5 py-4">
-                      <span className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold ${statusPillClasses(it.status)}`}>
+                      <span
+                        className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold ${statusPillClasses(
+                          it.status
+                        )}`}
+                      >
                         {statusLabel(it.status)}
                       </span>
                     </td>
@@ -788,7 +898,7 @@ export function FormsScreenClient() {
 
           <div className="px-5 py-4 text-xs text-slate-500">
             In der App sichtbar: <span className="font-semibold text-slate-700">Aktiv</span> + dem{" "}
-            <span className="font-semibold text-slate-700">aktiven Event</span> zugewiesen.
+            <span className="font-semibold text-slate-700">ausgewählten Event</span> zugewiesen.
           </div>
         </div>
 
@@ -838,7 +948,7 @@ export function FormsScreenClient() {
                   </Select>
                 </div>
                 <div className="mt-2 text-xs text-slate-500">
-                  In der App sichtbar: <span className="font-semibold text-slate-700">Aktiv</span> + zugewiesen.
+                  In der App sichtbar: <span className="font-semibold text-slate-700">Aktiv</span> + dem ausgewählten Event zugewiesen.
                 </div>
               </div>
 
@@ -846,8 +956,8 @@ export function FormsScreenClient() {
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
                     <div className="text-sm font-semibold text-slate-900">
-                      Für das aktive Event sichtbar{" "}
-                      <span className="text-slate-500">({activeEventName ? activeEventName : "kein aktives Event"})</span>
+                      Für das ausgewählte Event sichtbar{" "}
+                      <span className="text-slate-500">({selectedEventName ? selectedEventName : "kein Event"})</span>
                     </div>
                     <div className="mt-1 text-sm text-slate-600">
                       Wenn das Formular zugewiesen ist, erscheint es (bei Status „Aktiv“) in der App.
@@ -857,14 +967,14 @@ export function FormsScreenClient() {
                   <button
                     type="button"
                     className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-slate-200 ${
-                      detail.assignedEventId && activeEvent?.id && detail.assignedEventId === activeEvent.id
+                      selectedEventId && detail.assignedEventId === selectedEventId
                         ? "border-emerald-200 bg-emerald-500"
                         : "border-slate-200 bg-slate-100"
-                    } ${!activeEvent?.id || detail.status === "ARCHIVED" ? "opacity-50 pointer-events-none" : ""}`}
+                    } ${!selectedEventId || detail.status === "ARCHIVED" ? "opacity-50 pointer-events-none" : ""}`}
                     aria-label="Zuweisung umschalten"
                     title={
-                      !activeEvent?.id
-                        ? "Kein aktives Event verfügbar."
+                      !selectedEventId
+                        ? "Kein Event ausgewählt."
                         : detail.status === "ARCHIVED"
                         ? "Archivierte Formulare können nicht zugewiesen werden."
                         : "Zuweisung umschalten"
@@ -873,9 +983,7 @@ export function FormsScreenClient() {
                   >
                     <span
                       className={`inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${
-                        detail.assignedEventId && activeEvent?.id && detail.assignedEventId === activeEvent.id
-                          ? "translate-x-5"
-                          : "translate-x-0.5"
+                        selectedEventId && detail.assignedEventId === selectedEventId ? "translate-x-5" : "translate-x-0.5"
                       }`}
                     />
                   </button>

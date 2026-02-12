@@ -58,7 +58,7 @@ export default function FormSettingsPanel({
     setHeaderTitle(safeGet(cfg, ["ui", "header", "title"], "") ?? "");
     setHeaderSubtitle(safeGet(cfg, ["ui", "header", "subtitle"], "") ?? "");
     setAccentColor(safeGet(cfg, ["ui", "accentColor"], "") ?? "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    
   }, [formId, name, description, status]);
 
   const configPatch = useMemo(() => {
