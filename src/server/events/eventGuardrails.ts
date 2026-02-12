@@ -11,8 +11,12 @@ export type SetEventStatusWithGuardsResult = {
 /**
  * TP 3.7/3.8 — Event Guardrails (ONLINE-only, MVP)
  * Single Source of Truth:
- * - setEventStatusWithGuards: ACTIVE invariant + auto-unbind
+ * - setEventStatusWithGuards: status changes + ops-safe device unbind
  * - assertEventIsBindable: only ACTIVE bindable
+ *
+ * Multi-ACTIVE:
+ * - Multiple ACTIVE events are allowed.
+ * - No auto-archiving of other ACTIVE events.
  *
  * Notes:
  * - tenant-scoped + leak-safe (id+tenantId lookup => else 404)
@@ -35,57 +39,35 @@ export async function setEventStatusWithGuards(args: {
 
         if (!existing) throw httpError(404, "NOT_FOUND", "Not found.");
 
-        let autoArchivedEventId: string | null = null;
+        // Keep archive "final" (align with admin repo behaviour)
+        if (existing.status === "ARCHIVED" && newStatus === "ACTIVE") {
+          throw httpError(409, "EVENT_ARCHIVED", "Event is ARCHIVED.");
+        }
+
         let devicesUnboundCount = 0;
 
-        if (newStatus === "ACTIVE") {
-          // Defensive: if DB got inconsistent, clean up (>1 ACTIVE) by archiving all other ACTIVE events.
-          const others = await tx.event.findMany({
-            where: { tenantId, status: "ACTIVE", id: { not: eventId } },
-            select: { id: true },
-            take: 50,
-          });
-
-          const otherIds = others.map((o) => o.id);
-          autoArchivedEventId = otherIds.length ? otherIds[0] : null;
-
-          if (otherIds.length > 0) {
-            await tx.event.updateMany({
-              where: { tenantId, id: { in: otherIds } },
-              data: { status: "ARCHIVED" },
-            });
-
-            const unbindRes = await tx.mobileDevice.updateMany({
-              where: { tenantId, activeEventId: { in: otherIds } },
-              data: { activeEventId: null },
-            });
-
-            devicesUnboundCount += unbindRes.count;
-          }
-
-          await tx.event.updateMany({
-            where: { id: eventId, tenantId },
-            data: { status: "ACTIVE" },
-          });
-        } else {
-          // Any non-ACTIVE status => unbind devices pointing to this event (ops-safe, defensive)
+        // Any non-ACTIVE status => unbind devices pointing to this event (ops-safe, defensive)
+        if (newStatus !== "ACTIVE") {
           const unbindRes = await tx.mobileDevice.updateMany({
             where: { tenantId, activeEventId: eventId },
             data: { activeEventId: null },
           });
-          devicesUnboundCount += unbindRes.count;
-
-          await tx.event.updateMany({
-            where: { id: eventId, tenantId },
-            data: { status: newStatus },
-          });
+          devicesUnboundCount = unbindRes.count;
         }
+
+        await tx.event.updateMany({
+          where: { id: eventId, tenantId },
+          data: { status: newStatus },
+        });
 
         const event = await tx.event.findFirst({
           where: { id: eventId, tenantId },
         });
 
         if (!event) throw httpError(404, "NOT_FOUND", "Not found.");
+
+        // Multi-ACTIVE => never auto-archive others
+        const autoArchivedEventId: string | null = null;
 
         return { event, autoArchivedEventId, devicesUnboundCount };
       },
