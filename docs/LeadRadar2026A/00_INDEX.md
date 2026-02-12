@@ -50,3 +50,6 @@ TP 6.6 — Mobile Branding Provider + Cleanup (nur eine Source of Truth) + Admin
 - TP 6.7 — Mobile → Branding global (Tabs Accent + Resume Refresh) → ../teilprojekt-6.7-mobile-branding-accent-tabs-resume.md
 - teilprojekt-6.9-mobile-ops-device-slot-limit.md — TP6.9 Mobile Ops: Device Slot Limit (Guard + UX)
 - teilprojekt-6.10-events-multi-active-home-summary.md — Multi-ACTIVE Events + Home Summary Aggregation
+
+## Teilprojekt 6.10
+- teilprojekt-6.10-events-multi-active-device-bound.md — Multi-ACTIVE Events (device-bound) + API/Home Summary
