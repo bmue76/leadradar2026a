@@ -689,7 +689,7 @@ export default function ScreenClient() {
                     >
                       {statusLabel(draft.status || "DRAFT")}
                     </span>
-                    <span className="text-xs text-slate-500">Aktiv kann nur ein Event sein (Guardrail).</span>
+                    <span className="text-xs text-slate-500">Mehrere Events können aktiv sein. Geräte werden pro Gerät an ein Event gebunden (activeEventId).</span>
                   </div>
 
                   <div className="mt-3 flex flex-wrap gap-2">
