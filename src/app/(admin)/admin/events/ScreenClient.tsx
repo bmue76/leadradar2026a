@@ -284,7 +284,11 @@ export default function ScreenClient() {
 
   const doActivate = useCallback(
     async (id: string) => {
-      const ok = window.confirm("Dieses Event wird das einzige aktive Event.\n\nFortfahren?");
+      const ok = window.confirm("Dieses Event wird aktiviert.
+
+Andere aktive Events bleiben aktiv.
+
+Fortfahren?");
       if (!ok) return;
 
       const r = await fetchJson<{ ok: true }>(`/api/admin/v1/events/${id}/activate`, { method: "POST" });
