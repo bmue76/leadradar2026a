@@ -57,6 +57,22 @@ type FormDetail = {
 
 type UiError = { message: string; code?: string; traceId?: string };
 
+type PresetItem = {
+  id: string;
+  name: string;
+  category: string;
+  description: string | null;
+  imageUrl: string | null;
+  isPublic: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+type PresetsListApi = {
+  items?: PresetItem[];
+  presets?: PresetItem[];
+};
+
 function fmtDateTime(iso: string): string {
   try {
     return new Intl.DateTimeFormat("de-CH", { dateStyle: "short", timeStyle: "short" }).format(new Date(iso));
@@ -231,6 +247,43 @@ function DrawerShell({
   );
 }
 
+function ModalShell({
+  open,
+  title,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <button type="button" className="absolute inset-0 bg-black/20" aria-label="Schliessen" onClick={onClose} />
+      <div className="absolute left-1/2 top-1/2 w-[min(920px,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2">
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-2xl">
+          <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-slate-900">{title}</div>
+            </div>
+            <button
+              type="button"
+              className="inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-200"
+              onClick={onClose}
+            >
+              Schliessen
+            </button>
+          </div>
+          <div className="max-h-[calc(100vh-10rem)] overflow-auto px-6 py-6">{children}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ReadyCard(props: {
   activeEvents: ActiveEvent[];
   contextEventId: string | null;
@@ -316,6 +369,25 @@ function ReadyCard(props: {
   );
 }
 
+function normalizePreset(x: unknown): PresetItem | null {
+  if (!x || typeof x !== "object") return null;
+  const o = x as Record<string, unknown>;
+
+  const id = typeof o.id === "string" ? o.id : "";
+  const name = typeof o.name === "string" ? o.name : "";
+  const category = typeof o.category === "string" ? o.category : "";
+  if (!id || !name || !category) return null;
+
+  const description = typeof o.description === "string" ? o.description : o.description === null ? null : null;
+  const imageUrl = typeof o.imageUrl === "string" ? o.imageUrl : o.imageUrl === null ? null : null;
+  const isPublic = typeof o.isPublic === "boolean" ? o.isPublic : false;
+
+  const createdAt = typeof o.createdAt === "string" ? o.createdAt : undefined;
+  const updatedAt = typeof o.updatedAt === "string" ? o.updatedAt : undefined;
+
+  return { id, name, category, description, imageUrl, isPublic, createdAt, updatedAt };
+}
+
 export function FormsScreenClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -338,6 +410,18 @@ export function FormsScreenClient() {
   const [detail, setDetail] = useState<FormDetail | null>(null);
   const [detailError, setDetailError] = useState<UiError | null>(null);
 
+  // Create-from-preset modal
+  const [presetModalOpen, setPresetModalOpen] = useState(false);
+  const [presetLoading, setPresetLoading] = useState(false);
+  const [presetError, setPresetError] = useState<UiError | null>(null);
+  const [presets, setPresets] = useState<PresetItem[]>([]);
+  const [presetQ, setPresetQ] = useState("");
+  const [presetCategory, setPresetCategory] = useState<string>("ALL");
+  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
+  const [creatingFromPreset, setCreatingFromPreset] = useState(false);
+  const [createFromPresetError, setCreateFromPresetError] = useState<UiError | null>(null);
+
+  const presetsLoadedOnceRef = useRef(false);
   const autoOpenConsumedRef = useRef(false);
 
   // URL ist Source-of-Truth (kein setState im Effect)
@@ -710,6 +794,162 @@ export function FormsScreenClient() {
     [eventNameById]
   );
 
+  const loadPresets = useCallback(async () => {
+    setPresetLoading(true);
+    setPresetError(null);
+
+    try {
+      const res = await fetch("/api/admin/v1/presets", { method: "GET", cache: "no-store" });
+      const json = (await res.json()) as ApiResp<PresetsListApi | PresetItem[]>;
+
+      if (!json || typeof json !== "object") {
+        setPresets([]);
+        setPresetError({ message: "Ungültige Serverantwort." });
+        setPresetLoading(false);
+        return;
+      }
+
+      if (!json.ok) {
+        setPresets([]);
+        setPresetError({
+          message: json.error?.message || "Konnte Vorlagen nicht laden.",
+          code: json.error?.code,
+          traceId: json.traceId,
+        });
+        setPresetLoading(false);
+        return;
+      }
+
+      const d = json.data as unknown;
+
+      // tolerate shapes:
+      const rawList =
+        Array.isArray(d) ? d : Array.isArray((d as PresetsListApi).items) ? (d as PresetsListApi).items! : (d as PresetsListApi).presets;
+
+      const list = Array.isArray(rawList) ? rawList : [];
+      const normalized: PresetItem[] = [];
+      for (const x of list) {
+        const p = normalizePreset(x);
+        if (p) normalized.push(p);
+      }
+
+      setPresets(normalized);
+      setPresetLoading(false);
+    } catch {
+      setPresets([]);
+      setPresetError({ message: "Konnte Vorlagen nicht laden. Bitte erneut versuchen." });
+      setPresetLoading(false);
+    }
+  }, []);
+
+  const openPresetModal = useCallback(async () => {
+    setPresetModalOpen(true);
+    setCreateFromPresetError(null);
+
+    if (!presetsLoadedOnceRef.current) {
+      presetsLoadedOnceRef.current = true;
+      await loadPresets();
+    }
+  }, [loadPresets]);
+
+  const closePresetModal = useCallback(() => {
+    setPresetModalOpen(false);
+    setCreateFromPresetError(null);
+    setSelectedPresetId(null);
+    setPresetQ("");
+    setPresetCategory("ALL");
+  }, []);
+
+  useEffect(() => {
+    if (!presetModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closePresetModal();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [presetModalOpen, closePresetModal]);
+
+  const categories = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of presets) set.add(p.category);
+    return ["ALL", ...Array.from(set).sort((a, b) => a.localeCompare(b, "de-CH"))];
+  }, [presets]);
+
+  const filteredPresets = useMemo(() => {
+    const qq = presetQ.trim().toLowerCase();
+    return presets.filter((p) => {
+      if (presetCategory !== "ALL" && p.category !== presetCategory) return false;
+      if (!qq) return true;
+      const hay = `${p.name} ${p.category} ${p.description ?? ""}`.toLowerCase();
+      return hay.includes(qq);
+    });
+  }, [presets, presetQ, presetCategory]);
+
+  const selectedPreset = useMemo(() => {
+    if (!selectedPresetId) return null;
+    return presets.find((p) => p.id === selectedPresetId) ?? null;
+  }, [presets, selectedPresetId]);
+
+  const createFromPreset = useCallback(async () => {
+    if (!selectedPresetId) return;
+
+    setCreatingFromPreset(true);
+    setCreateFromPresetError(null);
+
+    try {
+      const res = await fetch("/api/admin/v1/forms/from-preset", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ presetId: selectedPresetId }),
+      });
+
+      const json = (await res.json()) as ApiResp<unknown>;
+
+      if (!json || typeof json !== "object") {
+        setCreateFromPresetError({ message: "Ungültige Serverantwort." });
+        setCreatingFromPreset(false);
+        return;
+      }
+
+      if (!json.ok) {
+        setCreateFromPresetError({
+          message: json.error?.message || "Formular konnte nicht erstellt werden.",
+          code: json.error?.code,
+          traceId: json.traceId,
+        });
+        setCreatingFromPreset(false);
+        return;
+      }
+
+      const data = json.data as Record<string, unknown> | null;
+
+      const newId =
+        (data && typeof data === "object" && "item" in data && (data as any).item && typeof (data as any).item.id === "string"
+          ? (data as any).item.id
+          : data && typeof data === "object" && "form" in data && (data as any).form && typeof (data as any).form.id === "string"
+          ? (data as any).form.id
+          : data && typeof data === "object" && typeof (data as any).id === "string"
+          ? (data as any).id
+          : "") as string;
+
+      if (!newId) {
+        setCreateFromPresetError({ message: "Formular erstellt, aber keine ID erhalten." });
+        setCreatingFromPreset(false);
+        return;
+      }
+
+      // UI: close modal, refresh list, open drawer
+      closePresetModal();
+      await loadList();
+      openDrawer(newId);
+
+      setCreatingFromPreset(false);
+    } catch {
+      setCreateFromPresetError({ message: "Formular konnte nicht erstellt werden. Bitte erneut versuchen." });
+      setCreatingFromPreset(false);
+    }
+  }, [selectedPresetId, closePresetModal, loadList, openDrawer]);
+
   return (
     <div className="space-y-4">
       <ReadyCard
@@ -737,6 +977,8 @@ export function FormsScreenClient() {
             ) : null}
 
             <div className="ml-auto flex flex-wrap items-center gap-2">
+              <Button label="Aus Vorlage erstellen" kind="secondary" onClick={() => void openPresetModal()} />
+
               <div className="hidden md:flex items-center gap-2">
                 <div className="text-sm text-slate-500">Event</div>
                 <Select
@@ -846,8 +1088,9 @@ export function FormsScreenClient() {
                   <td colSpan={5} className="px-5 py-10">
                     <div className="text-sm font-semibold text-slate-900">Keine Formulare</div>
                     <div className="mt-1 text-sm text-slate-600">Starte mit einer Vorlage oder erstelle ein neues Formular.</div>
-                    <div className="mt-3">
-                      <Button label="Formular vorbereiten" kind="secondary" onClick={onOpenTemplates} />
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button label="Aus Vorlage erstellen" kind="secondary" onClick={() => void openPresetModal()} />
+                      <Button label="Vorlagen öffnen" kind="ghost" onClick={onOpenTemplates} />
                     </div>
                   </td>
                 </tr>
@@ -1024,6 +1267,186 @@ export function FormsScreenClient() {
             </div>
           )}
         </DrawerShell>
+
+        <ModalShell open={presetModalOpen} title="Aus Vorlage erstellen" onClose={closePresetModal}>
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="min-w-[220px]">
+                <div className="text-xs font-semibold text-slate-600">Kategorie</div>
+                <div className="mt-1">
+                  <Select value={presetCategory} onChange={setPresetCategory} ariaLabel="Kategorie wählen">
+                    {categories.map((c) => (
+                      <option key={c} value={c}>
+                        {c === "ALL" ? "Alle" : c}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              </div>
+
+              <div className="flex-1 min-w-[220px]">
+                <div className="text-xs font-semibold text-slate-600">Suche</div>
+                <div className="mt-1">
+                  <input
+                    className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                    value={presetQ}
+                    placeholder="Name, Kategorie, Beschreibung…"
+                    onChange={(e) => setPresetQ(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="pt-5">
+                <Button label="Neu laden" kind="ghost" onClick={() => void loadPresets()} disabled={presetLoading} />
+              </div>
+            </div>
+
+            {presetLoading ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="animate-pulse space-y-2">
+                  <div className="h-4 w-40 rounded bg-slate-100" />
+                  <div className="h-10 w-full rounded bg-slate-100" />
+                  <div className="h-10 w-full rounded bg-slate-100" />
+                </div>
+              </div>
+            ) : presetError ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm font-semibold text-slate-900">Konnte Vorlagen nicht laden</div>
+                <div className="mt-1 text-sm text-slate-600">{presetError.message}</div>
+                {presetError.code || presetError.traceId ? (
+                  <div className="mt-2 text-xs text-slate-500">
+                    {presetError.code ? `Code: ${presetError.code}` : null}
+                    {presetError.code && presetError.traceId ? " • " : null}
+                    {presetError.traceId ? `Trace: ${presetError.traceId}` : null}
+                  </div>
+                ) : null}
+                <div className="mt-3">
+                  <Button label="Erneut versuchen" kind="secondary" onClick={() => void loadPresets()} />
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="rounded-2xl border border-slate-200 overflow-hidden">
+                  <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+                    <div className="text-sm font-semibold text-slate-900">
+                      Vorlagen <span className="text-slate-500">({filteredPresets.length})</span>
+                    </div>
+                    <div className="mt-1 text-xs text-slate-600">Wähle eine Vorlage aus.</div>
+                  </div>
+
+                  <div className="max-h-[420px] overflow-auto divide-y divide-slate-100">
+                    {filteredPresets.length <= 0 ? (
+                      <div className="px-4 py-6 text-sm text-slate-600">Keine Vorlagen gefunden.</div>
+                    ) : (
+                      filteredPresets.map((p) => {
+                        const active = p.id === selectedPresetId;
+                        return (
+                          <button
+                            key={p.id}
+                            type="button"
+                            className={`w-full text-left px-4 py-3 hover:bg-slate-50 focus:outline-none ${
+                              active ? "bg-slate-50" : "bg-white"
+                            }`}
+                            onClick={() => setSelectedPresetId(p.id)}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-semibold text-slate-900">{p.name}</div>
+                                <div className="mt-1 flex flex-wrap items-center gap-2">
+                                  <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs font-semibold text-slate-700">
+                                    {p.category}
+                                  </span>
+                                  <span
+                                    className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${
+                                      p.isPublic
+                                        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                                        : "border-slate-200 bg-slate-50 text-slate-700"
+                                    }`}
+                                  >
+                                    {p.isPublic ? "Öffentlich" : "Privat"}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="text-xs text-slate-500">{active ? "✓" : ""}</div>
+                            </div>
+
+                            {p.description ? (
+                              <div className="mt-2 line-clamp-2 text-xs text-slate-600">{p.description}</div>
+                            ) : null}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="text-sm font-semibold text-slate-900">Vorschau</div>
+
+                  {!selectedPreset ? (
+                    <div className="mt-2 text-sm text-slate-600">Wähle links eine Vorlage aus.</div>
+                  ) : (
+                    <div className="mt-3 space-y-3">
+                      <div>
+                        <div className="text-xs font-semibold text-slate-600">Name</div>
+                        <div className="mt-1 text-sm font-semibold text-slate-900">{selectedPreset.name}</div>
+                      </div>
+
+                      <div>
+                        <div className="text-xs font-semibold text-slate-600">Kategorie</div>
+                        <div className="mt-1 text-sm text-slate-800">{selectedPreset.category}</div>
+                      </div>
+
+                      {selectedPreset.imageUrl ? (
+                        <div>
+                          <div className="text-xs font-semibold text-slate-600">Bild</div>
+                          <div className="mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={selectedPreset.imageUrl} alt={selectedPreset.name} className="h-48 w-full object-cover" />
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div>
+                        <div className="text-xs font-semibold text-slate-600">Beschreibung</div>
+                        <div className="mt-1 text-sm text-slate-700">{selectedPreset.description ?? "—"}</div>
+                      </div>
+
+                      {selectedPreset.createdAt ? (
+                        <div className="text-xs text-slate-500">Erstellt: {fmtDateTime(selectedPreset.createdAt)}</div>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {createFromPresetError ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                <div className="text-sm font-semibold text-rose-900">Konnte nicht erstellen</div>
+                <div className="mt-1 text-sm text-rose-800">{createFromPresetError.message}</div>
+                {createFromPresetError.code || createFromPresetError.traceId ? (
+                  <div className="mt-2 text-xs text-rose-800/80">
+                    {createFromPresetError.code ? `Code: ${createFromPresetError.code}` : null}
+                    {createFromPresetError.code && createFromPresetError.traceId ? " • " : null}
+                    {createFromPresetError.traceId ? `Trace: ${createFromPresetError.traceId}` : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Button label="Abbrechen" kind="ghost" onClick={closePresetModal} disabled={creatingFromPreset} />
+              <Button
+                label={creatingFromPreset ? "Erstellen…" : "Formular erstellen"}
+                kind="primary"
+                onClick={() => void createFromPreset()}
+                disabled={!selectedPresetId || creatingFromPreset}
+                title={!selectedPresetId ? "Bitte Vorlage auswählen." : undefined}
+              />
+            </div>
+          </div>
+        </ModalShell>
       </section>
     </div>
   );
