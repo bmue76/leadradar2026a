@@ -22,6 +22,7 @@ type Summary = {
     accentColor: string | null;
   };
 
+  // Backward-compat: primary ACTIVE event
   activeEvent: null | {
     id: string;
     name: string;
@@ -29,6 +30,15 @@ type Summary = {
     startsAt: string | null;
     endsAt: string | null;
   };
+
+  // New: all ACTIVE events
+  activeEvents?: Array<{
+    id: string;
+    name: string;
+    status: "ACTIVE";
+    startsAt: string | null;
+    endsAt: string | null;
+  }>;
 
   readiness: {
     overall: ReadinessLevel;
@@ -162,8 +172,22 @@ export function AdminHomeOverview() {
 
   const subline = useMemo(() => {
     if (!data) return "";
-    if (!data.activeEvent) return "Kein aktives Event";
-    return `${data.activeEvent.name} • AKTIVES EVENT`;
+
+    const activeCount = Array.isArray(data.activeEvents)
+      ? data.activeEvents.length
+      : data.activeEvent
+        ? 1
+        : 0;
+
+    if (activeCount <= 0) return "Keine aktiven Events";
+
+    const primaryName =
+      data.activeEvent?.name ??
+      (Array.isArray(data.activeEvents) ? data.activeEvents[0]?.name : null) ??
+      "Event";
+
+    if (activeCount === 1) return `${primaryName} • AKTIVES EVENT`;
+    return `${activeCount} aktive Events • primär: ${primaryName}`;
   }, [data]);
 
   const load = useCallback(async () => {
@@ -357,7 +381,9 @@ export function AdminHomeOverview() {
           </div>
 
           <div className="mt-4 text-xs text-slate-500">
-            Mobile zeigt nur <span className="font-medium">ACTIVE</span> Formulare, die dem aktiven Event zugewiesen sind.
+            Mobile zeigt nur <span className="font-medium">ACTIVE</span> Formulare, die einem{" "}
+            <span className="font-medium">ACTIVE</span> Event zugewiesen sind – Capture-Kontext ist pro Gerät (
+            <span className="font-mono">mobileDevice.activeEventId</span>).
           </div>
         </CardShell>
 

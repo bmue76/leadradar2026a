@@ -64,7 +64,6 @@ function datePartsInTz(d: Date, timeZone: string): { year: number; month: number
 }
 
 function timeZoneOffsetMinutes(at: Date, timeZone: string): number {
-  // Trick: format the given Date into the target TZ parts, interpret as UTC, diff to original.
   const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone,
     hour12: false,
@@ -120,6 +119,10 @@ function exportStatusTitle(s: ExportJobStatus): string {
   return "Export erstellt";
 }
 
+function isoOrNull(d: Date | null): string | null {
+  return d ? d.toISOString() : null;
+}
+
 export async function GET(req: Request) {
   try {
     const { tenantId, user } = await requireAdminAuth(req);
@@ -141,7 +144,8 @@ export async function GET(req: Request) {
       return jsonError(req, 404, "NOT_FOUND", "Nicht gefunden.");
     }
 
-    const activeEvent = await prisma.event.findFirst({
+    // Multi-ACTIVE: load all ACTIVE events (primary = most recently updated/created)
+    const activeEventRows = await prisma.event.findMany({
       where: { tenantId, status: "ACTIVE" },
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
       select: {
@@ -152,7 +156,19 @@ export async function GET(req: Request) {
         endsAt: true,
         updatedAt: true,
       },
+      take: 50,
     });
+
+    const activeEvents = activeEventRows.map((e) => ({
+      id: e.id,
+      name: e.name,
+      status: "ACTIVE" as const,
+      startsAt: isoOrNull(e.startsAt),
+      endsAt: isoOrNull(e.endsAt),
+    }));
+
+    const primaryActiveEvent = activeEventRows[0] ?? null;
+    const activeEventIds = activeEventRows.map((e) => e.id);
 
     const now = new Date();
     const todayYmd = datePartsInTz(now, TZ);
@@ -166,17 +182,16 @@ export async function GET(req: Request) {
     const weekStartUtc = zonedMidnightUtc(weekStartYmd, TZ);
     const nextWeekStartUtc = zonedMidnightUtc(nextWeekStartYmd, TZ);
 
-    const activeEventId = activeEvent?.id ?? null;
-
-    const countActiveAssignedForms = activeEventId
-      ? await prisma.form.count({
-          where: {
-            tenantId,
-            status: FormStatus.ACTIVE,
-            assignedEventId: activeEventId,
-          },
-        })
-      : 0;
+    const countActiveAssignedForms =
+      activeEventIds.length > 0
+        ? await prisma.form.count({
+            where: {
+              tenantId,
+              status: FormStatus.ACTIVE,
+              assignedEventId: { in: activeEventIds },
+            },
+          })
+        : 0;
 
     const deviceConnectedSince = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const connectedDevicesCount = await prisma.mobileDevice.count({
@@ -196,31 +211,39 @@ export async function GET(req: Request) {
     }> = [];
 
     // 1) Active event present
-    if (!activeEventId) {
+    if (activeEventIds.length === 0) {
       readinessItems.push({
         id: "ACTIVE_EVENT_PRESENT",
         level: "BLOCK",
+        title: "Aktive Events",
+        detail: "Keine aktiven Events. Bitte ein Event erstellen oder aktivieren.",
+        action: { label: "Events öffnen", href: "/admin/events" },
+      });
+    } else if (activeEventIds.length === 1) {
+      readinessItems.push({
+        id: "ACTIVE_EVENT_PRESENT",
+        level: "OK",
         title: "Aktives Event",
-        detail: "Kein aktives Event aktiv. Bitte ein Event erstellen oder aktivieren.",
-        action: { label: "Event öffnen", href: "/admin/events" },
+        detail: `„${primaryActiveEvent?.name ?? "Event"}“ ist aktiv.`,
+        action: { label: "Events öffnen", href: "/admin/events" },
       });
     } else {
       readinessItems.push({
         id: "ACTIVE_EVENT_PRESENT",
         level: "OK",
-        title: "Aktives Event",
-        detail: `„${activeEvent?.name ?? "Event"}“ ist aktiv.`,
-        action: { label: "Event öffnen", href: "/admin/events" },
+        title: "Aktive Events",
+        detail: `${activeEventIds.length} Events sind aktiv (primär: „${primaryActiveEvent?.name ?? "Event"}“).`,
+        action: { label: "Events öffnen", href: "/admin/events" },
       });
     }
 
-    // 2) Active forms assigned to active event (Option 2)
-    if (!activeEventId) {
+    // 2) Active forms assigned to active events (Option 2)
+    if (activeEventIds.length === 0) {
       readinessItems.push({
         id: "ACTIVE_FORMS_ASSIGNED_TO_ACTIVE_EVENT",
         level: "BLOCK",
         title: "Formulare dem Event zuweisen",
-        detail: "Ohne aktives Event können keine Formulare zugewiesen werden.",
+        detail: "Ohne aktive Events können keine Formulare zugewiesen werden.",
         action: { label: "Zu den Formularen", href: "/admin/forms" },
       });
     } else if (countActiveAssignedForms <= 0) {
@@ -228,7 +251,7 @@ export async function GET(req: Request) {
         id: "ACTIVE_FORMS_ASSIGNED_TO_ACTIVE_EVENT",
         level: "BLOCK",
         title: "Formulare dem Event zuweisen",
-        detail: "Keine ACTIVE Formulare sind dem aktiven Event zugewiesen (Option 2).",
+        detail: "Keine ACTIVE Formulare sind einem aktiven Event zugewiesen (Option 2).",
         action: { label: "Zu den Formularen", href: "/admin/forms" },
       });
     } else {
@@ -236,7 +259,7 @@ export async function GET(req: Request) {
         id: "ACTIVE_FORMS_ASSIGNED_TO_ACTIVE_EVENT",
         level: "OK",
         title: "Formulare dem Event zugewiesen",
-        detail: `${countActiveAssignedForms} ACTIVE Formular(e) sind dem aktiven Event zugewiesen.`,
+        detail: `${countActiveAssignedForms} ACTIVE Formular(e) sind aktiven Events zugewiesen.`,
         action: { label: "Zu den Formularen", href: "/admin/forms" },
       });
     }
@@ -262,7 +285,7 @@ export async function GET(req: Request) {
 
     const readinessOverall = worstLevel(readinessItems.map((i) => i.level));
 
-    // KPIs: tenant-scoped; if activeEvent exists, count only leads on ACTIVE forms assigned to that event (Option 2)
+    // KPIs: tenant-scoped; if active events exist, count only leads on ACTIVE forms assigned to those events (Option 2)
     const leadWhereToday: Prisma.LeadWhereInput = {
       tenantId,
       isDeleted: false,
@@ -274,9 +297,9 @@ export async function GET(req: Request) {
       capturedAt: { gte: weekStartUtc, lt: nextWeekStartUtc },
     };
 
-    if (activeEventId) {
-      leadWhereToday.form = { assignedEventId: activeEventId, status: FormStatus.ACTIVE };
-      leadWhereWeek.form = { assignedEventId: activeEventId, status: FormStatus.ACTIVE };
+    if (activeEventIds.length > 0) {
+      leadWhereToday.form = { assignedEventId: { in: activeEventIds }, status: FormStatus.ACTIVE };
+      leadWhereWeek.form = { assignedEventId: { in: activeEventIds }, status: FormStatus.ACTIVE };
     }
 
     const [leadsToday, leadsWeek] = await Promise.all([
@@ -290,8 +313,8 @@ export async function GET(req: Request) {
       type: AttachmentType.BUSINESS_CARD_IMAGE,
       createdAt: { gte: todayStartUtc, lt: tomorrowStartUtc },
     };
-    if (activeEventId) {
-      attachmentWhereToday.lead = { form: { assignedEventId: activeEventId, status: FormStatus.ACTIVE } };
+    if (activeEventIds.length > 0) {
+      attachmentWhereToday.lead = { form: { assignedEventId: { in: activeEventIds }, status: FormStatus.ACTIVE } };
     }
 
     const businessCardsToday = await prisma.leadAttachment.count({ where: attachmentWhereToday });
@@ -303,8 +326,8 @@ export async function GET(req: Request) {
 
     // Recent activity (minimal)
     const leadActivityWhere: Prisma.LeadWhereInput = { tenantId, isDeleted: false };
-    if (activeEventId) {
-      leadActivityWhere.form = { assignedEventId: activeEventId, status: FormStatus.ACTIVE };
+    if (activeEventIds.length > 0) {
+      leadActivityWhere.form = { assignedEventId: { in: activeEventIds }, status: FormStatus.ACTIVE };
     }
 
     const [recentLeads, recentExports, recentDevices] = await Promise.all([
@@ -374,10 +397,10 @@ export async function GET(req: Request) {
       disabled?: boolean;
     }> = [];
 
-    if (activeEventId) {
+    if (activeEventIds.length > 0) {
       quickActions.push({
         id: "GO_TO_ACTIVE_EVENT",
-        label: "Zum aktiven Event",
+        label: "Zu aktiven Events",
         href: "/admin/events",
         kind: "primary",
       });
@@ -422,15 +445,19 @@ export async function GET(req: Request) {
         accentColor: tenant.accentColor ?? null,
       },
 
-      activeEvent: activeEvent
+      // Backward compat: "primary" ACTIVE event
+      activeEvent: primaryActiveEvent
         ? {
-            id: activeEvent.id,
-            name: activeEvent.name,
+            id: primaryActiveEvent.id,
+            name: primaryActiveEvent.name,
             status: "ACTIVE" as const,
-            startsAt: activeEvent.startsAt ? activeEvent.startsAt.toISOString() : null,
-            endsAt: activeEvent.endsAt ? activeEvent.endsAt.toISOString() : null,
+            startsAt: primaryActiveEvent.startsAt ? primaryActiveEvent.startsAt.toISOString() : null,
+            endsAt: primaryActiveEvent.endsAt ? primaryActiveEvent.endsAt.toISOString() : null,
           }
         : null,
+
+      // New: all ACTIVE events
+      activeEvents,
 
       readiness: {
         overall: readinessOverall,
