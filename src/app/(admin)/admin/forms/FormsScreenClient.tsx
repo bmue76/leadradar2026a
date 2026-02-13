@@ -449,7 +449,10 @@ function CreateFromPresetModal(props: {
 
   // only side effect: load external data (allowed); no direct setState in effect body
   useEffect(() => {
-    void loadPresets();
+    const t = setTimeout(() => {
+      void loadPresets();
+    }, 0);
+    return () => clearTimeout(t);
   }, [loadPresets]);
 
   const onSelectPreset = useCallback(
