@@ -16,6 +16,7 @@ import { arrayMove } from "@dnd-kit/sortable";
 import FieldLibrary, { buildPackItems, LIB_ITEMS } from "./FieldLibrary";
 import Canvas, { DropIndicator } from "./Canvas";
 import MobilePreview from "./MobilePreview";
+import SaveTemplateModal from "./SaveTemplateModal";
 
 import type {
   BuilderField,
@@ -421,6 +422,50 @@ function mergeFormConfig(form: BuilderForm, patch: Record<string, unknown>): Rec
   return { ...base, ...patch };
 }
 
+type PresetFieldSnapshot = {
+  key: string;
+  label: string;
+  type: string;
+  required: boolean;
+  placeholder: string | null;
+  helpText: string | null;
+  isActive: boolean;
+  config: Record<string, unknown>;
+};
+
+type PresetConfigV1 = {
+  v: 1;
+  source: "FORM_BUILDER";
+  captureStart: CaptureStart;
+  formConfig: Record<string, unknown>;
+  fields: PresetFieldSnapshot[];
+};
+
+function buildPresetConfigV1(form: BuilderForm, fields: BuilderField[]): PresetConfigV1 {
+  const formConfig = isRecord(form.config) ? { ...(form.config as Record<string, unknown>) } : {};
+  const sorted = fields.slice().sort((a, b) => a.sortOrder - b.sortOrder);
+
+  const snapFields: PresetFieldSnapshot[] = sorted.map((f) => ({
+    key: String(f.key),
+    label: String(f.label ?? ""),
+    type: String((f as unknown as { type?: unknown }).type ?? ""),
+    required: Boolean(f.required),
+    placeholder: (f.placeholder ?? null) as string | null,
+    helpText: (f.helpText ?? null) as string | null,
+    isActive: Boolean(f.isActive),
+    config: isRecord(f.config) ? ({ ...(f.config as Record<string, unknown>) } as Record<string, unknown>) : {},
+  }));
+
+  return {
+    v: 1,
+    source: "FORM_BUILDER",
+    captureStart: getCaptureStartFromForm(form),
+    formConfig,
+    fields: snapFields,
+  };
+}
+
+
 function SettingsModal(props: {
   open: boolean;
   form: BuilderForm;
@@ -610,6 +655,9 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
+
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
+  const [saveTemplateBusy, setSaveTemplateBusy] = useState(false);
 
   const [toast, setToast] = useState<null | { kind: "error" | "success"; message: string }>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -1116,6 +1164,56 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
     [form, load, patchBuilder]
   );
 
+  const saveAsPreset = useCallback(
+    async (name: string, category?: string | null): Promise<{ ok: boolean }> => {
+      if (!form) return { ok: false };
+
+      const cat = (category ?? "").trim() || "Standard";
+
+      const payload: Record<string, unknown> = {
+        name: name.trim(),
+        category: cat,
+        config: buildPresetConfigV1(form, fieldsRef.current),
+        isPublic: false,
+      };
+
+      const desc = (form.description ?? "").trim();
+      if (desc) payload.description = desc;
+
+      setSaveTemplateBusy(true);
+      try {
+        const res = await fetch(`/api/admin/v1/presets`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        const txt = await res.text();
+        const json = safeJsonParse<ApiResp<{ id: string }>>(txt);
+
+        if (!json || typeof json !== "object") {
+          setToast({ kind: "error", message: "Ungültige Serverantwort (non-JSON)." });
+          return { ok: false };
+        }
+
+        if (!json.ok) {
+          setToast({ kind: "error", message: json.error?.message || "Vorlage konnte nicht gespeichert werden." });
+          return { ok: false };
+        }
+
+        setToast({ kind: "success", message: "Vorlage gespeichert." });
+        return { ok: true };
+      } catch {
+        setToast({ kind: "error", message: "Vorlage konnte nicht gespeichert werden." });
+        return { ok: false };
+      } finally {
+        setSaveTemplateBusy(false);
+      }
+    },
+    [form]
+  );
+
+
   if (loading) {
     return (
       <div className="space-y-3">
@@ -1170,7 +1268,15 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
         onSave={onSaveSettings}
       />
 
-      {/* Header (always visible) */}
+      
+      <SaveTemplateModal
+        open={saveTemplateOpen}
+        onClose={() => setSaveTemplateOpen(false)}
+        defaultName={form?.name ?? "Vorlage"}
+        onSave={saveAsPreset}
+        busy={saveTemplateBusy}
+      />
+{/* Header (always visible) */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-xl font-semibold text-slate-900">{form.name}</div>
@@ -1194,9 +1300,12 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
           </button>
 
           <button
-            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            className={cx(
+              "rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50",
+              readOnly && "opacity-60 pointer-events-none"
+            )}
             type="button"
-            onClick={() => setToast({ kind: "error", message: "Als Vorlage speichern kommt im nächsten Schritt." })}
+            onClick={() => setSaveTemplateOpen(true)}
           >
             Als Vorlage speichern
           </button>
