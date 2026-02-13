@@ -68,9 +68,6 @@ type PresetListItem = {
   isPublic: boolean;
 };
 
-type PresetsListApi = { items: PresetListItem[] };
-type CreateFromPresetApi = { item: { id: string } };
-
 function cx(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
@@ -374,9 +371,12 @@ function ReadyCard(props: {
 }
 
 /* ----------------------- Create-from-preset Modal ----------------------- */
-
+/**
+ * Important for your eslint rule-set:
+ * - NO setState directly inside useEffect
+ * - Component is mounted only when open => reset happens by unmount/mount
+ */
 function CreateFromPresetModal(props: {
-  open: boolean;
   onClose: () => void;
   onCreated: (newFormId: string) => void;
 }) {
@@ -447,19 +447,19 @@ function CreateFromPresetModal(props: {
     }
   }, []);
 
+  // only side effect: load external data (allowed); no direct setState in effect body
   useEffect(() => {
-    if (!props.open) return;
-    setQ("");
-    setCategory("ALL");
-    setSelectedId(null);
-    setFormName("");
     void loadPresets();
-  }, [props.open, loadPresets]);
+  }, [loadPresets]);
 
-  useEffect(() => {
-    if (!selected) return;
-    setFormName((cur) => (cur.trim().length ? cur : selected.name));
-  }, [selected]);
+  const onSelectPreset = useCallback(
+    (it: PresetListItem) => {
+      setSelectedId(it.id);
+      // default name only if user didn't type yet
+      setFormName((cur) => (cur.trim().length ? cur : it.name));
+    },
+    [setSelectedId, setFormName]
+  );
 
   const createFromPreset = useCallback(async () => {
     if (!selected) return;
@@ -507,8 +507,6 @@ function CreateFromPresetModal(props: {
       setBusy(false);
     }
   }, [formName, props, selected]);
-
-  if (!props.open) return null;
 
   return (
     <div className="fixed inset-0 z-[80]">
@@ -593,7 +591,7 @@ function CreateFromPresetModal(props: {
                               ? "border-slate-900 bg-slate-900 text-white"
                               : "border-slate-200 bg-white hover:bg-slate-50"
                           )}
-                          onClick={() => setSelectedId(it.id)}
+                          onClick={() => onSelectPreset(it)}
                         >
                           <div className={cx("truncate text-sm font-semibold", active ? "text-white" : "text-slate-900")}>
                             {it.name}
@@ -711,7 +709,6 @@ export function FormsScreenClient() {
 
   const autoOpenConsumedRef = useRef(false);
 
-  // URL ist Source-of-Truth (kein setState im Effect)
   const selectedEventId = useMemo(() => {
     const urlEventId = (searchParams.get("eventId") ?? "").trim();
     return urlEventId ? urlEventId : null;
@@ -795,14 +792,12 @@ export function FormsScreenClient() {
 
       const ctx = (data.contextEvent ?? data.activeEvent ?? null) as ActiveEvent | null;
 
-      // Wenn URL eventId fehlt/ungültig -> auf ctx korrigieren (URL-only, kein setState)
       if (ctx?.id) {
         const isValid = selectedEventId ? evs.some((e) => e.id === selectedEventId) : false;
         if (!selectedEventId || !isValid) {
           syncUrlEventId(ctx.id);
         }
       } else {
-        // kein ACTIVE event -> eventId aus URL entfernen
         if (selectedEventId) syncUrlEventId(null);
       }
 
@@ -1083,16 +1078,17 @@ export function FormsScreenClient() {
 
   return (
     <div className="space-y-4">
-      <CreateFromPresetModal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onCreated={(newId) => {
-          void (async () => {
-            await loadList();
-            openDrawer(newId);
-          })();
-        }}
-      />
+      {createOpen ? (
+        <CreateFromPresetModal
+          onClose={() => setCreateOpen(false)}
+          onCreated={(newId) => {
+            void (async () => {
+              await loadList();
+              openDrawer(newId);
+            })();
+          }}
+        />
+      ) : null}
 
       <ReadyCard
         activeEvents={activeEvents}
