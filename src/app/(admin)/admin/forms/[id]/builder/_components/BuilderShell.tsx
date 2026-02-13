@@ -176,12 +176,7 @@ function FieldSettingsDrawer(props: {
   onPatch: (id: string, patch: Partial<BuilderField>) => void;
   onMoveSection: (id: string, section: FieldSection) => void;
 }) {
-  const f = props.field;
-  const [local, setLocal] = useState<BuilderField | null>(f);
-
-  useEffect(() => {
-    setLocal(f);
-  }, [f?.id]);
+  const [local, setLocal] = useState<BuilderField | null>(() => props.field);
 
   const optionsText = useMemo(() => {
     const opts = Array.isArray(local?.config?.options) ? (local?.config?.options as unknown[]) : [];
@@ -200,6 +195,7 @@ function FieldSettingsDrawer(props: {
       placeholder: local.placeholder,
       helpText: local.helpText,
       config: local.config,
+      isActive: (local as any).isActive,
     } as Partial<BuilderField>);
   };
 
@@ -244,7 +240,7 @@ function FieldSettingsDrawer(props: {
               <input
                 type="checkbox"
                 className="h-4 w-4"
-                checked={local.required}
+                checked={Boolean(local.required)}
                 onChange={(e) => setLocal({ ...local, required: e.target.checked })}
               />
               Pflichtfeld
@@ -430,6 +426,7 @@ type PresetFieldSnapshot = {
   placeholder: string | null;
   helpText: string | null;
   isActive: boolean;
+  sortOrder: number;
   config: Record<string, unknown>;
 };
 
@@ -438,23 +435,29 @@ type PresetConfigV1 = {
   source: "FORM_BUILDER";
   captureStart: CaptureStart;
   formConfig: Record<string, unknown>;
-  fields: PresetFieldSnapshot[];
+  fields: PresetFieldSnapshot[]; // IMPORTANT: from-preset expects config.fields
 };
 
 function buildPresetConfigV1(form: BuilderForm, fields: BuilderField[]): PresetConfigV1 {
   const formConfig = isRecord(form.config) ? { ...(form.config as Record<string, unknown>) } : {};
   const sorted = fields.slice().sort((a, b) => a.sortOrder - b.sortOrder);
 
-  const snapFields: PresetFieldSnapshot[] = sorted.map((f) => ({
-    key: String(f.key),
-    label: String(f.label ?? ""),
-    type: String((f as unknown as { type?: unknown }).type ?? ""),
-    required: Boolean(f.required),
-    placeholder: (f.placeholder ?? null) as string | null,
-    helpText: (f.helpText ?? null) as string | null,
-    isActive: Boolean(f.isActive),
-    config: isRecord(f.config) ? ({ ...(f.config as Record<string, unknown>) } as Record<string, unknown>) : {},
-  }));
+  const snapFields: PresetFieldSnapshot[] = sorted.map((f, idx) => {
+    const cfg = isRecord(f.config) ? ({ ...(f.config as Record<string, unknown>) } as Record<string, unknown>) : {};
+    const isActive = typeof (f as any).isActive === "boolean" ? Boolean((f as any).isActive) : true;
+
+    return {
+      key: String(f.key),
+      label: String(f.label ?? ""),
+      type: String((f as unknown as { type?: unknown }).type ?? ""),
+      required: Boolean(f.required),
+      placeholder: (f.placeholder ?? null) as string | null,
+      helpText: (f.helpText ?? null) as string | null,
+      isActive,
+      sortOrder: idx + 1,
+      config: cfg,
+    };
+  });
 
   return {
     v: 1,
@@ -465,7 +468,6 @@ function buildPresetConfigV1(form: BuilderForm, fields: BuilderField[]): PresetC
   };
 }
 
-
 function SettingsModal(props: {
   open: boolean;
   form: BuilderForm;
@@ -473,22 +475,12 @@ function SettingsModal(props: {
   onClose: () => void;
   onSave: (draft: SettingsDraft) => void;
 }) {
-  const [draft, setDraft] = useState<SettingsDraft>({
+  const [draft, setDraft] = useState<SettingsDraft>(() => ({
     name: props.form.name ?? "",
     description: props.form.description ?? "",
     status: props.form.status as any,
     captureStart: getCaptureStartFromForm(props.form),
-  });
-
-  useEffect(() => {
-    if (!props.open) return;
-    setDraft({
-      name: props.form.name ?? "",
-      description: props.form.description ?? "",
-      status: props.form.status as any,
-      captureStart: getCaptureStartFromForm(props.form),
-    });
-  }, [props.open, props.form.id, props.form.updatedAt, props.form.name, props.form.description, props.form.status]);
+  }));
 
   if (!props.open) return null;
 
@@ -627,14 +619,22 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
   }, [fields]);
 
   const [tab, setTab] = useState<LibraryTab>("FORM");
-
   const [openFieldId, setOpenFieldId] = useState<string | null>(null);
 
   const [dropIndicator, setDropIndicator] = useState<DropIndicator>(null);
   const [draggingKind, setDraggingKind] = useState<null | "LIB" | "FIELD">(null);
   const [dragOverlay, setDragOverlay] = useState<null | { title: string; subtitle?: string }>(null);
 
-  const [autoOpen, setAutoOpen] = useState<boolean>(true);
+  const [autoOpen, setAutoOpen] = useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem("lr_builder:autoOpenSettings");
+      if (raw === "0") return false;
+      if (raw === "1") return true;
+      return true;
+    } catch {
+      return true;
+    }
+  });
 
   // Canvas active screen (must stay in sync with FieldLibrary tab)
   const [activeSection, setActiveSection] = useState<FieldSection>("FORM");
@@ -664,15 +664,13 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
 
   const existingKeys = useMemo(() => new Set(fields.map((f) => f.key)), [fields]);
 
-  useEffect(() => {
-    const raw = localStorage.getItem("lr_builder:autoOpenSettings");
-    if (raw === "0") setAutoOpen(false);
-    if (raw === "1") setAutoOpen(true);
-  }, []);
-
   const setAutoOpenPersist = (v: boolean) => {
     setAutoOpen(v);
-    localStorage.setItem("lr_builder:autoOpenSettings", v ? "1" : "0");
+    try {
+      localStorage.setItem("lr_builder:autoOpenSettings", v ? "1" : "0");
+    } catch {
+      // ignore
+    }
   };
 
   const patchBuilder = useCallback(
@@ -739,7 +737,7 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
       setForm((json.data as any).form as BuilderForm);
       setFields(normalized.sort((a, b) => a.sortOrder - b.sortOrder));
 
-      // keep tab/section valid after reload (no-op, but helps after “weird” states)
+      // keep tab/section valid after reload
       setActiveSection((cur) => (cur === "CONTACT" ? "CONTACT" : "FORM"));
       setTab((cur) => (cur === "CONTACT" ? "CONTACT" : "FORM"));
 
@@ -750,8 +748,10 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
     }
   }, [props.formId]);
 
+  // eslint rule: avoid calling setState synchronously in effect body -> schedule
   useEffect(() => {
-    void load();
+    const t = setTimeout(() => void load(), 0);
+    return () => clearTimeout(t);
   }, [load]);
 
   const persistReorder = useCallback(
@@ -828,7 +828,6 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
       if (item.kind === "contact") {
         const existing = base.find((f) => f.key === item.key);
         if (existing) {
-          // ensure correct screen is active
           handleSwitchSection("CONTACT");
           setOpenFieldId(existing.id);
           return base;
@@ -889,7 +888,6 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
       setFields(nextAll);
       await persistReorder(nextAll);
 
-      // ensure canvas + tab follow the insert target
       handleSwitchSection(section);
 
       if (autoOpen && shouldAutoOpenSettings(item)) {
@@ -934,7 +932,6 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
       const targetSection: FieldSection =
         item.kind === "contact" ? "CONTACT" : ((item.defaultConfig?.section ?? "FORM") as FieldSection);
 
-      // keep UI in sync: user is adding into that screen
       handleTabChange(targetSection);
 
       const cur = fieldsRef.current;
@@ -1023,8 +1020,6 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
         if (!di) return;
 
         await addFieldFromLibrary(it, di.section, di.index, fieldsRef.current);
-
-        // ensure UI follows where we dropped
         handleSwitchSection(di.section);
         return;
       }
@@ -1068,8 +1063,6 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
 
         setFields(nextAll);
         await persistReorder(nextAll);
-
-        // ensure UI follows new location
         handleSwitchSection(targetSection);
 
         setDropIndicator(null);
@@ -1116,7 +1109,6 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
       setFields(nextAll);
       await persistReorder(nextAll);
 
-      // if we ended up on a different screen, follow it
       handleSwitchSection(toSection);
 
       setDropIndicator(null);
@@ -1168,13 +1160,19 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
     async (name: string, category?: string | null): Promise<{ ok: boolean }> => {
       if (!form) return { ok: false };
 
+      const nm = name.trim();
+      if (!nm) {
+        setToast({ kind: "error", message: "Bitte einen Vorlagen-Namen eingeben." });
+        return { ok: false };
+      }
+
       const cat = (category ?? "").trim() || "Standard";
 
       const payload: Record<string, unknown> = {
-        name: name.trim(),
+        name: nm,
         category: cat,
-        config: buildPresetConfigV1(form, fieldsRef.current),
         isPublic: false,
+        config: buildPresetConfigV1(form, fieldsRef.current),
       };
 
       const desc = (form.description ?? "").trim();
@@ -1212,7 +1210,6 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
     },
     [form]
   );
-
 
   if (loading) {
     return (
@@ -1260,15 +1257,17 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
         }}
       />
 
-      <SettingsModal
-        open={settingsOpen}
-        form={form}
-        saving={settingsSaving}
-        onClose={() => setSettingsOpen(false)}
-        onSave={onSaveSettings}
-      />
+      {settingsOpen ? (
+        <SettingsModal
+          key={`settings:${form.id}:${String(form.updatedAt)}`}
+          open={settingsOpen}
+          form={form}
+          saving={settingsSaving}
+          onClose={() => setSettingsOpen(false)}
+          onSave={onSaveSettings}
+        />
+      ) : null}
 
-      
       <SaveTemplateModal
         open={saveTemplateOpen}
         onClose={() => setSaveTemplateOpen(false)}
@@ -1276,7 +1275,8 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
         onSave={saveAsPreset}
         busy={saveTemplateBusy}
       />
-{/* Header (always visible) */}
+
+      {/* Header (always visible) */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-xl font-semibold text-slate-900">{form.name}</div>
@@ -1381,6 +1381,7 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
           </div>
 
           <FieldSettingsDrawer
+            key={openFieldId ?? "none"}
             open={!!openFieldId}
             field={currentOpenField}
             onClose={() => setOpenFieldId(null)}
