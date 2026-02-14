@@ -183,7 +183,7 @@ async function fetchJson(url: string, init?: RequestInit): Promise<ApiResp> {
   return { ok: false, error: { code: "HTTP_ERROR", message: "Konnte Daten nicht laden." }, traceId: traceId || "—" };
 }
 
-/* ----------------------------- Mini Modal (clean) ----------------------------- */
+/* ----------------------------- UI bits ----------------------------- */
 
 function ModalShell(props: { open: boolean; title: string; onClose: () => void; children: React.ReactNode }) {
   if (!props.open) return null;
@@ -252,6 +252,15 @@ function InlineError(props: { title: string; message: string; traceId?: string; 
   );
 }
 
+function InlineWarn(props: { title: string; message: string }) {
+  return (
+    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+      <div className="text-sm font-semibold text-amber-900">{props.title}</div>
+      <div className="mt-1 text-sm text-amber-800">{props.message}</div>
+    </div>
+  );
+}
+
 function SkeletonRow() {
   return (
     <div className="flex items-center gap-3 px-4 py-3">
@@ -291,7 +300,6 @@ export function TemplatesScreenClient() {
 
   const debounceRef = useRef<number | null>(null);
 
-  // Init state from URL once (nice for sharing links)
   useEffect(() => {
     const iq = sp.get("q") ?? "";
     const isrc = sp.get("source") ?? "";
@@ -303,7 +311,7 @@ export function TemplatesScreenClient() {
     if (icat) setCategory(icat);
     if (isSortKey(isort)) setSort(isort);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // intentional: only once on mount
+  }, []);
 
   const categories = useMemo(() => {
     const set = new Set<string>();
@@ -320,6 +328,9 @@ export function TemplatesScreenClient() {
     if (!selectedId) return null;
     return filtered.find((x) => x.id === selectedId) ?? itemsRaw.find((x) => x.id === selectedId) ?? null;
   }, [selectedId, filtered, itemsRaw]);
+
+  const effectiveFieldsCount = detail?.fieldsCount ?? selected?.fieldsCount ?? null;
+  const isInvalidTemplate = typeof effectiveFieldsCount === "number" ? effectiveFieldsCount <= 0 : false;
 
   const loadTemplates = useCallback(async () => {
     setLoading(true);
@@ -344,10 +355,8 @@ export function TemplatesScreenClient() {
       const list = normalizeTemplateListPayload(r.data);
       setItemsRaw(list);
 
-      // auto-select first if none
       if (list.length > 0) setSelectedId((prev) => prev ?? list[0].id);
 
-      // keep category valid
       setCategory((prev) => {
         if (prev === "ALL") return prev;
         const exists = list.some((x) => (x.category ?? "Ohne Kategorie") === prev);
@@ -382,12 +391,22 @@ export function TemplatesScreenClient() {
   const openCreateFromSelected = useCallback(() => {
     if (!selected) return;
     setCreateErr(null);
-    setCreateName(selected.name);
+
+    // Default: Vorlage + Datum (de-CH)
+    const today = new Intl.DateTimeFormat("de-CH", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    setCreateName(`${selected.name} – ${today}`);
+
     setCreateOpen(true);
   }, [selected]);
 
   const doCreate = useCallback(async () => {
     if (!selected) return;
+
+    if (isInvalidTemplate) {
+      setCreateErr("Diese Vorlage enthält keine Felder und kann nicht verwendet werden.");
+      return;
+    }
+
     const name = createName.trim();
     if (!name) {
       setCreateErr("Bitte gib einen Formularnamen ein.");
@@ -405,7 +424,9 @@ export function TemplatesScreenClient() {
       });
 
       if (!r.ok) {
-        setCreateErr(r.error.message || "Formular konnte nicht erstellt werden.");
+        const msg = r.error.message || "Formular konnte nicht erstellt werden.";
+        const trace = r.traceId ? ` (Trace: ${r.traceId})` : "";
+        setCreateErr(`${msg}${trace}`);
         return;
       }
 
@@ -426,14 +447,12 @@ export function TemplatesScreenClient() {
     } finally {
       setCreateBusy(false);
     }
-  }, [selected, createName, router]);
+  }, [selected, createName, router, isInvalidTemplate]);
 
-  // initial load
   useEffect(() => {
     void loadTemplates();
   }, [loadTemplates]);
 
-  // debounce reload + keep URL in sync
   useEffect(() => {
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
     debounceRef.current = window.setTimeout(() => {
@@ -584,6 +603,7 @@ export function TemplatesScreenClient() {
             <div className="max-h-[70vh] overflow-auto">
               {filtered.map((t) => {
                 const active = t.id === selectedId;
+                const invalid = typeof t.fieldsCount === "number" ? t.fieldsCount <= 0 : false;
                 return (
                   <button
                     key={t.id}
@@ -593,7 +613,10 @@ export function TemplatesScreenClient() {
                   >
                     <div className="flex items-start gap-3">
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-semibold text-slate-900">{t.name}</div>
+                        <div className="truncate text-sm font-semibold text-slate-900">
+                          {t.name}
+                          {invalid ? <span className="ml-2 text-xs font-medium text-amber-700">• ohne Felder</span> : null}
+                        </div>
                         <div className="mt-0.5 flex flex-wrap items-center gap-2">
                           <Pill>{t.category ?? "Ohne Kategorie"}</Pill>
                           <Pill>{sourceLabel(t.source)}</Pill>
@@ -645,9 +668,7 @@ export function TemplatesScreenClient() {
               <div className="mt-2 flex flex-wrap gap-2">
                 <Pill>{(detail?.category ?? selected?.category) ?? "Ohne Kategorie"}</Pill>
                 <Pill>{sourceLabel(detail?.source ?? selected?.source ?? "TENANT")}</Pill>
-                {typeof (detail?.fieldsCount ?? selected?.fieldsCount) === "number" ? (
-                  <Pill>{detail?.fieldsCount ?? selected?.fieldsCount} Felder</Pill>
-                ) : null}
+                {typeof effectiveFieldsCount === "number" ? <Pill>{effectiveFieldsCount} Felder</Pill> : null}
               </div>
 
               {detail?.description ?? selected?.description ? (
@@ -655,6 +676,12 @@ export function TemplatesScreenClient() {
               ) : (
                 <div className="mt-3 text-sm text-slate-500">Keine Beschreibung.</div>
               )}
+
+              {isInvalidTemplate ? (
+                <div className="mt-4">
+                  <InlineWarn title="Vorlage unvollständig" message="Diese Vorlage enthält keine Felder. Speichere sie im Builder erneut als Vorlage oder wähle eine andere." />
+                </div>
+              ) : null}
 
               <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-slate-600">
                 <div>
@@ -668,7 +695,7 @@ export function TemplatesScreenClient() {
               </div>
 
               <div className="mt-5 flex flex-col gap-2">
-                <Button label="Vorlage verwenden" onClick={openCreateFromSelected} disabled={!selected} />
+                <Button label="Vorlage verwenden" onClick={openCreateFromSelected} disabled={!selected || isInvalidTemplate} />
                 <Button label="Neu laden" kind="secondary" onClick={() => selectedId && void loadDetail(selectedId)} disabled={!selectedId} />
               </div>
 
@@ -700,7 +727,7 @@ export function TemplatesScreenClient() {
 
         <div className="mt-5 flex items-center justify-end gap-2">
           <Button label="Abbrechen" kind="secondary" onClick={() => setCreateOpen(false)} disabled={createBusy} />
-          <Button label={createBusy ? "Erstelle…" : "Erstellen"} onClick={() => void doCreate()} disabled={createBusy} />
+          <Button label={createBusy ? "Erstelle…" : "Erstellen"} onClick={() => void doCreate()} disabled={createBusy || isInvalidTemplate} />
         </div>
       </ModalShell>
     </div>
