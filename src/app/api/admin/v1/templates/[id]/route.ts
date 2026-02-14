@@ -2,52 +2,35 @@ import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
 import { jsonError, jsonOk } from "@/lib/api";
-import { isHttpError, httpError } from "@/lib/http";
+import { httpError, isHttpError } from "@/lib/http";
 import { requireAdminAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
 const IdSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9]+$/i);
+function countFields(cfg: unknown): number {
+  if (!cfg || typeof cfg !== "object") return 0;
+  const o = cfg as Record<string, unknown>;
+  if (Array.isArray(o.fields)) return o.fields.length;
+  if (Array.isArray(o.fieldsSnapshot)) return o.fieldsSnapshot.length;
+  return 0;
+}
 
 type TemplateSource = "SYSTEM" | "TENANT";
-
 function toSource(tenantId: string | null, isPublic: boolean): TemplateSource {
   if (!tenantId && isPublic) return "SYSTEM";
   return "TENANT";
 }
 
-const FieldSnapSchema = z
-  .object({
-    key: z.string().min(1),
-    label: z.string().min(1),
-    type: z.string().min(1),
-    required: z.boolean().optional(),
-  })
-  .passthrough();
-
-function extractFields(cfg: unknown): Array<z.infer<typeof FieldSnapSchema>> {
-  if (!cfg || typeof cfg !== "object") return [];
-  const o = cfg as Record<string, unknown>;
-  const direct = o.fields;
-  const snap = o.fieldsSnapshot;
-
-  const arr = Array.isArray(direct) ? direct : Array.isArray(snap) ? snap : [];
-  const out: Array<z.infer<typeof FieldSnapSchema>> = [];
-  for (const item of arr) {
-    const res = FieldSnapSchema.safeParse(item);
-    if (res.success) out.push(res.data);
-  }
-  return out;
-}
-
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const { tenantId } = await requireAdminAuth(req);
-    const id = IdSchema.parse((await ctx.params).id);
+    const { id } = await ctx.params;
+    const templateId = IdSchema.parse(id);
 
     const row = await prisma.formPreset.findFirst({
       where: {
-        id,
+        id: templateId,
         OR: [{ tenantId }, { tenantId: null, isPublic: true }],
       },
       select: {
@@ -57,6 +40,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
         name: true,
         category: true,
         description: true,
+        imageUrl: true,
         updatedAt: true,
         config: true,
       },
@@ -64,25 +48,44 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 
     if (!row) throw httpError(404, "NOT_FOUND", "Not found.");
 
-    const fields = extractFields(row.config as unknown).map((f) => ({
-      key: f.key,
-      label: f.label,
-      type: f.type,
-      required: Boolean(f.required),
-    }));
-
-    const item = {
+    return jsonOk(req, {
       id: row.id,
       name: row.name,
       category: (row.category ?? "").trim() ? row.category : null,
       description: row.description ?? null,
+      imageUrl: row.imageUrl ?? null,
       source: toSource(row.tenantId, Boolean(row.isPublic)),
-      fieldCount: fields.length,
+      fieldCount: countFields(row.config as unknown),
       updatedAt: row.updatedAt,
-      fields,
-    };
+    });
+  } catch (e) {
+    if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
+    return jsonError(req, 500, "INTERNAL_ERROR", "Unexpected error.");
+  }
+}
 
-    return jsonOk(req, { item });
+export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    const { tenantId } = await requireAdminAuth(req);
+    const { id } = await ctx.params;
+    const templateId = IdSchema.parse(id);
+
+    // Leak-safe: only delete tenant-owned, non-public presets
+    const res = await prisma.formPreset.deleteMany({
+      where: { id: templateId, tenantId, isPublic: false },
+    });
+
+    if (res.count <= 0) {
+      // if it's a system template, return a clear forbidden (no deletion)
+      const isSystem = await prisma.formPreset.findFirst({
+        where: { id: templateId, tenantId: null, isPublic: true },
+        select: { id: true },
+      });
+      if (isSystem) throw httpError(403, "FORBIDDEN", "System-Vorlagen können nicht gelöscht werden.");
+      throw httpError(404, "NOT_FOUND", "Not found.");
+    }
+
+    return jsonOk(req, { deleted: true });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     return jsonError(req, 500, "INTERNAL_ERROR", "Unexpected error.");
