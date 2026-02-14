@@ -53,3 +53,6 @@ TP 6.6 — Mobile Branding Provider + Cleanup (nur eine Source of Truth) + Admin
 
 ## Teilprojekt 6.10
 - teilprojekt-6.10-events-multi-active-device-bound.md — Multi-ACTIVE Events (device-bound) + API/Home Summary
+
+## Teilprojekte (Schlussrapporte)
+- teilprojekt-7.x-templates-create-form-scripts-cleanup.md — Templates: Create-Form Fallback + Backfill-Tooling + Script-Cleanup
