@@ -336,13 +336,14 @@ export function TemplatesScreenClient() {
     setLoading(true);
     setErr(null);
 
-    const usp = new URLSearchParams();
-    if (q.trim()) usp.set("q", q.trim());
-    if (source !== "ALL") usp.set("source", source);
-    if (category !== "ALL") usp.set("category", category);
-    usp.set("sort", sort);
+    // IMPORTANT: API query contract is strict (Zod). Do NOT send UI-only sort values.
+    // Sorting happens client-side; API gets only safe filters.
+    const api = new URLSearchParams();
+    if (q.trim()) api.set("q", q.trim());
+    if (source !== "ALL") api.set("source", source);
+    if (category !== "ALL") api.set("category", category);
 
-    const url = `/api/admin/v1/templates?${usp.toString()}`;
+    const url = api.toString() ? `/api/admin/v1/templates?${api.toString()}` : `/api/admin/v1/templates`;
 
     try {
       const r = await fetchJson(url, { method: "GET" });
@@ -368,7 +369,7 @@ export function TemplatesScreenClient() {
     } finally {
       setLoading(false);
     }
-  }, [q, source, category, sort]);
+  }, [q, source, category]);
 
   const loadDetail = useCallback(async (id: string) => {
     setDetailLoading(true);
@@ -391,11 +392,8 @@ export function TemplatesScreenClient() {
   const openCreateFromSelected = useCallback(() => {
     if (!selected) return;
     setCreateErr(null);
-
-    // Default: Vorlage + Datum (de-CH)
     const today = new Intl.DateTimeFormat("de-CH", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
     setCreateName(`${selected.name} – ${today}`);
-
     setCreateOpen(true);
   }, [selected]);
 
@@ -453,6 +451,7 @@ export function TemplatesScreenClient() {
     void loadTemplates();
   }, [loadTemplates]);
 
+  // debounce URL sync (UI only) + reload
   useEffect(() => {
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
     debounceRef.current = window.setTimeout(() => {
@@ -463,7 +462,7 @@ export function TemplatesScreenClient() {
       if (q.trim()) usp.set("q", q.trim());
       if (source !== "ALL") usp.set("source", source);
       if (category !== "ALL") usp.set("category", category);
-      usp.set("sort", sort);
+      usp.set("sort", sort); // UI-only
 
       router.replace(`/admin/templates?${usp.toString()}`);
     }, 250);
