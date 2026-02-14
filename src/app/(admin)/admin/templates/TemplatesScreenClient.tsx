@@ -33,6 +33,14 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+function safeJsonParse<T>(txt: string): T | null {
+  try {
+    return JSON.parse(txt) as T;
+  } catch {
+    return null;
+  }
+}
+
 function toIsoDateShort(iso: string): string {
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return iso;
@@ -100,6 +108,56 @@ function extractFormId(dto: unknown): string | null {
   return null;
 }
 
+function ConfirmDialog(props: {
+  open: boolean;
+  title: string;
+  description?: string;
+  confirmLabel?: string;
+  danger?: boolean;
+  busy?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (!props.open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[80]">
+      <button type="button" className="absolute inset-0 bg-black/20" aria-label="Schliessen" onClick={props.onCancel} />
+      <div className="absolute left-1/2 top-1/2 w-[94vw] max-w-lg -translate-x-1/2 -translate-y-1/2">
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-2xl">
+          <div className="border-b border-slate-100 px-6 py-4">
+            <div className="text-sm font-semibold text-slate-900">{props.title}</div>
+            {props.description ? <div className="mt-1 text-sm text-slate-600">{props.description}</div> : null}
+          </div>
+          <div className="flex items-center justify-end gap-2 px-6 py-4">
+            <button
+              type="button"
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              onClick={props.onCancel}
+              disabled={props.busy}
+            >
+              Abbrechen
+            </button>
+            <button
+              type="button"
+              className={cx(
+                "rounded-xl border px-3 py-2 text-sm font-semibold disabled:opacity-60",
+                props.danger
+                  ? "border-rose-200 bg-rose-600 text-white hover:bg-rose-700"
+                  : "border-slate-900 bg-slate-900 text-white hover:bg-slate-800"
+              )}
+              onClick={props.onConfirm}
+              disabled={props.busy}
+            >
+              {props.confirmLabel ?? "Bestätigen"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function TemplatesScreenClient() {
   const router = useRouter();
   const sp = useSearchParams();
@@ -125,6 +183,9 @@ export default function TemplatesScreenClient() {
   const [error, setError] = useState<string | null>(null);
 
   const [toast, setToast] = useState<null | { kind: "error" | "success"; message: string }>(null);
+
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const deleteTarget = useMemo(() => items.find((x) => x.id === confirmDeleteId) ?? null, [items, confirmDeleteId]);
 
   const categories = useMemo(() => {
     const set = new Set<string>();
@@ -180,7 +241,7 @@ export default function TemplatesScreenClient() {
       const res = await fetch(`/api/admin/v1/templates?${qp.toString()}`, { method: "GET", cache: "no-store" });
       const txt = await res.text();
 
-      const json = JSON.parse(txt) as ApiResp<ListResp>;
+      const json = safeJsonParse<ApiResp<ListResp>>(txt);
 
       if (!json || typeof json !== "object") {
         setError("Ungültige Serverantwort (non-JSON).");
@@ -228,7 +289,7 @@ export default function TemplatesScreenClient() {
         });
 
         const txt = await res.text();
-        const json = JSON.parse(txt) as ApiResp<unknown>;
+        const json = safeJsonParse<ApiResp<unknown>>(txt);
 
         if (!json || typeof json !== "object") {
           setToast({ kind: "error", message: "Ungültige Serverantwort (non-JSON)." });
@@ -259,14 +320,66 @@ export default function TemplatesScreenClient() {
     [router]
   );
 
+  const onDeleteTemplate = useCallback(
+    async (templateId: string) => {
+      setBusy(true);
+      setToast(null);
+
+      try {
+        // NOTE: Templates UI lists FormPreset rows; deletion is done via presets endpoint (tenant-scoped).
+        const res = await fetch(`/api/admin/v1/presets/${templateId}`, { method: "DELETE" });
+        const txt = await res.text();
+        const json = safeJsonParse<ApiResp<{ deleted: boolean }>>(txt);
+
+        if (!json || typeof json !== "object") {
+          setToast({ kind: "error", message: "Ungültige Serverantwort (non-JSON)." });
+          return;
+        }
+        if (!json.ok) {
+          setToast({ kind: "error", message: json.error?.message || "Vorlage konnte nicht gelöscht werden." });
+          return;
+        }
+
+        setToast({ kind: "success", message: "Vorlage gelöscht." });
+        setConfirmDeleteId(null);
+        await load();
+      } catch {
+        setToast({ kind: "error", message: "Vorlage konnte nicht gelöscht werden." });
+      } finally {
+        setBusy(false);
+      }
+    },
+    [load]
+  );
+
   return (
     <>
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="Vorlage löschen?"
+        description={
+          deleteTarget
+            ? `„${deleteTarget.name}“ wird gelöscht. Dieser Schritt kann nicht rückgängig gemacht werden.`
+            : undefined
+        }
+        confirmLabel="Löschen"
+        danger
+        busy={busy}
+        onCancel={() => setConfirmDeleteId(null)}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          void onDeleteTemplate(deleteTarget.id);
+        }}
+      />
+
       {toast ? (
         <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4">
           <div className={cx("text-sm font-semibold", toast.kind === "error" ? "text-rose-900" : "text-emerald-900")}>
             {toast.kind === "error" ? "Fehler" : "OK"}
           </div>
-          <div className={cx("mt-1 text-sm", toast.kind === "error" ? "text-rose-800" : "text-emerald-800")}>{toast.message}</div>
+          <div className={cx("mt-1 text-sm", toast.kind === "error" ? "text-rose-800" : "text-emerald-800")}>
+            {toast.message}
+          </div>
         </div>
       ) : null}
 
@@ -359,6 +472,16 @@ export default function TemplatesScreenClient() {
             <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5">
               <div className="text-sm font-semibold text-rose-900">Konnte Vorlagen nicht laden</div>
               <div className="mt-1 text-sm text-rose-800">{error}</div>
+              <div className="mt-3">
+                <button
+                  type="button"
+                  className="rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm font-semibold text-rose-800 hover:bg-rose-100 disabled:opacity-60"
+                  onClick={() => void load()}
+                  disabled={busy}
+                >
+                  Erneut versuchen
+                </button>
+              </div>
             </div>
           </div>
         ) : items.length === 0 ? (
@@ -369,7 +492,10 @@ export default function TemplatesScreenClient() {
                 Öffne ein Formular im Builder und nutze <span className="font-semibold">„Als Vorlage speichern“</span>.
               </div>
               <div className="mt-3">
-                <Link className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800" href="/admin/forms">
+                <Link
+                  className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+                  href="/admin/forms"
+                >
                   Formulare öffnen
                 </Link>
               </div>
@@ -400,19 +526,38 @@ export default function TemplatesScreenClient() {
                     <td className="py-3 text-sm text-slate-700">{String(it.fieldCount ?? 0)}</td>
                     <td className="py-3 text-sm text-slate-700">{toIsoDateShort(it.updatedAt)}</td>
                     <td className="py-3 text-right">
-                      <button
-                        type="button"
-                        className="rounded-xl border border-slate-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
-                        disabled={busy}
-                        onClick={() => void onCreateFromTemplate(it.id)}
-                      >
-                        Verwenden
-                      </button>
+                      <div className="inline-flex items-center justify-end gap-2">
+                        {it.source === "TENANT" ? (
+                          <button
+                            type="button"
+                            className="h-9 w-9 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                            title="Vorlage löschen"
+                            aria-label="Vorlage löschen"
+                            disabled={busy}
+                            onClick={() => setConfirmDeleteId(it.id)}
+                          >
+                            🗑
+                          </button>
+                        ) : null}
+
+                        <button
+                          type="button"
+                          className="rounded-xl border border-slate-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
+                          disabled={busy}
+                          onClick={() => void onCreateFromTemplate(it.id)}
+                        >
+                          Verwenden
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+
+            <div className="mt-4 text-xs text-slate-500">
+              Hinweis: System-Vorlagen sind schreibgeschützt (kein Löschen möglich).
+            </div>
           </div>
         )}
       </section>
