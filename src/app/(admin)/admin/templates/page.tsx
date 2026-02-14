@@ -1,5 +1,5 @@
-import React, { Suspense } from "react";
-import { TemplatesScreenClient } from "./TemplatesScreenClient";
+import { Suspense } from "react";
+import TemplatesScreenClient from "./TemplatesScreenClient";
 
 function LoadingCard() {
   return (
@@ -14,7 +14,7 @@ export default function Page() {
     <div className="mx-auto w-full max-w-5xl px-6 py-6">
       <header className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">Vorlagen</h1>
-        <p className="mt-1 text-sm text-slate-600">Starte mit einer Vorlage und passe sie im Builder an.</p>
+        <p className="mt-1 text-sm text-slate-600">Gespeicherte Vorlagen, um neue Formulare schnell zu erstellen.</p>
       </header>
 
       <Suspense fallback={<LoadingCard />}>

@@ -1,734 +1,421 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
-type TemplateSource = "SYSTEM" | "TENANT";
-type SortKey = "updated_desc" | "updated_asc" | "name_asc" | "name_desc";
+type ApiOk<T> = { ok: true; data: T; traceId: string };
+type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
+type ApiResp<T> = ApiOk<T> | ApiErr;
 
-type UiTemplate = {
+type TemplateSource = "SYSTEM" | "TENANT";
+type SourceFilter = "ALL" | "SYSTEM" | "TENANT";
+type SortKey = "updatedAt" | "name";
+type SortDir = "asc" | "desc";
+
+type TemplateItem = {
   id: string;
   name: string;
-  description: string | null;
   category: string | null;
+  description: string | null;
   source: TemplateSource;
-  updatedAt: string | null;
-  createdAt: string | null;
-  fieldsCount?: number | null;
+  fieldCount: number;
+  updatedAt: string; // ISO
 };
 
-type ApiOk = { ok: true; data: unknown; traceId: string };
-type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
-type ApiResp = ApiOk | ApiErr;
+type ListResp = { items: TemplateItem[] };
+
+function cx(...s: Array<string | false | null | undefined>) {
+  return s.filter(Boolean).join(" ");
+}
 
 function isRecord(v: unknown): v is Record<string, unknown> {
-  return !!v && typeof v === "object" && !Array.isArray(v);
-}
-function toStr(v: unknown): string | null {
-  return typeof v === "string" && v.trim() ? v : null;
-}
-function isTemplateSource(v: string): v is TemplateSource {
-  return v === "SYSTEM" || v === "TENANT";
-}
-function isSortKey(v: string): v is SortKey {
-  return v === "updated_desc" || v === "updated_asc" || v === "name_asc" || v === "name_desc";
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function toSource(v: unknown): TemplateSource {
-  if (v === "SYSTEM" || v === "TENANT") return v;
-  if (isRecord(v)) {
-    const isPublic = v.isPublic;
-    if (typeof isPublic === "boolean" && isPublic) return "SYSTEM";
-  }
-  return "TENANT";
-}
-
-function normalizeTemplateListPayload(dto: unknown): UiTemplate[] {
-  const raw =
-    Array.isArray(dto)
-      ? dto
-      : isRecord(dto) && Array.isArray(dto.templates)
-      ? dto.templates
-      : isRecord(dto) && Array.isArray(dto.data)
-      ? dto.data
-      : [];
-
-  const out: UiTemplate[] = [];
-  for (const it of raw) {
-    if (!isRecord(it)) continue;
-    const id = toStr(it.id);
-    const name = toStr(it.name) ?? toStr(it.title) ?? toStr(it.label);
-    if (!id || !name) continue;
-
-    const description = toStr(it.description) ?? toStr(it.subtitle) ?? null;
-    const category = toStr(it.category) ?? null;
-    const updatedAt = toStr(it.updatedAt) ?? null;
-    const createdAt = toStr(it.createdAt) ?? null;
-    const source = toSource(it.source ?? it);
-
-    let fieldsCount: number | null | undefined = undefined;
-    const fc = it.fieldsCount ?? it.fieldCount ?? it.fields_count;
-    if (typeof fc === "number" && Number.isFinite(fc)) fieldsCount = fc;
-    if (fieldsCount === undefined && isRecord(it.config) && Array.isArray(it.config.fields)) fieldsCount = it.config.fields.length;
-
-    out.push({ id, name, description, category, source, updatedAt, createdAt, fieldsCount });
-  }
-  return out;
-}
-
-function normalizeTemplateDetailPayload(dto: unknown): UiTemplate | null {
-  const raw = isRecord(dto) && isRecord(dto.template) ? dto.template : dto;
-  if (!isRecord(raw)) return null;
-
-  const id = toStr(raw.id);
-  const name = toStr(raw.name) ?? toStr(raw.title) ?? toStr(raw.label);
-  if (!id || !name) return null;
-
-  const description = toStr(raw.description) ?? toStr(raw.subtitle) ?? null;
-  const category = toStr(raw.category) ?? null;
-  const updatedAt = toStr(raw.updatedAt) ?? null;
-  const createdAt = toStr(raw.createdAt) ?? null;
-  const source = toSource(raw.source ?? raw);
-
-  let fieldsCount: number | null | undefined = undefined;
-  const fc = raw.fieldsCount ?? raw.fieldCount ?? raw.fields_count;
-  if (typeof fc === "number" && Number.isFinite(fc)) fieldsCount = fc;
-  if (fieldsCount === undefined && isRecord(raw.config) && Array.isArray(raw.config.fields)) fieldsCount = raw.config.fields.length;
-
-  return { id, name, description, category, source, updatedAt, createdAt, fieldsCount };
-}
-
-function fmtDateCH(iso: string | null): string {
-  if (!iso) return "—";
+function toIsoDateShort(iso: string): string {
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return new Intl.DateTimeFormat("de-CH", { year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+  if (!Number.isFinite(d.getTime())) return iso;
+  return d.toLocaleDateString("de-CH", { year: "numeric", month: "2-digit", day: "2-digit" });
 }
 
-function sortLabel(v: SortKey): string {
-  switch (v) {
-    case "updated_desc":
-      return "Zuletzt geändert";
-    case "updated_asc":
-      return "Älteste Änderung";
-    case "name_asc":
-      return "Name A–Z";
-    case "name_desc":
-      return "Name Z–A";
-    default:
-      return "Zuletzt geändert";
+function normalizeLegacySort(rawSort: string | null): { sort: SortKey; dir: SortDir } {
+  // legacy: updated_desc / updated_asc / name_desc / name_asc
+  const s = (rawSort ?? "").trim();
+  if (!s) return { sort: "updatedAt", dir: "desc" };
+
+  const parts = s.split("_");
+  if (parts.length === 2) {
+    const [k, d] = parts;
+    const dir: SortDir = d === "asc" ? "asc" : "desc";
+    if (k === "name") return { sort: "name", dir };
+    if (k === "updated" || k === "updatedAt") return { sort: "updatedAt", dir };
   }
+
+  // new style
+  if (s === "name") return { sort: "name", dir: "asc" };
+  if (s === "updatedAt") return { sort: "updatedAt", dir: "desc" };
+
+  return { sort: "updatedAt", dir: "desc" };
 }
 
-function applyClientSort(items: UiTemplate[], sort: SortKey): UiTemplate[] {
-  const copy = [...items];
-  copy.sort((a, b) => {
-    if (sort === "name_asc" || sort === "name_desc") {
-      const an = a.name.toLowerCase();
-      const bn = b.name.toLowerCase();
-      if (an < bn) return sort === "name_asc" ? -1 : 1;
-      if (an > bn) return sort === "name_asc" ? 1 : -1;
-      return 0;
+function pickSource(raw: string | null): SourceFilter {
+  const v = (raw ?? "").trim().toUpperCase();
+  if (v === "SYSTEM") return "SYSTEM";
+  if (v === "TENANT") return "TENANT";
+  return "ALL";
+}
+
+function pickSortKey(raw: string | null): SortKey {
+  const v = (raw ?? "").trim();
+  if (v === "name") return "name";
+  return "updatedAt";
+}
+
+function pickDir(raw: string | null): SortDir {
+  const v = (raw ?? "").trim();
+  return v === "asc" ? "asc" : "desc";
+}
+
+function extractFormId(dto: unknown): string | null {
+  if (!isRecord(dto)) return null;
+  const direct = dto.formId;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+
+  const id = dto.id;
+  if (typeof id === "string" && id.trim()) return id.trim();
+
+  const data = dto.data;
+  if (isRecord(data)) {
+    const fid = data.formId;
+    if (typeof fid === "string" && fid.trim()) return fid.trim();
+    const fid2 = data.id;
+    if (typeof fid2 === "string" && fid2.trim()) return fid2.trim();
+    const form = data.form;
+    if (isRecord(form)) {
+      const fid3 = form.id;
+      if (typeof fid3 === "string" && fid3.trim()) return fid3.trim();
     }
-    const ad = new Date(a.updatedAt ?? a.createdAt ?? 0).getTime();
-    const bd = new Date(b.updatedAt ?? b.createdAt ?? 0).getTime();
-    return sort === "updated_desc" ? bd - ad : ad - bd;
-  });
-  return copy;
-}
-
-function applyClientFilter(items: UiTemplate[], q: string, category: string, source: "ALL" | TemplateSource): UiTemplate[] {
-  const needle = q.trim().toLowerCase();
-  return items.filter((t) => {
-    if (source !== "ALL" && t.source !== source) return false;
-    const cat = t.category ?? "Ohne Kategorie";
-    if (category !== "ALL" && cat !== category) return false;
-    if (!needle) return true;
-    const hay = `${t.name} ${t.description ?? ""} ${t.category ?? ""}`.toLowerCase();
-    return hay.includes(needle);
-  });
-}
-
-async function fetchJson(url: string, init?: RequestInit): Promise<ApiResp> {
-  const res = await fetch(url, { cache: "no-store", ...init });
-  const traceId = res.headers.get("x-trace-id") ?? "";
-  let json: unknown = null;
-  try {
-    json = await res.json();
-  } catch {
-    // ignore
   }
-
-  if (isRecord(json) && typeof json.ok === "boolean") {
-    if (json.ok === true) {
-      return { ok: true, data: json.data, traceId: (toStr(json.traceId) ?? traceId) || traceId || "—" };
-    }
-    const errObj = isRecord(json.error) ? json.error : { code: "UNKNOWN", message: "Unbekannter Fehler" };
-    return {
-      ok: false,
-      error: {
-        code: toStr(errObj.code) ?? "UNKNOWN",
-        message: toStr(errObj.message) ?? "Unbekannter Fehler",
-        details: errObj.details,
-      },
-      traceId: (toStr(json.traceId) ?? traceId) || traceId || "—",
-    };
-  }
-
-  if (res.ok) return { ok: true, data: json, traceId: traceId || "—" };
-  return { ok: false, error: { code: "HTTP_ERROR", message: "Konnte Daten nicht laden." }, traceId: traceId || "—" };
+  return null;
 }
 
-/* ----------------------------- UI bits ----------------------------- */
-
-function Divider() {
-  return <div className="h-px w-full bg-slate-200" />;
-}
-
-function Button(props: {
-  label: string;
-  onClick?: () => void;
-  kind?: "primary" | "secondary" | "ghost";
-  disabled?: boolean;
-  type?: "button" | "submit";
-}) {
-  const kind = props.kind ?? "primary";
-  const base = "rounded-xl px-3 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60";
-  const cls =
-    kind === "primary"
-      ? `${base} bg-slate-900 text-white hover:bg-slate-800`
-      : kind === "secondary"
-      ? `${base} border border-slate-200 bg-white text-slate-900 hover:bg-slate-50`
-      : `${base} bg-transparent text-slate-700 hover:bg-slate-100`;
-  return (
-    <button type={props.type ?? "button"} className={cls} onClick={props.onClick} disabled={props.disabled}>
-      {props.label}
-    </button>
-  );
-}
-
-function IconButton(props: { title: string; onClick?: () => void; disabled?: boolean; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      title={props.title}
-      onClick={props.onClick}
-      disabled={props.disabled}
-      className="h-9 w-9 rounded-xl text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-    >
-      <span className="inline-flex h-9 w-9 items-center justify-center">{props.children}</span>
-    </button>
-  );
-}
-
-function InlineError(props: { title: string; message: string; traceId?: string; onRetry?: () => void }) {
-  return (
-    <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
-      <div className="text-sm font-semibold text-rose-900">{props.title}</div>
-      <div className="mt-1 text-sm text-rose-800">{props.message}</div>
-      {props.traceId ? <div className="mt-2 text-xs text-rose-700">Trace: {props.traceId}</div> : null}
-      {props.onRetry ? (
-        <div className="mt-3">
-          <Button label="Erneut versuchen" kind="secondary" onClick={props.onRetry} />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function InlineWarn(props: { title: string; message: string }) {
-  return (
-    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-      <div className="text-sm font-semibold text-amber-900">{props.title}</div>
-      <div className="mt-1 text-sm text-amber-800">{props.message}</div>
-    </div>
-  );
-}
-
-function ModalShell(props: { open: boolean; title: string; onClose: () => void; children: React.ReactNode }) {
-  if (!props.open) return null;
-  return (
-    <div className="fixed inset-0 z-50">
-      <div className="absolute inset-0 bg-black/20" onClick={props.onClose} />
-      <div className="absolute inset-0 flex items-center justify-center p-4">
-        <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl ring-1 ring-black/5">
-          <div className="flex h-14 items-center justify-between border-b border-slate-200 px-6">
-            <div className="text-sm font-semibold text-slate-900">{props.title}</div>
-            <button
-              type="button"
-              className="rounded-xl px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
-              onClick={props.onClose}
-              aria-label="Schliessen"
-            >
-              Schliessen
-            </button>
-          </div>
-          <div className="px-6 py-6">{props.children}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* --------------------------------- Screen --------------------------------- */
-
-export function TemplatesScreenClient() {
+export default function TemplatesScreenClient() {
   const router = useRouter();
   const sp = useSearchParams();
 
-  const intent = sp.get("intent") ?? "";
-  const isCreateIntent = intent === "create";
+  // --- URL state (robust defaults) ---
+  const q = (sp.get("q") ?? "").trim();
 
-  const [q, setQ] = useState("");
-  const [source, setSource] = useState<"ALL" | TemplateSource>("ALL");
-  const [category, setCategory] = useState<string>("ALL");
-  const [sort, setSort] = useState<SortKey>("updated_desc");
+  // category: allow "ALL" or empty
+  const categoryRaw = (sp.get("category") ?? "").trim();
+  const category = categoryRaw && categoryRaw !== "ALL" ? categoryRaw : "";
 
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<{ message: string; code?: string; traceId?: string } | null>(null);
-  const [itemsRaw, setItemsRaw] = useState<UiTemplate[]>([]);
+  // source: default ALL (important!)
+  const source: SourceFilter = pickSource(sp.get("source"));
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailErr, setDetailErr] = useState<{ message: string; code?: string; traceId?: string } | null>(null);
-  const [detail, setDetail] = useState<UiTemplate | null>(null);
+  // sort/dir: support legacy "sort=updated_desc"
+  const legacy = normalizeLegacySort(sp.get("sort"));
+  const sort: SortKey = sp.get("dir") ? pickSortKey(sp.get("sort")) : legacy.sort;
+  const dir: SortDir = sp.get("dir") ? pickDir(sp.get("dir")) : legacy.dir;
 
-  const [createOpen, setCreateOpen] = useState(false);
-  const [createName, setCreateName] = useState("");
-  const [createBusy, setCreateBusy] = useState(false);
-  const [createErr, setCreateErr] = useState<string | null>(null);
+  const [items, setItems] = useState<TemplateItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const debounceFetchRef = useRef<number | null>(null);
-  const debounceUrlRef = useRef<number | null>(null);
-
-  // Init state from URL once
-  useEffect(() => {
-    const iq = sp.get("q") ?? "";
-    const isrc = sp.get("source") ?? "";
-    const icat = sp.get("category") ?? "";
-    const isort = sp.get("sort") ?? "";
-
-    if (iq) setQ(iq);
-    if (isTemplateSource(isrc)) setSource(isrc);
-    if (icat) setCategory(icat);
-    if (isSortKey(isort)) setSort(isort);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const [toast, setToast] = useState<null | { kind: "error" | "success"; message: string }>(null);
 
   const categories = useMemo(() => {
     const set = new Set<string>();
-    for (const it of itemsRaw) set.add(it.category ?? "Ohne Kategorie");
-    return ["ALL", ...Array.from(set).sort((a, b) => a.localeCompare(b, "de-CH"))];
-  }, [itemsRaw]);
+    for (const it of items) {
+      const c = (it.category ?? "").trim();
+      if (c) set.add(c);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [items]);
 
-  const filtered = useMemo(() => {
-    const list = applyClientFilter(itemsRaw, q, category, source);
-    return applyClientSort(list, sort);
-  }, [itemsRaw, q, category, source, sort]);
+  const setParam = useCallback(
+    (patch: Record<string, string | null>) => {
+      const next = new URLSearchParams(sp.toString());
 
-  const selected = useMemo(() => {
-    if (!selectedId) return null;
-    return filtered.find((x) => x.id === selectedId) ?? itemsRaw.find((x) => x.id === selectedId) ?? null;
-  }, [selectedId, filtered, itemsRaw]);
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === null || v === "") next.delete(k);
+        else next.set(k, v);
+      }
 
-  const effectiveFieldsCount = detail?.fieldsCount ?? selected?.fieldsCount ?? null;
-  const isInvalidTemplate = typeof effectiveFieldsCount === "number" ? effectiveFieldsCount <= 0 : false;
+      // normalize: always store modern sort/dir keys (avoid legacy)
+      if (next.get("sort")?.includes("_")) {
+        const n = normalizeLegacySort(next.get("sort"));
+        next.set("sort", n.sort);
+        next.set("dir", n.dir);
+      } else {
+        // if dir missing, inject default
+        if (!next.get("sort")) next.set("sort", "updatedAt");
+        if (!next.get("dir")) next.set("dir", "desc");
+      }
 
-  const loadTemplates = useCallback(async () => {
+      // IMPORTANT: default source ALL should be explicit to avoid weird UI defaults
+      if (!next.get("source")) next.set("source", "ALL");
+
+      const qs = next.toString();
+      router.push(qs ? `/admin/templates?${qs}` : "/admin/templates");
+    },
+    [router, sp]
+  );
+
+  const load = useCallback(async () => {
     setLoading(true);
-    setErr(null);
-
-    // API query is strict. Sorting is UI-only.
-    const api = new URLSearchParams();
-    if (q.trim()) api.set("q", q.trim());
-    if (source !== "ALL") api.set("source", source);
-    if (category !== "ALL") api.set("category", category);
-
-    const url = api.toString() ? `/api/admin/v1/templates?${api.toString()}` : `/api/admin/v1/templates`;
+    setError(null);
 
     try {
-      const r = await fetchJson(url, { method: "GET" });
-      if (!r.ok) {
-        setItemsRaw([]);
-        setErr({ message: r.error.message || "Konnte Vorlagen nicht laden.", code: r.error.code, traceId: r.traceId });
+      const qp = new URLSearchParams();
+      if (q) qp.set("q", q);
+      if (category) qp.set("category", category);
+      if (source) qp.set("source", source);
+      qp.set("sort", sort);
+      qp.set("dir", dir);
+      qp.set("take", "50");
+
+      const res = await fetch(`/api/admin/v1/templates?${qp.toString()}`, { method: "GET", cache: "no-store" });
+      const txt = await res.text();
+
+      const json = JSON.parse(txt) as ApiResp<ListResp>;
+
+      if (!json || typeof json !== "object") {
+        setError("Ungültige Serverantwort (non-JSON).");
+        setLoading(false);
+        return;
+      }
+      if (!json.ok) {
+        setError(json.error?.message || "Konnte Vorlagen nicht laden.");
+        setLoading(false);
         return;
       }
 
-      const list = normalizeTemplateListPayload(r.data);
-      setItemsRaw(list);
-
-      if (list.length > 0) setSelectedId((prev) => prev ?? list[0].id);
-      else setSelectedId(null);
-
-      setCategory((prev) => {
-        if (prev === "ALL") return prev;
-        const exists = list.some((x) => (x.category ?? "Ohne Kategorie") === prev);
-        return exists ? prev : "ALL";
-      });
+      setItems(Array.isArray(json.data.items) ? json.data.items : []);
+      setLoading(false);
     } catch {
-      setItemsRaw([]);
-      setErr({ message: "Konnte Vorlagen nicht laden. Bitte erneut versuchen." });
-    } finally {
+      setError("Konnte Vorlagen nicht laden.");
       setLoading(false);
     }
-  }, [q, source, category]);
+  }, [q, category, source, sort, dir]);
 
-  const loadDetail = useCallback(async (id: string) => {
-    setDetailLoading(true);
-    setDetailErr(null);
-    setDetail(null);
-    try {
-      const r = await fetchJson(`/api/admin/v1/templates/${id}`, { method: "GET" });
-      if (!r.ok) {
-        setDetailErr({ message: r.error.message || "Konnte Vorlage nicht laden.", code: r.error.code, traceId: r.traceId });
-        return;
-      }
-      setDetail(normalizeTemplateDetailPayload(r.data));
-    } catch {
-      setDetailErr({ message: "Konnte Vorlage nicht laden. Bitte erneut versuchen." });
-    } finally {
-      setDetailLoading(false);
-    }
-  }, []);
-
-  const openCreateFromSelected = useCallback(() => {
-    if (!selected) return;
-    setCreateErr(null);
-    const today = new Intl.DateTimeFormat("de-CH", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-    setCreateName(`${selected.name} – ${today}`);
-    setCreateOpen(true);
-  }, [selected]);
-
-  const doCreate = useCallback(async () => {
-    if (!selected) return;
-
-    if (isInvalidTemplate) {
-      setCreateErr("Diese Vorlage enthält keine Felder und kann nicht verwendet werden.");
-      return;
-    }
-
-    const name = createName.trim();
-    if (!name) {
-      setCreateErr("Bitte gib einen Formularnamen ein.");
-      return;
-    }
-
-    setCreateBusy(true);
-    setCreateErr(null);
-
-    try {
-      const r = await fetchJson(`/api/admin/v1/templates/${selected.id}/create-form`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name }),
+  useEffect(() => {
+    // ensure URL has explicit modern defaults once
+    if (!sp.get("source") || sp.get("sort")?.includes("_") || !sp.get("dir")) {
+      setParam({
+        source: sp.get("source") ? sp.get("source") : "ALL",
+        sort: sp.get("sort"),
+        dir: sp.get("dir"),
       });
-
-      if (!r.ok) {
-        const msg = r.error.message || "Formular konnte nicht erstellt werden.";
-        const trace = r.traceId ? ` (Trace: ${r.traceId})` : "";
-        setCreateErr(`${msg}${trace}`);
-        return;
-      }
-
-      const data = r.data;
-      let formId: string | null = null;
-      if (isRecord(data)) {
-        formId = toStr(data.formId) ?? toStr(data.id) ?? (isRecord(data.form) ? toStr(data.form.id) : null);
-      }
-      if (!formId) {
-        setCreateErr("Formular wurde erstellt, aber die ID fehlt in der Antwort (API-Contract).");
-        return;
-      }
-
-      setCreateOpen(false);
-      router.push(`/admin/forms/${formId}/builder`);
-    } catch {
-      setCreateErr("Formular konnte nicht erstellt werden. Bitte erneut versuchen.");
-    } finally {
-      setCreateBusy(false);
+      return;
     }
-  }, [selected, createName, router, isInvalidTemplate]);
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sp.toString()]);
 
-  // initial load
-  useEffect(() => {
-    void loadTemplates();
-  }, [loadTemplates]);
+  const onCreateFromTemplate = useCallback(
+    async (templateId: string) => {
+      setBusy(true);
+      setToast(null);
 
-  // Debounced fetch only when API-relevant filters change
-  useEffect(() => {
-    if (debounceFetchRef.current) window.clearTimeout(debounceFetchRef.current);
-    debounceFetchRef.current = window.setTimeout(() => {
-      void loadTemplates();
-    }, 250);
+      try {
+        const res = await fetch(`/api/admin/v1/templates/${templateId}/create-form`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        });
 
-    return () => {
-      if (debounceFetchRef.current) window.clearTimeout(debounceFetchRef.current);
-    };
-  }, [q, source, category, loadTemplates]);
+        const txt = await res.text();
+        const json = JSON.parse(txt) as ApiResp<unknown>;
 
-  // Debounced URL sync (includes UI-only sort)
-  useEffect(() => {
-    if (debounceUrlRef.current) window.clearTimeout(debounceUrlRef.current);
-    debounceUrlRef.current = window.setTimeout(() => {
-      const usp = new URLSearchParams();
-      if (isCreateIntent) usp.set("intent", "create");
-      if (q.trim()) usp.set("q", q.trim());
-      if (source !== "ALL") usp.set("source", source);
-      if (category !== "ALL") usp.set("category", category);
-      usp.set("sort", sort);
-      router.replace(`/admin/templates?${usp.toString()}`);
-    }, 250);
+        if (!json || typeof json !== "object") {
+          setToast({ kind: "error", message: "Ungültige Serverantwort (non-JSON)." });
+          setBusy(false);
+          return;
+        }
+        if (!json.ok) {
+          setToast({ kind: "error", message: json.error?.message || "Konnte Formular nicht erstellen." });
+          setBusy(false);
+          return;
+        }
 
-    return () => {
-      if (debounceUrlRef.current) window.clearTimeout(debounceUrlRef.current);
-    };
-  }, [q, source, category, sort, isCreateIntent, router]);
+        const formId = extractFormId(json);
+        if (!formId) {
+          setToast({ kind: "error", message: "Serverantwort ohne formId." });
+          setBusy(false);
+          return;
+        }
 
-  useEffect(() => {
-    if (!selectedId) return;
-    void loadDetail(selectedId);
-  }, [selectedId, loadDetail]);
-
-  const countLabel = filtered.length === 1 ? "1 Vorlage" : `${filtered.length} Vorlagen`;
+        setToast({ kind: "success", message: "Formular erstellt." });
+        router.push(`/admin/forms/${formId}/builder`);
+      } catch {
+        setToast({ kind: "error", message: "Konnte Formular nicht erstellen." });
+      } finally {
+        setBusy(false);
+      }
+    },
+    [router]
+  );
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white">
-      {/* Toolbar */}
-      <div className="p-5">
-        {isCreateIntent ? (
-          <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-            <span className="font-medium text-slate-900">Formular vorbereiten:</span> Vorlage auswählen → rechts{" "}
-            <span className="font-medium">„Vorlage verwenden“</span>.
+    <>
+      {toast ? (
+        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4">
+          <div className={cx("text-sm font-semibold", toast.kind === "error" ? "text-rose-900" : "text-emerald-900")}>
+            {toast.kind === "error" ? "Fehler" : "OK"}
           </div>
-        ) : null}
+          <div className={cx("mt-1 text-sm", toast.kind === "error" ? "text-rose-800" : "text-emerald-800")}>{toast.message}</div>
+        </div>
+      ) : null}
 
-        <div className="flex flex-wrap items-center gap-3">
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Vorlagen suchen…"
-            className="h-9 w-64 max-w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400"
-            aria-label="Suche"
-          />
+      <section className="rounded-2xl border border-slate-200 bg-white">
+        {/* Toolbar */}
+        <div className="p-5">
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              className="h-9 w-full max-w-md rounded-xl border border-slate-200 bg-white px-3 text-sm"
+              placeholder="Suchen (Name)…"
+              value={q}
+              onChange={(e) => setParam({ q: e.target.value.trim() ? e.target.value : "" })}
+            />
 
-          <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value || "ALL")}
-            className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900"
-            aria-label="Kategorie"
-          >
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {c === "ALL" ? "Alle Kategorien" : c}
-              </option>
-            ))}
-          </select>
+            <select
+              className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm"
+              value={source}
+              onChange={(e) => setParam({ source: e.target.value })}
+              title="Quelle"
+            >
+              <option value="ALL">Alle</option>
+              <option value="TENANT">Eigene</option>
+              <option value="SYSTEM">System</option>
+            </select>
 
-          <select
-            value={source}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v === "ALL") setSource("ALL");
-              else if (isTemplateSource(v)) setSource(v);
-            }}
-            className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900"
-            aria-label="Quelle"
-          >
-            <option value="ALL">Alle Quellen</option>
-            <option value="TENANT">Mandant</option>
-            <option value="SYSTEM">System</option>
-          </select>
+            <select
+              className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm"
+              value={category ? category : "ALL"}
+              onChange={(e) => setParam({ category: e.target.value === "ALL" ? "" : e.target.value })}
+              title="Kategorie"
+            >
+              <option value="ALL">Alle Kategorien</option>
+              {categories.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
 
-          <select
-            value={sort}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (isSortKey(v)) setSort(v);
-            }}
-            className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900"
-            aria-label="Sortierung"
-          >
-            <option value="updated_desc">{sortLabel("updated_desc")}</option>
-            <option value="updated_asc">{sortLabel("updated_asc")}</option>
-            <option value="name_asc">{sortLabel("name_asc")}</option>
-            <option value="name_desc">{sortLabel("name_desc")}</option>
-          </select>
+            <select
+              className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm"
+              value={sort}
+              onChange={(e) => setParam({ sort: e.target.value })}
+              title="Sortierung"
+            >
+              <option value="updatedAt">Zuletzt geändert</option>
+              <option value="name">Name</option>
+            </select>
 
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            <div className="text-sm text-slate-600">{loading ? "Lade…" : countLabel}</div>
-            <IconButton title="Aktualisieren" onClick={() => void loadTemplates()} disabled={loading}>
-              ↻
-            </IconButton>
+            <button
+              type="button"
+              className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              onClick={() => setParam({ dir: dir === "asc" ? "desc" : "asc" })}
+              title="Richtung"
+            >
+              {dir === "asc" ? "↑" : "↓"}
+            </button>
+
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                onClick={() => void load()}
+                disabled={loading || busy}
+              >
+                Aktualisieren
+              </button>
+              <Link
+                className="h-9 rounded-xl border border-slate-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+                href="/admin/forms"
+              >
+                Zu Formularen
+              </Link>
+            </div>
           </div>
         </div>
-      </div>
 
-      <Divider />
+        <div className="h-px w-full bg-slate-200" />
 
-      {/* Content */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_480px]">
-        {/* LEFT: list */}
-        <div className="min-w-0">
-          {err ? (
-            <div className="p-6">
-              <InlineError title="Konnte Vorlagen nicht laden" message={err.message} traceId={err.traceId} onRetry={() => void loadTemplates()} />
+        {/* Content */}
+        {loading ? (
+          <div className="p-6">
+            <div className="h-5 w-52 animate-pulse rounded bg-slate-100" />
+            <div className="mt-3 h-10 w-full animate-pulse rounded bg-slate-100" />
+            <div className="mt-2 h-10 w-full animate-pulse rounded bg-slate-100" />
+            <div className="mt-2 h-10 w-full animate-pulse rounded bg-slate-100" />
+          </div>
+        ) : error ? (
+          <div className="p-6">
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5">
+              <div className="text-sm font-semibold text-rose-900">Konnte Vorlagen nicht laden</div>
+              <div className="mt-1 text-sm text-rose-800">{error}</div>
             </div>
-          ) : loading ? (
-            <div className="p-6 text-sm text-slate-600">Lade Vorlagen…</div>
-          ) : filtered.length === 0 ? (
-            <div className="p-6">
+          </div>
+        ) : items.length === 0 ? (
+          <div className="p-6">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
               <div className="text-sm font-semibold text-slate-900">Noch keine Vorlagen</div>
               <div className="mt-1 text-sm text-slate-600">
-                So erstellst du deine erste Vorlage:
-                <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-slate-600">
-                  <li>Öffne ein Formular unter <span className="font-medium text-slate-800">Formulare</span>.</li>
-                  <li>Im Builder: <span className="font-medium text-slate-800">„Als Vorlage speichern“</span>.</li>
-                  <li>Danach erscheint die Vorlage hier und kann für neue Formulare verwendet werden.</li>
-                </ol>
+                Öffne ein Formular im Builder und nutze <span className="font-semibold">„Als Vorlage speichern“</span>.
               </div>
-
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Button label="Zu Formularen" kind="secondary" onClick={() => router.push("/admin/forms")} />
-                <Button
-                  label="Filter zurücksetzen"
-                  kind="ghost"
-                  onClick={() => {
-                    setQ("");
-                    setSource("ALL");
-                    setCategory("ALL");
-                    setSort("updated_desc");
-                  }}
-                />
+              <div className="mt-3">
+                <Link className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800" href="/admin/forms">
+                  Formulare öffnen
+                </Link>
               </div>
             </div>
-          ) : (
-            <div className="overflow-auto">
-              <table className="w-full table-auto">
-                <thead className="text-xs font-semibold text-slate-600">
-                  <tr>
-                    <th className="px-6 py-3 text-left">Name</th>
-                    <th className="px-6 py-3 text-left">Kategorie</th>
-                    <th className="px-6 py-3 text-left">Quelle</th>
-                    <th className="px-6 py-3 text-right">Felder</th>
-                    <th className="px-6 py-3 text-right">Geändert</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filtered.map((t) => {
-                    const active = t.id === selectedId;
-                    const invalid = typeof t.fieldsCount === "number" ? t.fieldsCount <= 0 : false;
-                    return (
-                      <tr
-                        key={t.id}
-                        onClick={() => setSelectedId(t.id)}
-                        className={[
-                          "cursor-pointer hover:bg-slate-50",
-                          active ? "bg-slate-50" : "bg-white",
-                        ].join(" ")}
-                      >
-                        <td className="px-6 py-3">
-                          <div className="flex items-center gap-2">
-                            <div className="min-w-0">
-                              <div className="truncate text-sm font-medium text-slate-900">{t.name}</div>
-                              {t.description ? <div className="mt-0.5 line-clamp-1 text-sm text-slate-600">{t.description}</div> : null}
-                            </div>
-                            {invalid ? <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-800">ohne Felder</span> : null}
-                          </div>
-                        </td>
-                        <td className="px-6 py-3 text-sm text-slate-700">{t.category ?? "Ohne Kategorie"}</td>
-                        <td className="px-6 py-3 text-sm text-slate-700">{t.source === "SYSTEM" ? "System" : "Mandant"}</td>
-                        <td className="px-6 py-3 text-right text-sm text-slate-700">{typeof t.fieldsCount === "number" ? t.fieldsCount : "—"}</td>
-                        <td className="px-6 py-3 text-right text-sm text-slate-700">{fmtDateCH(t.updatedAt)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        {/* RIGHT: detail */}
-        <div className="border-l border-slate-200">
-          <div className="p-6">
-            {!selectedId ? (
-              <div className="text-sm text-slate-600">Wähle links eine Vorlage aus.</div>
-            ) : detailLoading ? (
-              <div className="text-sm text-slate-600">Lade Details…</div>
-            ) : detailErr ? (
-              <InlineError
-                title="Konnte Vorlage nicht laden"
-                message={detailErr.message}
-                traceId={detailErr.traceId}
-                onRetry={() => selectedId && void loadDetail(selectedId)}
-              />
-            ) : (
-              <>
-                <div className="text-sm font-semibold text-slate-900">{detail?.name ?? selected?.name ?? "—"}</div>
-                <div className="mt-2 text-sm text-slate-600">{detail?.description ?? selected?.description ?? "Keine Beschreibung."}</div>
-
-                <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <div className="text-xs font-semibold text-slate-600">Kategorie</div>
-                    <div className="mt-1 text-sm text-slate-900">{(detail?.category ?? selected?.category) ?? "Ohne Kategorie"}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs font-semibold text-slate-600">Felder</div>
-                    <div className="mt-1 text-sm text-slate-900">{typeof effectiveFieldsCount === "number" ? effectiveFieldsCount : "—"}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs font-semibold text-slate-600">Erstellt</div>
-                    <div className="mt-1 text-sm text-slate-900">{fmtDateCH(detail?.createdAt ?? selected?.createdAt ?? null)}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs font-semibold text-slate-600">Geändert</div>
-                    <div className="mt-1 text-sm text-slate-900">{fmtDateCH(detail?.updatedAt ?? selected?.updatedAt ?? null)}</div>
-                  </div>
-                </div>
-
-                {isInvalidTemplate ? (
-                  <div className="mt-4">
-                    <InlineWarn title="Vorlage unvollständig" message="Diese Vorlage enthält keine Felder. Speichere sie im Builder erneut als Vorlage oder wähle eine andere." />
-                  </div>
-                ) : null}
-
-                <div className="mt-6 flex flex-wrap items-center gap-2">
-                  <Button label="Vorlage verwenden" kind="primary" onClick={openCreateFromSelected} disabled={!selected || isInvalidTemplate} />
-                  <Button label="Neu laden" kind="secondary" onClick={() => selectedId && void loadDetail(selectedId)} disabled={!selectedId} />
-                </div>
-
-                {isCreateIntent ? (
-                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                    Tipp: Du kannst das Formular später jederzeit umbenennen und im Builder anpassen.
-                  </div>
-                ) : null}
-              </>
-            )}
           </div>
-        </div>
-      </div>
-
-      {/* Create modal */}
-      <ModalShell open={createOpen} title="Formular aus Vorlage erstellen" onClose={() => (!createBusy ? setCreateOpen(false) : null)}>
-        <div className="text-sm text-slate-600">Gib dem Formular einen Namen. Danach landest du direkt im Builder.</div>
-
-        <div className="mt-4">
-          <label className="text-xs font-semibold text-slate-600">Formularname</label>
-          <input
-            value={createName}
-            onChange={(e) => setCreateName(e.target.value)}
-            placeholder="z.B. Messe Leads – Tag 1"
-            className="mt-1 h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400"
-            disabled={createBusy}
-          />
-          {createErr ? <div className="mt-2 text-sm text-rose-700">{createErr}</div> : null}
-        </div>
-
-        <div className="mt-6 flex items-center justify-end gap-2">
-          <Button label="Abbrechen" kind="secondary" onClick={() => setCreateOpen(false)} disabled={createBusy} />
-          <Button label={createBusy ? "Erstelle…" : "Erstellen"} kind="primary" onClick={() => void doCreate()} disabled={createBusy || isInvalidTemplate} />
-        </div>
-      </ModalShell>
-    </section>
+        ) : (
+          <div className="p-6">
+            <table className="w-full table-auto">
+              <thead className="text-left text-xs font-semibold text-slate-600">
+                <tr>
+                  <th className="py-2">Name</th>
+                  <th className="py-2">Kategorie</th>
+                  <th className="py-2">Quelle</th>
+                  <th className="py-2">Felder</th>
+                  <th className="py-2">Aktualisiert</th>
+                  <th className="py-2 text-right">Aktion</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {items.map((it) => (
+                  <tr key={it.id} className="hover:bg-slate-50">
+                    <td className="py-3 pr-3">
+                      <div className="text-sm font-semibold text-slate-900">{it.name}</div>
+                      {it.description ? <div className="mt-0.5 text-xs text-slate-500">{it.description}</div> : null}
+                    </td>
+                    <td className="py-3 text-sm text-slate-700">{it.category ?? "—"}</td>
+                    <td className="py-3 text-sm text-slate-700">{it.source === "SYSTEM" ? "System" : "Eigen"}</td>
+                    <td className="py-3 text-sm text-slate-700">{String(it.fieldCount ?? 0)}</td>
+                    <td className="py-3 text-sm text-slate-700">{toIsoDateShort(it.updatedAt)}</td>
+                    <td className="py-3 text-right">
+                      <button
+                        type="button"
+                        className="rounded-xl border border-slate-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
+                        disabled={busy}
+                        onClick={() => void onCreateFromTemplate(it.id)}
+                      >
+                        Verwenden
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </>
   );
 }
