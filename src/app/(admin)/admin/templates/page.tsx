@@ -17,15 +17,17 @@ function PageFallback() {
 
 export default function TemplatesPage() {
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">Vorlagen</h1>
-        <p className="mt-1 text-sm text-slate-600">Starte mit einer Vorlage und passe sie im Builder an.</p>
-      </div>
+    <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8">
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">Vorlagen</h1>
+          <p className="mt-1 text-sm text-slate-600">Starte mit einer Vorlage und passe sie im Builder an.</p>
+        </div>
 
-      <Suspense fallback={<PageFallback />}>
-        <TemplatesScreenClient />
-      </Suspense>
+        <Suspense fallback={<PageFallback />}>
+          <TemplatesScreenClient />
+        </Suspense>
+      </div>
     </div>
   );
 }

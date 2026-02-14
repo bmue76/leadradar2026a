@@ -582,7 +582,7 @@ export function TemplatesScreenClient() {
             <div className="p-6">
               <div className="text-sm font-semibold text-slate-900">Keine Vorlagen</div>
               <div className="mt-1 text-sm text-slate-600">
-                Lege Vorlagen im Mandanten an (im Builder: „Als Vorlage speichern“) oder passe Filter an.
+                Noch keine Vorlagen.
               </div>
               <div className="mt-4 flex gap-2">
                 <Button label="Zu Formularen" kind="secondary" onClick={() => router.push("/admin/forms")} />
