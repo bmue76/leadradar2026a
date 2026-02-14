@@ -444,6 +444,7 @@ type PresetFieldSnapshot = {
 };
 
 type PresetConfigV1 = {
+  schemaVersion: 1;
   v: 1;
   source: "FORM_BUILDER";
   captureStart: CaptureStart;
@@ -467,6 +468,7 @@ function buildPresetConfigV1(form: BuilderForm, fields: BuilderField[]): PresetC
   }));
 
   return {
+    schemaVersion: 1,
     v: 1,
     source: "FORM_BUILDER",
     captureStart: getCaptureStartFromForm(form),
@@ -671,6 +673,8 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const existingKeys = useMemo(() => new Set(fields.map((f) => f.key)), [fields]);
+
+  const canSaveAsTemplate = !readOnly && fields.length > 0;
 
   useEffect(() => {
     const raw = localStorage.getItem("lr_builder:autoOpenSettings");
@@ -1169,12 +1173,19 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
     async (name: string, category?: string | null): Promise<{ ok: boolean }> => {
       if (!form) return { ok: false };
 
+      const currentFields = fieldsRef.current;
+      if (!currentFields.length) {
+        setToast({ kind: "error", message: "Bitte zuerst mindestens ein Feld hinzufügen, bevor du eine Vorlage speicherst." });
+        return { ok: false };
+      }
+
       const cat = (category ?? "").trim() || "Standard";
 
       const payload: Record<string, unknown> = {
         name: name.trim(),
         category: cat,
-        config: buildPresetConfigV1(form, fieldsRef.current),
+        sourceFormId: form.id,
+        config: buildPresetConfigV1(form, currentFields),
       };
 
       const desc = (form.description ?? "").trim();
@@ -1300,11 +1311,22 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
 
           <button
             className={cx(
-              "rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50",
-              readOnly && "opacity-60 pointer-events-none"
+              "rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60",
+              (!canSaveAsTemplate || saveTemplateBusy) && "disabled:pointer-events-none"
             )}
             type="button"
-            onClick={() => setSaveTemplateOpen(true)}
+            disabled={!canSaveAsTemplate || saveTemplateBusy}
+            onClick={() => {
+              if (!fieldsRef.current.length) {
+                setToast({
+                  kind: "error",
+                  message: "Bitte zuerst mindestens ein Feld hinzufügen, bevor du eine Vorlage speicherst.",
+                });
+                return;
+              }
+              setSaveTemplateOpen(true);
+            }}
+            title={!fields.length ? "Vor dem Speichern braucht es mindestens ein Feld." : undefined}
           >
             Als Vorlage speichern
           </button>
