@@ -1,696 +1,708 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
-type ApiOk<T> = { ok: true; data: T; traceId: string };
-type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
-type ApiResp<T> = ApiOk<T> | ApiErr;
-
 type TemplateSource = "SYSTEM" | "TENANT";
+type SortKey = "updated_desc" | "updated_asc" | "name_asc" | "name_desc";
 
-type TemplateListItem = {
+type UiTemplate = {
   id: string;
   name: string;
-  category: string | null;
   description: string | null;
+  category: string | null;
   source: TemplateSource;
-  fieldCount: number;
-  updatedAt: string;
+  updatedAt: string | null;
+  createdAt: string | null;
+  fieldsCount?: number | null;
 };
 
-type TemplateListApi = { items: TemplateListItem[] };
+type ApiOk = { ok: true; data: unknown; traceId: string };
+type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
+type ApiResp = ApiOk | ApiErr;
 
-type TemplateDetail = {
-  id: string;
-  name: string;
-  category: string | null;
-  description: string | null;
-  source: TemplateSource;
-  fieldCount: number;
-  updatedAt: string;
-  fields: Array<{ key: string; label: string; type: string; required: boolean }>;
-};
-
-type TemplateDetailApi = { item: TemplateDetail };
-
-type CreateResp = { formId: string; redirect?: string };
-
-type UiError = { message: string; code?: string; traceId?: string };
-
-function fmtDateTime(iso: string): string {
-  try {
-    return new Intl.DateTimeFormat("de-CH", { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
-  } catch {
-    return iso;
-  }
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+function toStr(v: unknown): string | null {
+  return typeof v === "string" && v.trim() ? v : null;
+}
+function isTemplateSource(v: string): v is TemplateSource {
+  return v === "SYSTEM" || v === "TENANT";
+}
+function isSortKey(v: string): v is SortKey {
+  return v === "updated_desc" || v === "updated_asc" || v === "name_asc" || v === "name_desc";
 }
 
-function chipBase(active: boolean): string {
-  return active
-    ? "inline-flex items-center rounded-full border border-slate-900 bg-slate-900 px-2 py-1 text-xs font-semibold text-white"
-    : "inline-flex items-center rounded-full border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700";
+function toSource(v: unknown): TemplateSource {
+  if (v === "SYSTEM" || v === "TENANT") return v;
+  if (isRecord(v)) {
+    const isPublic = v.isPublic;
+    if (typeof isPublic === "boolean" && isPublic) return "SYSTEM";
+  }
+  return "TENANT";
+}
+
+function normalizeTemplateListPayload(dto: unknown): UiTemplate[] {
+  const raw =
+    Array.isArray(dto)
+      ? dto
+      : isRecord(dto) && Array.isArray(dto.templates)
+      ? dto.templates
+      : isRecord(dto) && Array.isArray(dto.data)
+      ? dto.data
+      : [];
+
+  const out: UiTemplate[] = [];
+  for (const it of raw) {
+    if (!isRecord(it)) continue;
+    const id = toStr(it.id);
+    const name = toStr(it.name) ?? toStr(it.title) ?? toStr(it.label);
+    if (!id || !name) continue;
+
+    const description = toStr(it.description) ?? toStr(it.subtitle) ?? null;
+    const category = toStr(it.category) ?? null;
+    const updatedAt = toStr(it.updatedAt) ?? null;
+    const createdAt = toStr(it.createdAt) ?? null;
+    const source = toSource(it.source ?? it);
+
+    let fieldsCount: number | null | undefined = undefined;
+    const fc = it.fieldsCount ?? it.fieldCount ?? it.fields_count;
+    if (typeof fc === "number" && Number.isFinite(fc)) fieldsCount = fc;
+    if (fieldsCount === undefined && isRecord(it.config) && Array.isArray(it.config.fields)) fieldsCount = it.config.fields.length;
+
+    out.push({ id, name, description, category, source, updatedAt, createdAt, fieldsCount });
+  }
+  return out;
+}
+
+function normalizeTemplateDetailPayload(dto: unknown): UiTemplate | null {
+  const raw = isRecord(dto) && isRecord(dto.template) ? dto.template : dto;
+  if (!isRecord(raw)) return null;
+
+  const id = toStr(raw.id);
+  const name = toStr(raw.name) ?? toStr(raw.title) ?? toStr(raw.label);
+  if (!id || !name) return null;
+
+  const description = toStr(raw.description) ?? toStr(raw.subtitle) ?? null;
+  const category = toStr(raw.category) ?? null;
+  const updatedAt = toStr(raw.updatedAt) ?? null;
+  const createdAt = toStr(raw.createdAt) ?? null;
+  const source = toSource(raw.source ?? raw);
+
+  let fieldsCount: number | null | undefined = undefined;
+  const fc = raw.fieldsCount ?? raw.fieldCount ?? raw.fields_count;
+  if (typeof fc === "number" && Number.isFinite(fc)) fieldsCount = fc;
+  if (fieldsCount === undefined && isRecord(raw.config) && Array.isArray(raw.config.fields)) fieldsCount = raw.config.fields.length;
+
+  return { id, name, description, category, source, updatedAt, createdAt, fieldsCount };
+}
+
+function fmtDateCH(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("de-CH", { year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
 }
 
 function sourceLabel(s: TemplateSource): string {
-  return s === "SYSTEM" ? "LeadRadar" : "Mandant";
+  return s === "SYSTEM" ? "System" : "Mandant";
 }
 
-function Button({
-  label,
-  kind,
-  onClick,
-  disabled,
-  title,
-}: {
-  label: string;
-  kind: "primary" | "secondary" | "ghost" | "danger";
-  onClick?: () => void;
-  disabled?: boolean;
-  title?: string;
-}) {
-  const base =
-    "inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-slate-200";
-  const primary = "bg-slate-900 text-white hover:bg-slate-800";
-  const secondary = "border border-slate-200 bg-white text-slate-900 hover:bg-slate-50";
-  const ghost = "text-slate-700 hover:bg-slate-100";
-  const danger = "border border-rose-200 bg-rose-50 text-rose-800 hover:bg-rose-100";
-
-  const cls = `${base} ${
-    kind === "primary" ? primary : kind === "secondary" ? secondary : kind === "danger" ? danger : ghost
-  } ${disabled ? "opacity-50 pointer-events-none" : ""}`;
-
-  return (
-    <button type="button" className={cls} onClick={onClick} disabled={disabled} title={title}>
-      {label}
-    </button>
-  );
+function sortLabel(v: SortKey): string {
+  switch (v) {
+    case "updated_desc":
+      return "Zuletzt geändert";
+    case "updated_asc":
+      return "Älteste Änderung";
+    case "name_asc":
+      return "Name A–Z";
+    case "name_desc":
+      return "Name Z–A";
+    default:
+      return "Zuletzt geändert";
+  }
 }
 
-function IconButton({ title, onClick }: { title: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-600 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-200"
-      aria-label={title}
-      title={title}
-      onClick={onClick}
-    >
-      ↻
-    </button>
-  );
+function applyClientSort(items: UiTemplate[], sort: SortKey): UiTemplate[] {
+  const copy = [...items];
+  copy.sort((a, b) => {
+    if (sort === "name_asc" || sort === "name_desc") {
+      const an = a.name.toLowerCase();
+      const bn = b.name.toLowerCase();
+      if (an < bn) return sort === "name_asc" ? -1 : 1;
+      if (an > bn) return sort === "name_asc" ? 1 : -1;
+      return 0;
+    }
+    const ad = new Date(a.updatedAt ?? a.createdAt ?? 0).getTime();
+    const bd = new Date(b.updatedAt ?? b.createdAt ?? 0).getTime();
+    return sort === "updated_desc" ? bd - ad : ad - bd;
+  });
+  return copy;
 }
 
-function Select({
-  value,
-  onChange,
-  ariaLabel,
-  children,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  ariaLabel: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <select
-      className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
-      value={value}
-      aria-label={ariaLabel}
-      onChange={(e) => onChange(e.target.value)}
-    >
-      {children}
-    </select>
-  );
+function applyClientFilter(items: UiTemplate[], q: string, category: string, source: "ALL" | TemplateSource): UiTemplate[] {
+  const needle = q.trim().toLowerCase();
+  return items.filter((t) => {
+    if (source !== "ALL" && t.source !== source) return false;
+    const cat = t.category ?? "Ohne Kategorie";
+    if (category !== "ALL" && cat !== category) return false;
+    if (!needle) return true;
+    const hay = `${t.name} ${t.description ?? ""} ${t.category ?? ""}`.toLowerCase();
+    return hay.includes(needle);
+  });
 }
 
-function Input({
-  value,
-  onChange,
-  placeholder,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder: string;
-}) {
-  return (
-    <input
-      className="h-9 w-[260px] rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
-      value={value}
-      placeholder={placeholder}
-      onChange={(e) => onChange(e.target.value)}
-    />
-  );
+async function fetchJson(url: string, init?: RequestInit): Promise<ApiResp> {
+  const res = await fetch(url, { cache: "no-store", ...init });
+  const traceId = res.headers.get("x-trace-id") ?? "";
+  let json: unknown = null;
+  try {
+    json = await res.json();
+  } catch {
+    // ignore
+  }
+
+  if (isRecord(json) && typeof json.ok === "boolean") {
+    if (json.ok === true) {
+      return { ok: true, data: json.data, traceId: (toStr(json.traceId) ?? traceId) || traceId || "—" };
+    }
+    const errObj = isRecord(json.error) ? json.error : { code: "UNKNOWN", message: "Unbekannter Fehler" };
+    return {
+      ok: false,
+      error: {
+        code: toStr(errObj.code) ?? "UNKNOWN",
+        message: toStr(errObj.message) ?? "Unbekannter Fehler",
+        details: errObj.details,
+      },
+      traceId: (toStr(json.traceId) ?? traceId) || traceId || "—",
+    };
+  }
+
+  if (res.ok) return { ok: true, data: json, traceId: traceId || "—" };
+  return { ok: false, error: { code: "HTTP_ERROR", message: "Konnte Daten nicht laden." }, traceId: traceId || "—" };
 }
 
-function DrawerShell({
-  open,
-  title,
-  onClose,
-  children,
-}: {
-  open: boolean;
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
-  if (!open) return null;
+/* ----------------------------- Mini Modal (clean) ----------------------------- */
 
+function ModalShell(props: { open: boolean; title: string; onClose: () => void; children: React.ReactNode }) {
+  if (!props.open) return null;
   return (
     <div className="fixed inset-0 z-50">
-      <button type="button" className="absolute inset-0 bg-black/20" aria-label="Schliessen" onClick={onClose} />
-      <aside className="absolute right-0 top-0 h-full w-full max-w-[520px] bg-white shadow-2xl">
-        <div className="flex h-14 items-center justify-between border-b border-slate-200 px-6">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-slate-900">{title}</div>
+      <div className="absolute inset-0 bg-black/40" onClick={props.onClose} />
+      <div className="absolute inset-0 flex items-center justify-center p-4">
+        <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl ring-1 ring-black/5">
+          <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+            <div className="text-base font-semibold text-slate-900">{props.title}</div>
+            <button
+              type="button"
+              className="rounded-md px-2 py-1 text-sm text-slate-600 hover:bg-slate-100"
+              onClick={props.onClose}
+              aria-label="Schliessen"
+            >
+              ✕
+            </button>
           </div>
-          <button
-            type="button"
-            className="inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-200"
-            onClick={onClose}
-          >
-            Schliessen
-          </button>
+          <div className="px-5 py-4">{props.children}</div>
         </div>
-        <div className="h-[calc(100%-3.5rem)] overflow-auto px-6 py-6">{children}</div>
-      </aside>
-    </div>
-  );
-}
-
-function ModalShell({
-  open,
-  title,
-  onClose,
-  children,
-}: {
-  open: boolean;
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-      <button type="button" className="absolute inset-0 bg-black/30" aria-label="Schliessen" onClick={onClose} />
-      <div className="relative w-full max-w-[520px] rounded-2xl border border-slate-200 bg-white shadow-2xl">
-        <div className="flex h-14 items-center justify-between border-b border-slate-200 px-6">
-          <div className="truncate text-sm font-semibold text-slate-900">{title}</div>
-          <button
-            type="button"
-            className="inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-200"
-            onClick={onClose}
-          >
-            Schliessen
-          </button>
-        </div>
-        <div className="px-6 py-6">{children}</div>
       </div>
     </div>
   );
 }
 
+function Pill(props: { children: React.ReactNode }) {
+  return <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">{props.children}</span>;
+}
+
+function Button(props: {
+  label: string;
+  onClick?: () => void;
+  kind?: "primary" | "secondary" | "ghost";
+  disabled?: boolean;
+  type?: "button" | "submit";
+}) {
+  const kind = props.kind ?? "primary";
+  const base =
+    "inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium transition ring-1 ring-inset disabled:cursor-not-allowed disabled:opacity-60";
+  const cls =
+    kind === "primary"
+      ? `${base} bg-slate-900 text-white ring-slate-900 hover:bg-slate-800`
+      : kind === "secondary"
+      ? `${base} bg-white text-slate-900 ring-slate-300 hover:bg-slate-50`
+      : `${base} bg-transparent text-slate-700 ring-transparent hover:bg-slate-100`;
+  return (
+    <button type={props.type ?? "button"} className={cls} onClick={props.onClick} disabled={props.disabled}>
+      {props.label}
+    </button>
+  );
+}
+
+function InlineError(props: { title: string; message: string; traceId?: string; onRetry?: () => void }) {
+  return (
+    <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+      <div className="text-sm font-semibold text-rose-900">{props.title}</div>
+      <div className="mt-1 text-sm text-rose-800">{props.message}</div>
+      {props.traceId ? <div className="mt-2 text-xs text-rose-700">Trace: {props.traceId}</div> : null}
+      {props.onRetry ? (
+        <div className="mt-3">
+          <Button label="Erneut versuchen" kind="secondary" onClick={props.onRetry} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SkeletonRow() {
+  return (
+    <div className="flex items-center gap-3 px-4 py-3">
+      <div className="h-4 w-56 animate-pulse rounded bg-slate-200" />
+      <div className="ml-auto h-4 w-24 animate-pulse rounded bg-slate-200" />
+    </div>
+  );
+}
+
+/* --------------------------------- Screen --------------------------------- */
+
 export function TemplatesScreenClient() {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const sp = useSearchParams();
+
+  const intent = sp.get("intent") ?? "";
+  const isCreateIntent = intent === "create";
 
   const [q, setQ] = useState("");
-  const [category, setCategory] = useState<string>("ALL");
   const [source, setSource] = useState<"ALL" | TemplateSource>("ALL");
-  const [sort, setSort] = useState<"updatedAt" | "name">("updatedAt");
-  const [dir, setDir] = useState<"asc" | "desc">("desc");
+  const [category, setCategory] = useState<string>("ALL");
+  const [sort, setSort] = useState<SortKey>("updated_desc");
 
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<UiError | null>(null);
-  const [items, setItems] = useState<TemplateListItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<{ message: string; code?: string; traceId?: string } | null>(null);
+  const [itemsRaw, setItemsRaw] = useState<UiTemplate[]>([]);
 
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [loadingDetail, setLoadingDetail] = useState(false);
-  const [detail, setDetail] = useState<TemplateDetail | null>(null);
-  const [detailErr, setDetailErr] = useState<UiError | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailErr, setDetailErr] = useState<{ message: string; code?: string; traceId?: string } | null>(null);
+  const [detail, setDetail] = useState<UiTemplate | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [createTpl, setCreateTpl] = useState<TemplateListItem | null>(null);
   const [createName, setCreateName] = useState("");
-  const [createOpenBuilder, setCreateOpenBuilder] = useState(false);
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
 
-  const intentCreate = searchParams.get("intent") === "create";
+  const debounceRef = useRef<number | null>(null);
 
-  const isDirty = useMemo(
-    () => q.trim() !== "" || category !== "ALL" || source !== "ALL" || sort !== "updatedAt" || dir !== "desc",
-    [q, category, source, sort, dir]
-  );
+  // Init state from URL once (nice for sharing links)
+  useEffect(() => {
+    const iq = sp.get("q") ?? "";
+    const isrc = sp.get("source") ?? "";
+    const icat = sp.get("category") ?? "";
+    const isort = sp.get("sort") ?? "";
+
+    if (iq) setQ(iq);
+    if (isTemplateSource(isrc)) setSource(isrc);
+    if (icat) setCategory(icat);
+    if (isSortKey(isort)) setSort(isort);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentional: only once on mount
 
   const categories = useMemo(() => {
     const set = new Set<string>();
-    for (const it of items) {
-      if (it.category) set.add(it.category);
-    }
-    return Array.from(set).sort((a, b) => a.localeCompare(b, "de-CH"));
-  }, [items]);
+    for (const it of itemsRaw) set.add(it.category ?? "Ohne Kategorie");
+    return ["ALL", ...Array.from(set).sort((a, b) => a.localeCompare(b, "de-CH"))];
+  }, [itemsRaw]);
 
-  const buildListUrl = useCallback((): string => {
-    const sp = new URLSearchParams();
-    if (q.trim()) sp.set("q", q.trim());
-    sp.set("category", category);
-    sp.set("source", source);
-    sp.set("sort", sort);
-    sp.set("dir", dir);
-    return `/api/admin/v1/templates?${sp.toString()}`;
-  }, [q, category, source, sort, dir]);
+  const filtered = useMemo(() => {
+    const list = applyClientFilter(itemsRaw, q, category, source);
+    return applyClientSort(list, sort);
+  }, [itemsRaw, q, category, source, sort]);
 
-  const loadList = useCallback(async () => {
+  const selected = useMemo(() => {
+    if (!selectedId) return null;
+    return filtered.find((x) => x.id === selectedId) ?? itemsRaw.find((x) => x.id === selectedId) ?? null;
+  }, [selectedId, filtered, itemsRaw]);
+
+  const loadTemplates = useCallback(async () => {
     setLoading(true);
     setErr(null);
 
+    const usp = new URLSearchParams();
+    if (q.trim()) usp.set("q", q.trim());
+    if (source !== "ALL") usp.set("source", source);
+    if (category !== "ALL") usp.set("category", category);
+    usp.set("sort", sort);
+
+    const url = `/api/admin/v1/templates?${usp.toString()}`;
+
     try {
-      const res = await fetch(buildListUrl(), { method: "GET", cache: "no-store" });
-      const json = (await res.json()) as ApiResp<TemplateListApi>;
-
-      if (!json || typeof json !== "object") {
-        setItems([]);
-        setErr({ message: "Ungültige Serverantwort." });
-        setLoading(false);
+      const r = await fetchJson(url, { method: "GET" });
+      if (!r.ok) {
+        setItemsRaw([]);
+        setErr({ message: r.error.message || "Konnte Vorlagen nicht laden.", code: r.error.code, traceId: r.traceId });
         return;
       }
 
-      if (!json.ok) {
-        setItems([]);
-        setErr({ message: json.error?.message || "Konnte Vorlagen nicht laden.", code: json.error?.code, traceId: json.traceId });
-        setLoading(false);
-        return;
-      }
+      const list = normalizeTemplateListPayload(r.data);
+      setItemsRaw(list);
 
-      const list = Array.isArray(json.data.items) ? json.data.items : [];
-      setItems(list);
-      setLoading(false);
+      // auto-select first if none
+      if (list.length > 0) setSelectedId((prev) => prev ?? list[0].id);
+
+      // keep category valid
+      setCategory((prev) => {
+        if (prev === "ALL") return prev;
+        const exists = list.some((x) => (x.category ?? "Ohne Kategorie") === prev);
+        return exists ? prev : "ALL";
+      });
     } catch {
-      setItems([]);
+      setItemsRaw([]);
       setErr({ message: "Konnte Vorlagen nicht laden. Bitte erneut versuchen." });
+    } finally {
       setLoading(false);
     }
-  }, [buildListUrl]);
-
-  const refresh = useCallback(async () => {
-    await loadList();
-  }, [loadList]);
-
-  useEffect(() => {
-    const t = setTimeout(() => void refresh(), 0);
-    return () => clearTimeout(t);
-  }, [refresh]);
-
-  useEffect(() => {
-    const t = setTimeout(() => void loadList(), 240);
-    return () => clearTimeout(t);
-  }, [q, category, source, sort, dir, loadList]);
-
-  const openPreview = useCallback((id: string) => {
-    setSelectedId(id);
-    setDrawerOpen(true);
-  }, []);
-
-  const closePreview = useCallback(() => {
-    setDrawerOpen(false);
-    setSelectedId(null);
-    setDetail(null);
-    setDetailErr(null);
-    setLoadingDetail(false);
-  }, []);
+  }, [q, source, category, sort]);
 
   const loadDetail = useCallback(async (id: string) => {
-    setLoadingDetail(true);
-    setDetail(null);
+    setDetailLoading(true);
     setDetailErr(null);
-
+    setDetail(null);
     try {
-      const res = await fetch(`/api/admin/v1/templates/${id}`, { method: "GET", cache: "no-store" });
-      const json = (await res.json()) as ApiResp<TemplateDetailApi>;
-
-      if (!json || typeof json !== "object") {
-        setDetail(null);
-        setDetailErr({ message: "Ungültige Serverantwort." });
-        setLoadingDetail(false);
+      const r = await fetchJson(`/api/admin/v1/templates/${id}`, { method: "GET" });
+      if (!r.ok) {
+        setDetailErr({ message: r.error.message || "Konnte Vorlage nicht laden.", code: r.error.code, traceId: r.traceId });
         return;
       }
-
-      if (!json.ok) {
-        setDetail(null);
-        setDetailErr({ message: json.error?.message || "Konnte Vorlage nicht laden.", code: json.error?.code, traceId: json.traceId });
-        setLoadingDetail(false);
-        return;
-      }
-
-      setDetail(json.data.item);
-      setLoadingDetail(false);
+      setDetail(normalizeTemplateDetailPayload(r.data));
     } catch {
-      setDetail(null);
       setDetailErr({ message: "Konnte Vorlage nicht laden. Bitte erneut versuchen." });
-      setLoadingDetail(false);
+    } finally {
+      setDetailLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    if (!drawerOpen || !selectedId) return;
-    const t = setTimeout(() => void loadDetail(selectedId), 0);
-    return () => clearTimeout(t);
-  }, [drawerOpen, selectedId, loadDetail]);
-
-  const reset = useCallback(() => {
-    setQ("");
-    setCategory("ALL");
-    setSource("ALL");
-    setSort("updatedAt");
-    setDir("desc");
-  }, []);
-
-  const startCreate = useCallback((tpl: TemplateListItem) => {
-    setCreateTpl(tpl);
-    setCreateName(tpl.name);
-    setCreateOpenBuilder(false);
+  const openCreateFromSelected = useCallback(() => {
+    if (!selected) return;
     setCreateErr(null);
-    setCreateBusy(false);
+    setCreateName(selected.name);
     setCreateOpen(true);
-  }, []);
+  }, [selected]);
 
-  const closeCreate = useCallback(() => {
-    setCreateOpen(false);
-    setCreateTpl(null);
-    setCreateErr(null);
-    setCreateBusy(false);
-  }, []);
-
-  const submitCreate = useCallback(async () => {
-    if (!createTpl) return;
+  const doCreate = useCallback(async () => {
+    if (!selected) return;
+    const name = createName.trim();
+    if (!name) {
+      setCreateErr("Bitte gib einen Formularnamen ein.");
+      return;
+    }
 
     setCreateBusy(true);
     setCreateErr(null);
 
     try {
-      const res = await fetch(`/api/admin/v1/templates/${createTpl.id}/create-form`, {
+      const r = await fetchJson(`/api/admin/v1/templates/${selected.id}/create-form`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: createName.trim() ? createName.trim() : undefined, openBuilder: createOpenBuilder }),
+        body: JSON.stringify({ name }),
       });
 
-      const json = (await res.json()) as ApiResp<CreateResp>;
-
-      if (!json || typeof json !== "object") {
-        setCreateErr("Ungültige Serverantwort.");
-        setCreateBusy(false);
+      if (!r.ok) {
+        setCreateErr(r.error.message || "Formular konnte nicht erstellt werden.");
         return;
       }
 
-      if (!json.ok) {
-        setCreateErr(json.error?.message || "Erstellen fehlgeschlagen.");
-        setCreateBusy(false);
+      const data = r.data;
+      let formId: string | null = null;
+      if (isRecord(data)) {
+        formId = toStr(data.formId) ?? toStr(data.id) ?? (isRecord(data.form) ? toStr(data.form.id) : null);
+      }
+      if (!formId) {
+        setCreateErr("Formular wurde erstellt, aber die ID fehlt in der Antwort (API-Contract).");
         return;
       }
 
-      const redirect = json.data.redirect ?? `/admin/forms?open=${encodeURIComponent(json.data.formId)}`;
-      closeCreate();
-      router.push(redirect);
+      setCreateOpen(false);
+      router.push(`/admin/forms/${formId}/builder`);
     } catch {
-      setCreateErr("Erstellen fehlgeschlagen. Bitte erneut versuchen.");
+      setCreateErr("Formular konnte nicht erstellt werden. Bitte erneut versuchen.");
+    } finally {
       setCreateBusy(false);
     }
-  }, [createTpl, createName, createOpenBuilder, router, closeCreate]);
+  }, [selected, createName, router]);
 
-  const countLabel = useMemo(() => {
-    const n = items.length;
-    return n === 1 ? "1 Vorlage" : `${n} Vorlagen`;
-  }, [items.length]);
+  // initial load
+  useEffect(() => {
+    void loadTemplates();
+  }, [loadTemplates]);
+
+  // debounce reload + keep URL in sync
+  useEffect(() => {
+    if (debounceRef.current) window.clearTimeout(debounceRef.current);
+    debounceRef.current = window.setTimeout(() => {
+      void loadTemplates();
+
+      const usp = new URLSearchParams();
+      if (isCreateIntent) usp.set("intent", "create");
+      if (q.trim()) usp.set("q", q.trim());
+      if (source !== "ALL") usp.set("source", source);
+      if (category !== "ALL") usp.set("category", category);
+      usp.set("sort", sort);
+
+      router.replace(`/admin/templates?${usp.toString()}`);
+    }, 250);
+
+    return () => {
+      if (debounceRef.current) window.clearTimeout(debounceRef.current);
+    };
+  }, [q, source, category, sort, isCreateIntent, router, loadTemplates]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    void loadDetail(selectedId);
+  }, [selectedId, loadDetail]);
+
+  const leftCountLabel = filtered.length === 1 ? "1 Vorlage" : `${filtered.length} Vorlagen`;
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white">
-      <div className="p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-lg font-semibold text-slate-900">Vorlagen</div>
-            <div className="mt-1 text-sm text-slate-600">
-              Starte mit einer Vorlage und passe sie im Builder an.
-              {intentCreate ? <span className="ml-2 inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-700">Create-Flow</span> : null}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <IconButton title="Aktualisieren" onClick={() => void refresh()} />
-          </div>
-        </div>
-
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <Input value={q} onChange={setQ} placeholder="Suchen…" />
-
-          <Select value={category} onChange={setCategory} ariaLabel="Kategorie">
-            <option value="ALL">Alle Kategorien</option>
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </Select>
-
-          <Select value={source} onChange={(v) => setSource(v as "ALL" | TemplateSource)} ariaLabel="Quelle">
-            <option value="ALL">Alle Quellen</option>
-            <option value="SYSTEM">LeadRadar</option>
-            <option value="TENANT">Mandant</option>
-          </Select>
-
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            <div className="hidden md:flex items-center gap-2">
-              <div className="text-sm text-slate-500">Sortieren</div>
-              <Select value={`${sort}:${dir}`} onChange={(v) => {
-                const [s, d] = v.split(":");
-                setSort((s as "updatedAt" | "name") ?? "updatedAt");
-                setDir((d as "asc" | "desc") ?? "desc");
-              }} ariaLabel="Sortieren">
-                <option value="updatedAt:desc">Aktualisiert</option>
-                <option value="updatedAt:asc">Aktualisiert (älteste)</option>
-                <option value="name:asc">Name (A–Z)</option>
-                <option value="name:desc">Name (Z–A)</option>
-              </Select>
-            </div>
-
-            {isDirty ? (
-              <button type="button" className="text-sm font-medium text-slate-500 hover:text-slate-900" onClick={reset}>
-                Zurücksetzen
-              </button>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="mt-3 flex items-center justify-between">
-          <div className="text-sm text-slate-500">{countLabel}</div>
-
-          {source === "SYSTEM" ? (
-            <div className="text-xs text-slate-500">
-              Hinweis: Im aktuellen Schema sind Vorlagen mandantenbasiert (SYSTEM ist nicht vorhanden).
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_420px]">
+      {/* LEFT */}
+      <div className="rounded-2xl border border-slate-200 bg-white">
+        <div className="border-b border-slate-200 p-4">
+          {isCreateIntent ? (
+            <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              <span className="font-medium text-slate-900">Formular vorbereiten:</span> Wähle links eine Vorlage aus und klicke rechts auf{" "}
+              <span className="font-medium">„Vorlage verwenden“</span>.
             </div>
           ) : null}
-        </div>
-      </div>
 
-      <div className="h-px w-full bg-slate-200" />
+          <div className="flex flex-col gap-3 md:flex-row md:items-end">
+            <div className="flex-1">
+              <label className="text-xs font-semibold text-slate-700">Suche</label>
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Vorlagen suchen…"
+                className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-0 placeholder:text-slate-400 focus:border-slate-400"
+              />
+            </div>
 
-      <div className="p-5">
-        {loading ? (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={`sk_${i}`} className="animate-pulse rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="h-5 w-2/3 rounded bg-slate-100" />
-                <div className="mt-3 flex gap-2">
-                  <div className="h-6 w-20 rounded-full bg-slate-100" />
-                  <div className="h-6 w-20 rounded-full bg-slate-100" />
-                </div>
-                <div className="mt-4 h-4 w-full rounded bg-slate-100" />
-                <div className="mt-2 h-4 w-5/6 rounded bg-slate-100" />
-                <div className="mt-5 flex gap-2">
-                  <div className="h-9 w-28 rounded-xl bg-slate-100" />
-                  <div className="h-9 w-24 rounded-xl bg-slate-100" />
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : err ? (
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <div className="text-sm font-semibold text-slate-900">Konnte nicht laden</div>
-            <div className="mt-1 text-sm text-slate-600">{err.message}</div>
-            {(err.code || err.traceId) ? (
-              <div className="mt-2 text-xs text-slate-500">
-                {err.code ? `Code: ${err.code}` : null}
-                {err.code && err.traceId ? " • " : null}
-                {err.traceId ? `Trace: ${err.traceId}` : null}
-              </div>
-            ) : null}
-            <div className="mt-3">
-              <Button label="Erneut versuchen" kind="secondary" onClick={() => void refresh()} />
+            <div className="min-w-[180px]">
+              <label className="text-xs font-semibold text-slate-700">Kategorie</label>
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value || "ALL")}
+                className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                aria-label="Kategorie"
+              >
+                {categories.map((c) => (
+                  <option key={c} value={c}>
+                    {c === "ALL" ? "Alle" : c}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="min-w-[160px]">
+              <label className="text-xs font-semibold text-slate-700">Quelle</label>
+              <select
+                value={source}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "ALL") setSource("ALL");
+                  else if (isTemplateSource(v)) setSource(v);
+                }}
+                className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                aria-label="Quelle"
+              >
+                <option value="ALL">Alle</option>
+                <option value="TENANT">Mandant</option>
+                <option value="SYSTEM">System</option>
+              </select>
+            </div>
+
+            <div className="min-w-[190px]">
+              <label className="text-xs font-semibold text-slate-700">Sortierung</label>
+              <select
+                value={sort}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (isSortKey(v)) setSort(v);
+                }}
+                className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+                aria-label="Sortierung"
+              >
+                <option value="updated_desc">{sortLabel("updated_desc")}</option>
+                <option value="updated_asc">{sortLabel("updated_asc")}</option>
+                <option value="name_asc">{sortLabel("name_asc")}</option>
+                <option value="name_desc">{sortLabel("name_desc")}</option>
+              </select>
             </div>
           </div>
-        ) : items.length <= 0 ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-6">
-            <div className="text-sm font-semibold text-slate-900">Keine Vorlagen</div>
-            <div className="mt-1 text-sm text-slate-600">Lege Vorlagen im Mandanten an oder passe Filter an.</div>
+
+          <div className="mt-3 flex items-center justify-between">
+            <div className="text-xs text-slate-500">{loading ? "Lade…" : leftCountLabel}</div>
+            <Button label="Aktualisieren" kind="secondary" onClick={() => void loadTemplates()} disabled={loading} />
           </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {items.map((it) => (
-              <div key={it.id} className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-slate-900">{it.name}</div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {it.category ? <span className={chipBase(false)}>{it.category}</span> : <span className={chipBase(false)}>Ohne Kategorie</span>}
-                    <span className={chipBase(false)}>{sourceLabel(it.source)}</span>
-                  </div>
+        </div>
 
-                  <div className="mt-3 text-sm text-slate-600 line-clamp-2">
-                    {it.description ? it.description : "—"}
-                  </div>
-
-                  <div className="mt-3 text-xs text-slate-500">
-                    Felder: <span className="font-semibold text-slate-700">{it.fieldCount}</span> •{" "}
-                    <span className="text-slate-700">{fmtDateTime(it.updatedAt)}</span>
-                  </div>
-                </div>
-
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <Button label="Verwenden" kind="primary" onClick={() => startCreate(it)} />
-                  <Button label="Vorschau" kind="secondary" onClick={() => openPreview(it.id)} />
-                </div>
+        <div className="divide-y divide-slate-100">
+          {loading ? (
+            <>
+              <SkeletonRow />
+              <SkeletonRow />
+              <SkeletonRow />
+              <SkeletonRow />
+            </>
+          ) : err ? (
+            <div className="p-4">
+              <InlineError
+                title="Konnte Vorlagen nicht laden"
+                message={err.message}
+                traceId={err.traceId}
+                onRetry={() => void loadTemplates()}
+              />
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="p-6">
+              <div className="text-sm font-semibold text-slate-900">Keine Vorlagen</div>
+              <div className="mt-1 text-sm text-slate-600">
+                Lege Vorlagen im Mandanten an (im Builder: „Als Vorlage speichern“) oder passe Filter an.
               </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <DrawerShell open={drawerOpen} title="Vorschau" onClose={closePreview}>
-        {loadingDetail ? (
-          <div className="space-y-3">
-            <div className="h-6 w-2/3 rounded bg-slate-100 animate-pulse" />
-            <div className="h-4 w-full rounded bg-slate-100 animate-pulse" />
-            <div className="h-4 w-5/6 rounded bg-slate-100 animate-pulse" />
-          </div>
-        ) : !detail ? (
-          detailErr ? (
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-semibold text-slate-900">Konnte nicht laden</div>
-              <div className="mt-1 text-sm text-slate-600">{detailErr.message}</div>
-              {(detailErr.code || detailErr.traceId) ? (
-                <div className="mt-2 text-xs text-slate-500">
-                  {detailErr.code ? `Code: ${detailErr.code}` : null}
-                  {detailErr.code && detailErr.traceId ? " • " : null}
-                  {detailErr.traceId ? `Trace: ${detailErr.traceId}` : null}
-                </div>
-              ) : null}
-              <div className="mt-3 flex gap-2">
-                <Button label="Erneut versuchen" kind="secondary" onClick={() => selectedId ? void loadDetail(selectedId) : undefined} />
-                <Button label="Schliessen" kind="ghost" onClick={closePreview} />
+              <div className="mt-4 flex gap-2">
+                <Button label="Zu Formularen" kind="secondary" onClick={() => router.push("/admin/forms")} />
+                <Button
+                  label="Filter zurücksetzen"
+                  kind="ghost"
+                  onClick={() => {
+                    setQ("");
+                    setSource("ALL");
+                    setCategory("ALL");
+                    setSort("updated_desc");
+                  }}
+                />
               </div>
             </div>
           ) : (
-            <div className="text-sm text-slate-600">Keine Vorlage ausgewählt.</div>
-          )
-        ) : (
-          <div className="space-y-5">
-            <div>
-              <div className="text-sm font-semibold text-slate-900">{detail.name}</div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {detail.category ? <span className={chipBase(false)}>{detail.category}</span> : <span className={chipBase(false)}>Ohne Kategorie</span>}
-                <span className={chipBase(false)}>{sourceLabel(detail.source)}</span>
-              </div>
-              <div className="mt-2 text-xs text-slate-500">
-                Felder: <span className="font-semibold text-slate-700">{detail.fieldCount}</span> •{" "}
-                <span className="text-slate-700">{fmtDateTime(detail.updatedAt)}</span>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white">
-              <div className="border-b border-slate-200 px-4 py-3 text-xs font-semibold text-slate-600">Felder</div>
-              <div className="divide-y divide-slate-100">
-                {detail.fields.length <= 0 ? (
-                  <div className="px-4 py-4 text-sm text-slate-600">Keine Felder gefunden.</div>
-                ) : (
-                  detail.fields.map((f) => (
-                    <div key={f.key} className="flex items-center justify-between gap-3 px-4 py-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-slate-900">{f.label}</div>
-                        <div className="truncate text-xs text-slate-500">{f.type}</div>
+            <div className="max-h-[70vh] overflow-auto">
+              {filtered.map((t) => {
+                const active = t.id === selectedId;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setSelectedId(t.id)}
+                    className={["w-full text-left px-4 py-3 transition", active ? "bg-slate-50" : "bg-white hover:bg-slate-50"].join(" ")}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold text-slate-900">{t.name}</div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                          <Pill>{t.category ?? "Ohne Kategorie"}</Pill>
+                          <Pill>{sourceLabel(t.source)}</Pill>
+                          {typeof t.fieldsCount === "number" ? <Pill>{t.fieldsCount} Felder</Pill> : null}
+                        </div>
+                        {t.description ? <div className="mt-1 line-clamp-2 text-sm text-slate-600">{t.description}</div> : null}
                       </div>
-                      {f.required ? <span className={chipBase(true)}>Pflicht</span> : <span className={chipBase(false)}>Optional</span>}
+
+                      <div className="shrink-0 text-right">
+                        <div className="text-xs text-slate-500">Geändert</div>
+                        <div className="text-xs font-medium text-slate-700">{fmtDateCH(t.updatedAt)}</div>
+                      </div>
                     </div>
-                  ))
-                )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* RIGHT */}
+      <div className="rounded-2xl border border-slate-200 bg-white">
+        <div className="border-b border-slate-200 p-4">
+          <div className="text-sm font-semibold text-slate-900">Details</div>
+          <div className="mt-1 text-xs text-slate-500">Wähle links eine Vorlage aus.</div>
+        </div>
+
+        <div className="p-4">
+          {!selectedId ? (
+            <div className="text-sm text-slate-600">Keine Vorlage ausgewählt.</div>
+          ) : detailLoading ? (
+            <div className="space-y-2">
+              <div className="h-4 w-40 animate-pulse rounded bg-slate-200" />
+              <div className="h-4 w-56 animate-pulse rounded bg-slate-200" />
+              <div className="h-4 w-48 animate-pulse rounded bg-slate-200" />
+            </div>
+          ) : detailErr ? (
+            <InlineError
+              title="Konnte Vorlage nicht laden"
+              message={detailErr.message}
+              traceId={detailErr.traceId}
+              onRetry={() => selectedId && void loadDetail(selectedId)}
+            />
+          ) : (
+            <>
+              <div className="text-base font-semibold text-slate-900">{detail?.name ?? selected?.name ?? "—"}</div>
+
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Pill>{(detail?.category ?? selected?.category) ?? "Ohne Kategorie"}</Pill>
+                <Pill>{sourceLabel(detail?.source ?? selected?.source ?? "TENANT")}</Pill>
+                {typeof (detail?.fieldsCount ?? selected?.fieldsCount) === "number" ? (
+                  <Pill>{detail?.fieldsCount ?? selected?.fieldsCount} Felder</Pill>
+                ) : null}
               </div>
-            </div>
 
-            <div className="flex flex-wrap gap-2">
-              <Button
-                label="Diese Vorlage verwenden"
-                kind="primary"
-                onClick={() => {
-                  const base = items.find((x) => x.id === detail.id) ?? {
-                    id: detail.id,
-                    name: detail.name,
-                    category: detail.category,
-                    description: detail.description,
-                    source: detail.source,
-                    fieldCount: detail.fieldCount,
-                    updatedAt: detail.updatedAt,
-                  };
-                  startCreate(base);
-                }}
-              />
-              <Button label="Schliessen" kind="secondary" onClick={closePreview} />
-            </div>
-          </div>
-        )}
-      </DrawerShell>
+              {detail?.description ?? selected?.description ? (
+                <div className="mt-3 text-sm text-slate-700">{detail?.description ?? selected?.description}</div>
+              ) : (
+                <div className="mt-3 text-sm text-slate-500">Keine Beschreibung.</div>
+              )}
 
-      <ModalShell open={createOpen} title="Formular aus Vorlage erstellen" onClose={closeCreate}>
-        <div className="space-y-4">
-          <div>
-            <div className="text-xs font-semibold text-slate-600">Formularname</div>
-            <input
-              className="mt-2 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
-              value={createName}
-              placeholder="z. B. Besucher Lead (Swissbau)"
-              onChange={(e) => setCreateName(e.target.value)}
-            />
-            <div className="mt-2 flex items-center gap-2">
-              <input
-                id="openBuilder"
-                type="checkbox"
-                className="h-4 w-4 rounded border-slate-300"
-                checked={createOpenBuilder}
-                onChange={(e) => setCreateOpenBuilder(e.target.checked)}
-              />
-              <label htmlFor="openBuilder" className="text-sm text-slate-700">
-                Direkt im Builder öffnen
-              </label>
-            </div>
-            <div className="mt-2 text-xs text-slate-500">
-              Das neue Formular wird als <span className="font-semibold text-slate-700">Entwurf</span> erstellt (ohne Zuweisung).
-            </div>
-          </div>
+              <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-slate-600">
+                <div>
+                  <div className="text-slate-500">Erstellt</div>
+                  <div className="font-medium text-slate-800">{fmtDateCH(detail?.createdAt ?? selected?.createdAt ?? null)}</div>
+                </div>
+                <div>
+                  <div className="text-slate-500">Geändert</div>
+                  <div className="font-medium text-slate-800">{fmtDateCH(detail?.updatedAt ?? selected?.updatedAt ?? null)}</div>
+                </div>
+              </div>
 
-          {createErr ? (
-            <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">{createErr}</div>
-          ) : null}
+              <div className="mt-5 flex flex-col gap-2">
+                <Button label="Vorlage verwenden" onClick={openCreateFromSelected} disabled={!selected} />
+                <Button label="Neu laden" kind="secondary" onClick={() => selectedId && void loadDetail(selectedId)} disabled={!selectedId} />
+              </div>
 
-          <div className="flex flex-wrap gap-2">
-            <Button
-              label={createBusy ? "Erstellen…" : "Erstellen"}
-              kind="primary"
-              disabled={createBusy}
-              onClick={() => void submitCreate()}
-            />
-            <Button label="Abbrechen" kind="secondary" onClick={closeCreate} />
-          </div>
+              {isCreateIntent ? (
+                <div className="mt-4 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                  Tipp: Du kannst das Formular später jederzeit umbenennen und im Builder anpassen.
+                </div>
+              ) : null}
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Create modal */}
+      <ModalShell open={createOpen} title="Formular aus Vorlage erstellen" onClose={() => (!createBusy ? setCreateOpen(false) : null)}>
+        <div className="text-sm text-slate-600">Gib dem Formular einen Namen. Danach landest du direkt im Builder.</div>
+
+        <div className="mt-4">
+          <label className="text-xs font-semibold text-slate-700">Formularname</label>
+          <input
+            value={createName}
+            onChange={(e) => setCreateName(e.target.value)}
+            placeholder="z.B. Messe Leads – Tag 1"
+            className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+            disabled={createBusy}
+          />
+          {createErr ? <div className="mt-2 text-sm text-rose-700">{createErr}</div> : null}
+        </div>
+
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <Button label="Abbrechen" kind="secondary" onClick={() => setCreateOpen(false)} disabled={createBusy} />
+          <Button label={createBusy ? "Erstelle…" : "Erstellen"} onClick={() => void doCreate()} disabled={createBusy} />
         </div>
       </ModalShell>
-    </section>
+    </div>
   );
 }
