@@ -72,6 +72,7 @@ function shouldAutoOpenSettings(item: LibraryItem): boolean {
     variant === "datetime"
   )
     return true;
+
   if (String((item as any).type) === "SINGLE_SELECT" || String((item as any).type) === "MULTI_SELECT") return true;
   if (variant === "consent" || variant === "yesNo") return true;
   return false;
@@ -176,7 +177,12 @@ function FieldSettingsDrawer(props: {
   onPatch: (id: string, patch: Partial<BuilderField>) => void;
   onMoveSection: (id: string, section: FieldSection) => void;
 }) {
-  const [local, setLocal] = useState<BuilderField | null>(() => props.field);
+  const f = props.field;
+  const [local, setLocal] = useState<BuilderField | null>(f);
+
+  useEffect(() => {
+    setLocal(f);
+  }, [f?.id]);
 
   const optionsText = useMemo(() => {
     const opts = Array.isArray(local?.config?.options) ? (local?.config?.options as unknown[]) : [];
@@ -195,7 +201,6 @@ function FieldSettingsDrawer(props: {
       placeholder: local.placeholder,
       helpText: local.helpText,
       config: local.config,
-      isActive: (local as any).isActive,
     } as Partial<BuilderField>);
   };
 
@@ -240,7 +245,7 @@ function FieldSettingsDrawer(props: {
               <input
                 type="checkbox"
                 className="h-4 w-4"
-                checked={Boolean(local.required)}
+                checked={local.required}
                 onChange={(e) => setLocal({ ...local, required: e.target.checked })}
               />
               Pflichtfeld
@@ -319,7 +324,10 @@ function FieldSettingsDrawer(props: {
                     value={Number(((local.config as any)?.attachment as any)?.maxFiles ?? 1)}
                     onChange={(e) =>
                       setConfig({
-                        attachment: { ...(((local.config as any)?.attachment as any) ?? {}), maxFiles: Number(e.target.value) || 1 },
+                        attachment: {
+                          ...(((local.config as any)?.attachment as any) ?? {}),
+                          maxFiles: Number(e.target.value) || 1,
+                        },
                       })
                     }
                   />
@@ -359,7 +367,9 @@ function FieldSettingsDrawer(props: {
                     max={600}
                     value={Number(((local.config as any)?.audio as any)?.maxDurationSec ?? 60)}
                     onChange={(e) =>
-                      setConfig({ audio: { ...(((local.config as any)?.audio as any) ?? {}), maxDurationSec: Number(e.target.value) || 60 } })
+                      setConfig({
+                        audio: { ...(((local.config as any)?.audio as any) ?? {}), maxDurationSec: Number(e.target.value) || 60 },
+                      })
                     }
                   />
                 </div>
@@ -369,7 +379,9 @@ function FieldSettingsDrawer(props: {
                       type="checkbox"
                       className="h-4 w-4"
                       checked={Boolean(((local.config as any)?.audio as any)?.allowRecord ?? true)}
-                      onChange={(e) => setConfig({ audio: { ...(((local.config as any)?.audio as any) ?? {}), allowRecord: e.target.checked } })}
+                      onChange={(e) =>
+                        setConfig({ audio: { ...(((local.config as any)?.audio as any) ?? {}), allowRecord: e.target.checked } })
+                      }
                     />
                     aufnehmen
                   </label>
@@ -378,7 +390,9 @@ function FieldSettingsDrawer(props: {
                       type="checkbox"
                       className="h-4 w-4"
                       checked={Boolean(((local.config as any)?.audio as any)?.allowPick ?? true)}
-                      onChange={(e) => setConfig({ audio: { ...(((local.config as any)?.audio as any) ?? {}), allowPick: e.target.checked } })}
+                      onChange={(e) =>
+                        setConfig({ audio: { ...(((local.config as any)?.audio as any) ?? {}), allowPick: e.target.checked } })
+                      }
                     />
                     wählen
                   </label>
@@ -426,7 +440,6 @@ type PresetFieldSnapshot = {
   placeholder: string | null;
   helpText: string | null;
   isActive: boolean;
-  sortOrder: number;
   config: Record<string, unknown>;
 };
 
@@ -435,29 +448,23 @@ type PresetConfigV1 = {
   source: "FORM_BUILDER";
   captureStart: CaptureStart;
   formConfig: Record<string, unknown>;
-  fields: PresetFieldSnapshot[]; // IMPORTANT: from-preset expects config.fields
+  fields: PresetFieldSnapshot[];
 };
 
 function buildPresetConfigV1(form: BuilderForm, fields: BuilderField[]): PresetConfigV1 {
   const formConfig = isRecord(form.config) ? { ...(form.config as Record<string, unknown>) } : {};
   const sorted = fields.slice().sort((a, b) => a.sortOrder - b.sortOrder);
 
-  const snapFields: PresetFieldSnapshot[] = sorted.map((f, idx) => {
-    const cfg = isRecord(f.config) ? ({ ...(f.config as Record<string, unknown>) } as Record<string, unknown>) : {};
-    const isActive = typeof (f as any).isActive === "boolean" ? Boolean((f as any).isActive) : true;
-
-    return {
-      key: String(f.key),
-      label: String(f.label ?? ""),
-      type: String((f as unknown as { type?: unknown }).type ?? ""),
-      required: Boolean(f.required),
-      placeholder: (f.placeholder ?? null) as string | null,
-      helpText: (f.helpText ?? null) as string | null,
-      isActive,
-      sortOrder: idx + 1,
-      config: cfg,
-    };
-  });
+  const snapFields: PresetFieldSnapshot[] = sorted.map((f) => ({
+    key: String(f.key),
+    label: String(f.label ?? ""),
+    type: String((f as unknown as { type?: unknown }).type ?? ""),
+    required: Boolean(f.required),
+    placeholder: (f.placeholder ?? null) as string | null,
+    helpText: (f.helpText ?? null) as string | null,
+    isActive: Boolean(f.isActive),
+    config: isRecord(f.config) ? ({ ...(f.config as Record<string, unknown>) } as Record<string, unknown>) : {},
+  }));
 
   return {
     v: 1,
@@ -475,12 +482,22 @@ function SettingsModal(props: {
   onClose: () => void;
   onSave: (draft: SettingsDraft) => void;
 }) {
-  const [draft, setDraft] = useState<SettingsDraft>(() => ({
+  const [draft, setDraft] = useState<SettingsDraft>({
     name: props.form.name ?? "",
     description: props.form.description ?? "",
     status: props.form.status as any,
     captureStart: getCaptureStartFromForm(props.form),
-  }));
+  });
+
+  useEffect(() => {
+    if (!props.open) return;
+    setDraft({
+      name: props.form.name ?? "",
+      description: props.form.description ?? "",
+      status: props.form.status as any,
+      captureStart: getCaptureStartFromForm(props.form),
+    });
+  }, [props.open, props.form.id, props.form.updatedAt, props.form.name, props.form.description, props.form.status]);
 
   if (!props.open) return null;
 
@@ -625,16 +642,7 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
   const [draggingKind, setDraggingKind] = useState<null | "LIB" | "FIELD">(null);
   const [dragOverlay, setDragOverlay] = useState<null | { title: string; subtitle?: string }>(null);
 
-  const [autoOpen, setAutoOpen] = useState<boolean>(() => {
-    try {
-      const raw = localStorage.getItem("lr_builder:autoOpenSettings");
-      if (raw === "0") return false;
-      if (raw === "1") return true;
-      return true;
-    } catch {
-      return true;
-    }
-  });
+  const [autoOpen, setAutoOpen] = useState<boolean>(true);
 
   // Canvas active screen (must stay in sync with FieldLibrary tab)
   const [activeSection, setActiveSection] = useState<FieldSection>("FORM");
@@ -664,13 +672,15 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
 
   const existingKeys = useMemo(() => new Set(fields.map((f) => f.key)), [fields]);
 
+  useEffect(() => {
+    const raw = localStorage.getItem("lr_builder:autoOpenSettings");
+    if (raw === "0") setAutoOpen(false);
+    if (raw === "1") setAutoOpen(true);
+  }, []);
+
   const setAutoOpenPersist = (v: boolean) => {
     setAutoOpen(v);
-    try {
-      localStorage.setItem("lr_builder:autoOpenSettings", v ? "1" : "0");
-    } catch {
-      // ignore
-    }
+    localStorage.setItem("lr_builder:autoOpenSettings", v ? "1" : "0");
   };
 
   const patchBuilder = useCallback(
@@ -748,10 +758,8 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
     }
   }, [props.formId]);
 
-  // eslint rule: avoid calling setState synchronously in effect body -> schedule
   useEffect(() => {
-    const t = setTimeout(() => void load(), 0);
-    return () => clearTimeout(t);
+    void load();
   }, [load]);
 
   const persistReorder = useCallback(
@@ -1063,6 +1071,7 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
 
         setFields(nextAll);
         await persistReorder(nextAll);
+
         handleSwitchSection(targetSection);
 
         setDropIndicator(null);
@@ -1160,18 +1169,11 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
     async (name: string, category?: string | null): Promise<{ ok: boolean }> => {
       if (!form) return { ok: false };
 
-      const nm = name.trim();
-      if (!nm) {
-        setToast({ kind: "error", message: "Bitte einen Vorlagen-Namen eingeben." });
-        return { ok: false };
-      }
-
       const cat = (category ?? "").trim() || "Standard";
 
       const payload: Record<string, unknown> = {
-        name: nm,
+        name: name.trim(),
         category: cat,
-        isPublic: false,
         config: buildPresetConfigV1(form, fieldsRef.current),
       };
 
@@ -1257,16 +1259,13 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
         }}
       />
 
-      {settingsOpen ? (
-        <SettingsModal
-          key={`settings:${form.id}:${String(form.updatedAt)}`}
-          open={settingsOpen}
-          form={form}
-          saving={settingsSaving}
-          onClose={() => setSettingsOpen(false)}
-          onSave={onSaveSettings}
-        />
-      ) : null}
+      <SettingsModal
+        open={settingsOpen}
+        form={form}
+        saving={settingsSaving}
+        onClose={() => setSettingsOpen(false)}
+        onSave={onSaveSettings}
+      />
 
       <SaveTemplateModal
         open={saveTemplateOpen}
@@ -1381,7 +1380,6 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
           </div>
 
           <FieldSettingsDrawer
-            key={openFieldId ?? "none"}
             open={!!openFieldId}
             field={currentOpenField}
             onClose={() => setOpenFieldId(null)}

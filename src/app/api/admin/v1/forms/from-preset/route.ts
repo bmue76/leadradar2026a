@@ -20,18 +20,24 @@ const CreateFromPresetSchema = z
   })
   .strict();
 
+/**
+ * IMPORTANT:
+ * Builder-Preset-Snapshots enthalten zusätzliche Keys (z.B. isActive, placeholder, helpText, config, …).
+ * Darum: passthrough() statt strict(), sonst werden alle Felder verworfen -> "Preset has no fields".
+ */
 const FieldDraftSchema = z
   .object({
     key: z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9_]+$/),
     label: z.string().trim().min(1).max(200),
     type: z.string().trim().min(1).max(50),
     required: z.boolean().optional(),
+    isActive: z.boolean().optional(),
     sortOrder: z.number().int().optional(),
     placeholder: z.string().trim().max(2000).nullable().optional(),
     helpText: z.string().trim().max(2000).nullable().optional(),
     config: z.unknown().nullable().optional(),
   })
-  .strict();
+  .passthrough();
 
 const FIELD_TYPE_VALUES = new Set(Object.values(FieldType) as string[]);
 
@@ -45,10 +51,9 @@ function parseFieldType(v: unknown): FieldType {
 
 function extractFieldsFromPresetConfig(cfg: unknown): Array<z.infer<typeof FieldDraftSchema>> {
   if (!cfg || typeof cfg !== "object") return [];
-
   const o = cfg as Record<string, unknown>;
 
-  // Preferred (TP7 seed): config.fields = [...]
+  // Preferred: config.fields = [...]
   const direct = o.fields;
   if (Array.isArray(direct)) {
     const out: Array<z.infer<typeof FieldDraftSchema>> = [];
@@ -87,7 +92,6 @@ export async function POST(req: Request) {
     const { tenantId } = await requireAdminAuth(req);
     const body = await validateBody(req, CreateFromPresetSchema);
 
-    // Read preset (tenant-owned OR public future)
     const preset = await prisma.formPreset.findFirst({
       where: {
         id: body.presetId,
@@ -113,7 +117,6 @@ export async function POST(req: Request) {
       throw httpError(400, "PRESET_INVALID", "Preset has no fields (config.fields missing).");
     }
 
-    // Normalize + validate + deterministic ordering
     const fields = rawFields
       .map((f, idx) => ({
         key: f.key,
@@ -140,7 +143,7 @@ export async function POST(req: Request) {
           name: formName,
           description: formDescription ? formDescription : null,
           status,
-          // Keep full preset config snapshot on form for traceability (MVP).
+          // keep full preset config snapshot on form (MVP traceability)
           config: rawCfg as Prisma.InputJsonValue,
           assignedEventId: null,
         },
@@ -168,7 +171,8 @@ export async function POST(req: Request) {
       return form;
     });
 
-    return jsonOk(req, created, { status: 201 });
+    // UI-kompatibel: { item: { id } }
+    return jsonOk(req, { item: created }, { status: 201 });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     return jsonError(req, 500, "INTERNAL_ERROR", "Unexpected error.");

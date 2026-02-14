@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { jsonError, jsonOk } from "@/lib/api";
-import { isHttpError, validateBody, validateQuery } from "@/lib/http";
+import { httpError, isHttpError, validateBody, validateQuery } from "@/lib/http";
 import { requireAdminAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
@@ -23,6 +23,12 @@ function cleanText(v: unknown): string | undefined {
 function cleanEnum(v: unknown): string | undefined {
   return cleanText(v);
 }
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+const IdSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9]+$/i);
 
 const ListPresetsQuerySchema = z
   .object({
@@ -47,46 +53,63 @@ const ListPresetsQuerySchema = z
 const CreatePresetSchema = z
   .object({
     name: z.string().trim().min(1).max(200),
-
-    // NOTE: DB currently requires category (Prisma Client types). MVP default if omitted.
     category: z.string().trim().min(1).max(200).optional(),
-
     description: z.string().trim().max(2000).optional(),
-
     imageUrl: z.string().trim().max(2000).url().optional(),
 
-    // Snapshot payload (Builder config, includes fields)
+    // Snapshot payload (Builder config). May or may not include fields.
     config: z.unknown(),
+
+    // Optional: helps server to attach fieldsSnapshot from DB
+    sourceFormId: IdSchema.optional(),
+    formId: IdSchema.optional(), // accept legacy naming
   })
-  .strict();
-
-function prismaMetaTarget(e: Prisma.PrismaClientKnownRequestError): unknown {
-  const meta = e.meta;
-  if (meta && typeof meta === "object" && "target" in meta) {
-    return (meta as { target?: unknown }).target;
-  }
-  return undefined;
-}
-
-function mapPrismaUniqueConflict(
-  e: unknown
-): { status: number; code: string; message: string; details?: unknown } | null {
-  if (e instanceof Prisma.PrismaClientKnownRequestError) {
-    if (e.code === "P2002") {
-      return {
-        status: 409,
-        code: "UNIQUE_CONFLICT",
-        message: "Unique constraint violation.",
-        details: { target: prismaMetaTarget(e) },
-      };
-    }
-  }
-  return null;
-}
+  .passthrough();
 
 function normalizeCategory(v?: string): string {
   const t = (v ?? "").trim();
   return t ? t : "Standard";
+}
+
+function tryParseFieldsArray(arr: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(arr)) return [];
+  // we only need "presence", not strict validation here
+  const out: Array<Record<string, unknown>> = [];
+  for (const it of arr) {
+    if (isRecord(it) && typeof it.key === "string" && typeof it.label === "string" && typeof it.type === "string") out.push(it);
+  }
+  return out;
+}
+
+function presetHasFields(cfg: unknown): boolean {
+  if (!cfg || typeof cfg !== "object") return false;
+  const o = cfg as Record<string, unknown>;
+  if (tryParseFieldsArray(o.fields).length) return true;
+  if (tryParseFieldsArray(o.fieldsSnapshot).length) return true;
+
+  // Deep scan (light): stop early on first hit
+  const seen = new Set<unknown>();
+  const walk = (v: unknown, depth: number): boolean => {
+    if (!v || typeof v !== "object") return false;
+    if (seen.has(v)) return false;
+    seen.add(v);
+
+    if (Array.isArray(v)) {
+      if (tryParseFieldsArray(v).length) return true;
+      if (depth <= 0) return false;
+      return v.some((x) => walk(x, depth - 1));
+    }
+
+    if (depth <= 0) return false;
+
+    const obj = v as Record<string, unknown>;
+    for (const k of Object.keys(obj)) {
+      if (walk(obj[k], depth - 1)) return true;
+    }
+    return false;
+  };
+
+  return walk(cfg, 5);
 }
 
 export async function GET(req: Request) {
@@ -97,12 +120,9 @@ export async function GET(req: Request) {
     const where: Prisma.FormPresetWhereInput =
       query.scope === "ALL"
         ? {
-            OR: [
-              { tenantId }, // tenant-owned
-              { tenantId: null, isPublic: true }, // global/public (future)
-            ],
+            OR: [{ tenantId }, { tenantId: null, isPublic: true }],
           }
-        : { tenantId }; // tenant-only
+        : { tenantId };
 
     if (query.q) where.name = { contains: query.q, mode: "insensitive" };
     if (query.category) where.category = { equals: query.category, mode: "insensitive" };
@@ -128,7 +148,6 @@ export async function GET(req: Request) {
       id: r.id,
       scope: r.isPublic && !r.tenantId ? ("PUBLIC" as const) : ("TENANT" as const),
       name: r.name,
-      // Keep API semantics: empty string treated as null for UI.
       category: (r.category ?? "").trim() ? r.category : null,
       description: r.description ?? null,
       imageUrl: r.imageUrl ?? null,
@@ -149,7 +168,48 @@ export async function POST(req: Request) {
     const { tenantId } = await requireAdminAuth(req);
     const body = await validateBody(req, CreatePresetSchema);
 
-    // MVP: tenant-owned only. Public presets later (tenantId=null + isPublic=true).
+    const sourceFormId = (body.sourceFormId ?? body.formId ?? "").trim() || null;
+
+    // Ensure config is an object if we want to attach snapshot
+    const cfgObj: Record<string, unknown> = isRecord(body.config) ? { ...body.config } : {};
+
+    // If config has no fields, but we know the source form => snapshot from DB
+    if (!presetHasFields(body.config) && sourceFormId) {
+      const form = await prisma.form.findFirst({ where: { id: sourceFormId, tenantId }, select: { id: true } });
+      if (!form) throw httpError(404, "NOT_FOUND", "Source form not found.");
+
+      const rows = await prisma.formField.findMany({
+        where: { tenantId, formId: sourceFormId },
+        orderBy: [{ sortOrder: "asc" }, { key: "asc" }],
+        select: {
+          key: true,
+          label: true,
+          type: true,
+          required: true,
+          sortOrder: true,
+          placeholder: true,
+          helpText: true,
+          config: true,
+        },
+      });
+
+      if (!rows.length) throw httpError(400, "SOURCE_FORM_HAS_NO_FIELDS", "Source form has no fields.");
+
+      cfgObj.fieldsSnapshot = rows.map((r) => ({
+        key: r.key,
+        label: r.label,
+        type: String(r.type),
+        required: Boolean(r.required),
+        sortOrder: r.sortOrder ?? undefined,
+        placeholder: (r.placeholder ?? null) as string | null,
+        helpText: (r.helpText ?? null) as string | null,
+        config: (typeof r.config === "undefined" ? null : r.config) as unknown,
+      }));
+
+      // keep traceability (optional)
+      cfgObj.sourceFormId = sourceFormId;
+    }
+
     const created = await prisma.formPreset.create({
       data: {
         tenantId,
@@ -158,7 +218,7 @@ export async function POST(req: Request) {
         description: body.description ?? null,
         imageUrl: body.imageUrl ?? null,
         isPublic: false,
-        config: body.config as Prisma.InputJsonValue,
+        config: (Object.keys(cfgObj).length ? (cfgObj as Prisma.InputJsonValue) : (body.config as Prisma.InputJsonValue)),
       },
       select: {
         id: true,
@@ -176,8 +236,6 @@ export async function POST(req: Request) {
     return jsonOk(req, created, { status: 201 });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
-    const conflict = mapPrismaUniqueConflict(e);
-    if (conflict) return jsonError(req, conflict.status, conflict.code, conflict.message, conflict.details);
     return jsonError(req, 500, "INTERNAL_ERROR", "Unexpected error.");
   }
 }

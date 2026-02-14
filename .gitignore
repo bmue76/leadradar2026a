@@ -63,6 +63,8 @@ prisma/migrations/**/migration.sql.bak
 # --- LeadRadar DEV tooling (tracked) ---
 !scripts/auth-smoke.mjs
 !scripts/events-guardrails-smoke.mjs
+!scripts/backfill-template-fields.js
+!scripts/list-templates-missing-fields.js
 
 # local temp
 .tmp_*
