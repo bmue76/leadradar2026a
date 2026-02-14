@@ -105,10 +105,6 @@ function fmtDateCH(iso: string | null): string {
   return new Intl.DateTimeFormat("de-CH", { year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
 }
 
-function sourceLabel(s: TemplateSource): string {
-  return s === "SYSTEM" ? "System" : "Mandant";
-}
-
 function sortLabel(v: SortKey): string {
   switch (v) {
     case "updated_desc":
@@ -185,33 +181,8 @@ async function fetchJson(url: string, init?: RequestInit): Promise<ApiResp> {
 
 /* ----------------------------- UI bits ----------------------------- */
 
-function ModalShell(props: { open: boolean; title: string; onClose: () => void; children: React.ReactNode }) {
-  if (!props.open) return null;
-  return (
-    <div className="fixed inset-0 z-50">
-      <div className="absolute inset-0 bg-black/40" onClick={props.onClose} />
-      <div className="absolute inset-0 flex items-center justify-center p-4">
-        <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl ring-1 ring-black/5">
-          <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-            <div className="text-base font-semibold text-slate-900">{props.title}</div>
-            <button
-              type="button"
-              className="rounded-md px-2 py-1 text-sm text-slate-600 hover:bg-slate-100"
-              onClick={props.onClose}
-              aria-label="Schliessen"
-            >
-              ✕
-            </button>
-          </div>
-          <div className="px-5 py-4">{props.children}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Pill(props: { children: React.ReactNode }) {
-  return <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">{props.children}</span>;
+function Divider() {
+  return <div className="h-px w-full bg-slate-200" />;
 }
 
 function Button(props: {
@@ -222,17 +193,30 @@ function Button(props: {
   type?: "button" | "submit";
 }) {
   const kind = props.kind ?? "primary";
-  const base =
-    "inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium transition ring-1 ring-inset disabled:cursor-not-allowed disabled:opacity-60";
+  const base = "rounded-xl px-3 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60";
   const cls =
     kind === "primary"
-      ? `${base} bg-slate-900 text-white ring-slate-900 hover:bg-slate-800`
+      ? `${base} bg-slate-900 text-white hover:bg-slate-800`
       : kind === "secondary"
-      ? `${base} bg-white text-slate-900 ring-slate-300 hover:bg-slate-50`
-      : `${base} bg-transparent text-slate-700 ring-transparent hover:bg-slate-100`;
+      ? `${base} border border-slate-200 bg-white text-slate-900 hover:bg-slate-50`
+      : `${base} bg-transparent text-slate-700 hover:bg-slate-100`;
   return (
     <button type={props.type ?? "button"} className={cls} onClick={props.onClick} disabled={props.disabled}>
       {props.label}
+    </button>
+  );
+}
+
+function IconButton(props: { title: string; onClick?: () => void; disabled?: boolean; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      title={props.title}
+      onClick={props.onClick}
+      disabled={props.disabled}
+      className="h-9 w-9 rounded-xl text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      <span className="inline-flex h-9 w-9 items-center justify-center">{props.children}</span>
     </button>
   );
 }
@@ -261,11 +245,27 @@ function InlineWarn(props: { title: string; message: string }) {
   );
 }
 
-function SkeletonRow() {
+function ModalShell(props: { open: boolean; title: string; onClose: () => void; children: React.ReactNode }) {
+  if (!props.open) return null;
   return (
-    <div className="flex items-center gap-3 px-4 py-3">
-      <div className="h-4 w-56 animate-pulse rounded bg-slate-200" />
-      <div className="ml-auto h-4 w-24 animate-pulse rounded bg-slate-200" />
+    <div className="fixed inset-0 z-50">
+      <div className="absolute inset-0 bg-black/20" onClick={props.onClose} />
+      <div className="absolute inset-0 flex items-center justify-center p-4">
+        <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl ring-1 ring-black/5">
+          <div className="flex h-14 items-center justify-between border-b border-slate-200 px-6">
+            <div className="text-sm font-semibold text-slate-900">{props.title}</div>
+            <button
+              type="button"
+              className="rounded-xl px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+              onClick={props.onClose}
+              aria-label="Schliessen"
+            >
+              Schliessen
+            </button>
+          </div>
+          <div className="px-6 py-6">{props.children}</div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -298,8 +298,10 @@ export function TemplatesScreenClient() {
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
 
-  const debounceRef = useRef<number | null>(null);
+  const debounceFetchRef = useRef<number | null>(null);
+  const debounceUrlRef = useRef<number | null>(null);
 
+  // Init state from URL once
   useEffect(() => {
     const iq = sp.get("q") ?? "";
     const isrc = sp.get("source") ?? "";
@@ -336,8 +338,7 @@ export function TemplatesScreenClient() {
     setLoading(true);
     setErr(null);
 
-    // IMPORTANT: API query contract is strict (Zod). Do NOT send UI-only sort values.
-    // Sorting happens client-side; API gets only safe filters.
+    // API query is strict. Sorting is UI-only.
     const api = new URLSearchParams();
     if (q.trim()) api.set("q", q.trim());
     if (source !== "ALL") api.set("source", source);
@@ -357,6 +358,7 @@ export function TemplatesScreenClient() {
       setItemsRaw(list);
 
       if (list.length > 0) setSelectedId((prev) => prev ?? list[0].id);
+      else setSelectedId(null);
 
       setCategory((prev) => {
         if (prev === "ALL") return prev;
@@ -447,144 +449,145 @@ export function TemplatesScreenClient() {
     }
   }, [selected, createName, router, isInvalidTemplate]);
 
+  // initial load
   useEffect(() => {
     void loadTemplates();
   }, [loadTemplates]);
 
-  // debounce URL sync (UI only) + reload
+  // Debounced fetch only when API-relevant filters change
   useEffect(() => {
-    if (debounceRef.current) window.clearTimeout(debounceRef.current);
-    debounceRef.current = window.setTimeout(() => {
+    if (debounceFetchRef.current) window.clearTimeout(debounceFetchRef.current);
+    debounceFetchRef.current = window.setTimeout(() => {
       void loadTemplates();
+    }, 250);
 
+    return () => {
+      if (debounceFetchRef.current) window.clearTimeout(debounceFetchRef.current);
+    };
+  }, [q, source, category, loadTemplates]);
+
+  // Debounced URL sync (includes UI-only sort)
+  useEffect(() => {
+    if (debounceUrlRef.current) window.clearTimeout(debounceUrlRef.current);
+    debounceUrlRef.current = window.setTimeout(() => {
       const usp = new URLSearchParams();
       if (isCreateIntent) usp.set("intent", "create");
       if (q.trim()) usp.set("q", q.trim());
       if (source !== "ALL") usp.set("source", source);
       if (category !== "ALL") usp.set("category", category);
-      usp.set("sort", sort); // UI-only
-
+      usp.set("sort", sort);
       router.replace(`/admin/templates?${usp.toString()}`);
     }, 250);
 
     return () => {
-      if (debounceRef.current) window.clearTimeout(debounceRef.current);
+      if (debounceUrlRef.current) window.clearTimeout(debounceUrlRef.current);
     };
-  }, [q, source, category, sort, isCreateIntent, router, loadTemplates]);
+  }, [q, source, category, sort, isCreateIntent, router]);
 
   useEffect(() => {
     if (!selectedId) return;
     void loadDetail(selectedId);
   }, [selectedId, loadDetail]);
 
-  const leftCountLabel = filtered.length === 1 ? "1 Vorlage" : `${filtered.length} Vorlagen`;
+  const countLabel = filtered.length === 1 ? "1 Vorlage" : `${filtered.length} Vorlagen`;
 
   return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_420px]">
-      {/* LEFT */}
-      <div className="rounded-2xl border border-slate-200 bg-white">
-        <div className="border-b border-slate-200 p-4">
-          {isCreateIntent ? (
-            <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-              <span className="font-medium text-slate-900">Formular vorbereiten:</span> Wähle links eine Vorlage aus und klicke rechts auf{" "}
-              <span className="font-medium">„Vorlage verwenden“</span>.
-            </div>
-          ) : null}
-
-          <div className="flex flex-col gap-3 md:flex-row md:items-end">
-            <div className="flex-1">
-              <label className="text-xs font-semibold text-slate-700">Suche</label>
-              <input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="Vorlagen suchen…"
-                className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-0 placeholder:text-slate-400 focus:border-slate-400"
-              />
-            </div>
-
-            <div className="min-w-[180px]">
-              <label className="text-xs font-semibold text-slate-700">Kategorie</label>
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value || "ALL")}
-                className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
-                aria-label="Kategorie"
-              >
-                {categories.map((c) => (
-                  <option key={c} value={c}>
-                    {c === "ALL" ? "Alle" : c}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="min-w-[160px]">
-              <label className="text-xs font-semibold text-slate-700">Quelle</label>
-              <select
-                value={source}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (v === "ALL") setSource("ALL");
-                  else if (isTemplateSource(v)) setSource(v);
-                }}
-                className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
-                aria-label="Quelle"
-              >
-                <option value="ALL">Alle</option>
-                <option value="TENANT">Mandant</option>
-                <option value="SYSTEM">System</option>
-              </select>
-            </div>
-
-            <div className="min-w-[190px]">
-              <label className="text-xs font-semibold text-slate-700">Sortierung</label>
-              <select
-                value={sort}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (isSortKey(v)) setSort(v);
-                }}
-                className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
-                aria-label="Sortierung"
-              >
-                <option value="updated_desc">{sortLabel("updated_desc")}</option>
-                <option value="updated_asc">{sortLabel("updated_asc")}</option>
-                <option value="name_asc">{sortLabel("name_asc")}</option>
-                <option value="name_desc">{sortLabel("name_desc")}</option>
-              </select>
-            </div>
+    <section className="rounded-2xl border border-slate-200 bg-white">
+      {/* Toolbar */}
+      <div className="p-5">
+        {isCreateIntent ? (
+          <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+            <span className="font-medium text-slate-900">Formular vorbereiten:</span> Vorlage auswählen → rechts{" "}
+            <span className="font-medium">„Vorlage verwenden“</span>.
           </div>
+        ) : null}
 
-          <div className="mt-3 flex items-center justify-between">
-            <div className="text-xs text-slate-500">{loading ? "Lade…" : leftCountLabel}</div>
-            <Button label="Aktualisieren" kind="secondary" onClick={() => void loadTemplates()} disabled={loading} />
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Vorlagen suchen…"
+            className="h-9 w-64 max-w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400"
+            aria-label="Suche"
+          />
+
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value || "ALL")}
+            className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900"
+            aria-label="Kategorie"
+          >
+            {categories.map((c) => (
+              <option key={c} value={c}>
+                {c === "ALL" ? "Alle Kategorien" : c}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={source}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === "ALL") setSource("ALL");
+              else if (isTemplateSource(v)) setSource(v);
+            }}
+            className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900"
+            aria-label="Quelle"
+          >
+            <option value="ALL">Alle Quellen</option>
+            <option value="TENANT">Mandant</option>
+            <option value="SYSTEM">System</option>
+          </select>
+
+          <select
+            value={sort}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (isSortKey(v)) setSort(v);
+            }}
+            className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900"
+            aria-label="Sortierung"
+          >
+            <option value="updated_desc">{sortLabel("updated_desc")}</option>
+            <option value="updated_asc">{sortLabel("updated_asc")}</option>
+            <option value="name_asc">{sortLabel("name_asc")}</option>
+            <option value="name_desc">{sortLabel("name_desc")}</option>
+          </select>
+
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <div className="text-sm text-slate-600">{loading ? "Lade…" : countLabel}</div>
+            <IconButton title="Aktualisieren" onClick={() => void loadTemplates()} disabled={loading}>
+              ↻
+            </IconButton>
           </div>
         </div>
+      </div>
 
-        <div className="divide-y divide-slate-100">
-          {loading ? (
-            <>
-              <SkeletonRow />
-              <SkeletonRow />
-              <SkeletonRow />
-              <SkeletonRow />
-            </>
-          ) : err ? (
-            <div className="p-4">
-              <InlineError
-                title="Konnte Vorlagen nicht laden"
-                message={err.message}
-                traceId={err.traceId}
-                onRetry={() => void loadTemplates()}
-              />
+      <Divider />
+
+      {/* Content */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_480px]">
+        {/* LEFT: list */}
+        <div className="min-w-0">
+          {err ? (
+            <div className="p-6">
+              <InlineError title="Konnte Vorlagen nicht laden" message={err.message} traceId={err.traceId} onRetry={() => void loadTemplates()} />
             </div>
+          ) : loading ? (
+            <div className="p-6 text-sm text-slate-600">Lade Vorlagen…</div>
           ) : filtered.length === 0 ? (
             <div className="p-6">
-              <div className="text-sm font-semibold text-slate-900">Keine Vorlagen</div>
+              <div className="text-sm font-semibold text-slate-900">Noch keine Vorlagen</div>
               <div className="mt-1 text-sm text-slate-600">
-                Noch keine Vorlagen.
+                So erstellst du deine erste Vorlage:
+                <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-slate-600">
+                  <li>Öffne ein Formular unter <span className="font-medium text-slate-800">Formulare</span>.</li>
+                  <li>Im Builder: <span className="font-medium text-slate-800">„Als Vorlage speichern“</span>.</li>
+                  <li>Danach erscheint die Vorlage hier und kann für neue Formulare verwendet werden.</li>
+                </ol>
               </div>
-              <div className="mt-4 flex gap-2">
+
+              <div className="mt-4 flex flex-wrap gap-2">
                 <Button label="Zu Formularen" kind="secondary" onClick={() => router.push("/admin/forms")} />
                 <Button
                   label="Filter zurücksetzen"
@@ -599,112 +602,109 @@ export function TemplatesScreenClient() {
               </div>
             </div>
           ) : (
-            <div className="max-h-[70vh] overflow-auto">
-              {filtered.map((t) => {
-                const active = t.id === selectedId;
-                const invalid = typeof t.fieldsCount === "number" ? t.fieldsCount <= 0 : false;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => setSelectedId(t.id)}
-                    className={["w-full text-left px-4 py-3 transition", active ? "bg-slate-50" : "bg-white hover:bg-slate-50"].join(" ")}
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-semibold text-slate-900">
-                          {t.name}
-                          {invalid ? <span className="ml-2 text-xs font-medium text-amber-700">• ohne Felder</span> : null}
-                        </div>
-                        <div className="mt-0.5 flex flex-wrap items-center gap-2">
-                          <Pill>{t.category ?? "Ohne Kategorie"}</Pill>
-                          <Pill>{sourceLabel(t.source)}</Pill>
-                          {typeof t.fieldsCount === "number" ? <Pill>{t.fieldsCount} Felder</Pill> : null}
-                        </div>
-                        {t.description ? <div className="mt-1 line-clamp-2 text-sm text-slate-600">{t.description}</div> : null}
-                      </div>
-
-                      <div className="shrink-0 text-right">
-                        <div className="text-xs text-slate-500">Geändert</div>
-                        <div className="text-xs font-medium text-slate-700">{fmtDateCH(t.updatedAt)}</div>
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
+            <div className="overflow-auto">
+              <table className="w-full table-auto">
+                <thead className="text-xs font-semibold text-slate-600">
+                  <tr>
+                    <th className="px-6 py-3 text-left">Name</th>
+                    <th className="px-6 py-3 text-left">Kategorie</th>
+                    <th className="px-6 py-3 text-left">Quelle</th>
+                    <th className="px-6 py-3 text-right">Felder</th>
+                    <th className="px-6 py-3 text-right">Geändert</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filtered.map((t) => {
+                    const active = t.id === selectedId;
+                    const invalid = typeof t.fieldsCount === "number" ? t.fieldsCount <= 0 : false;
+                    return (
+                      <tr
+                        key={t.id}
+                        onClick={() => setSelectedId(t.id)}
+                        className={[
+                          "cursor-pointer hover:bg-slate-50",
+                          active ? "bg-slate-50" : "bg-white",
+                        ].join(" ")}
+                      >
+                        <td className="px-6 py-3">
+                          <div className="flex items-center gap-2">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium text-slate-900">{t.name}</div>
+                              {t.description ? <div className="mt-0.5 line-clamp-1 text-sm text-slate-600">{t.description}</div> : null}
+                            </div>
+                            {invalid ? <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-800">ohne Felder</span> : null}
+                          </div>
+                        </td>
+                        <td className="px-6 py-3 text-sm text-slate-700">{t.category ?? "Ohne Kategorie"}</td>
+                        <td className="px-6 py-3 text-sm text-slate-700">{t.source === "SYSTEM" ? "System" : "Mandant"}</td>
+                        <td className="px-6 py-3 text-right text-sm text-slate-700">{typeof t.fieldsCount === "number" ? t.fieldsCount : "—"}</td>
+                        <td className="px-6 py-3 text-right text-sm text-slate-700">{fmtDateCH(t.updatedAt)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
-      </div>
 
-      {/* RIGHT */}
-      <div className="rounded-2xl border border-slate-200 bg-white">
-        <div className="border-b border-slate-200 p-4">
-          <div className="text-sm font-semibold text-slate-900">Details</div>
-          <div className="mt-1 text-xs text-slate-500">Wähle links eine Vorlage aus.</div>
-        </div>
+        {/* RIGHT: detail */}
+        <div className="border-l border-slate-200">
+          <div className="p-6">
+            {!selectedId ? (
+              <div className="text-sm text-slate-600">Wähle links eine Vorlage aus.</div>
+            ) : detailLoading ? (
+              <div className="text-sm text-slate-600">Lade Details…</div>
+            ) : detailErr ? (
+              <InlineError
+                title="Konnte Vorlage nicht laden"
+                message={detailErr.message}
+                traceId={detailErr.traceId}
+                onRetry={() => selectedId && void loadDetail(selectedId)}
+              />
+            ) : (
+              <>
+                <div className="text-sm font-semibold text-slate-900">{detail?.name ?? selected?.name ?? "—"}</div>
+                <div className="mt-2 text-sm text-slate-600">{detail?.description ?? selected?.description ?? "Keine Beschreibung."}</div>
 
-        <div className="p-4">
-          {!selectedId ? (
-            <div className="text-sm text-slate-600">Keine Vorlage ausgewählt.</div>
-          ) : detailLoading ? (
-            <div className="space-y-2">
-              <div className="h-4 w-40 animate-pulse rounded bg-slate-200" />
-              <div className="h-4 w-56 animate-pulse rounded bg-slate-200" />
-              <div className="h-4 w-48 animate-pulse rounded bg-slate-200" />
-            </div>
-          ) : detailErr ? (
-            <InlineError
-              title="Konnte Vorlage nicht laden"
-              message={detailErr.message}
-              traceId={detailErr.traceId}
-              onRetry={() => selectedId && void loadDetail(selectedId)}
-            />
-          ) : (
-            <>
-              <div className="text-base font-semibold text-slate-900">{detail?.name ?? selected?.name ?? "—"}</div>
-
-              <div className="mt-2 flex flex-wrap gap-2">
-                <Pill>{(detail?.category ?? selected?.category) ?? "Ohne Kategorie"}</Pill>
-                <Pill>{sourceLabel(detail?.source ?? selected?.source ?? "TENANT")}</Pill>
-                {typeof effectiveFieldsCount === "number" ? <Pill>{effectiveFieldsCount} Felder</Pill> : null}
-              </div>
-
-              {detail?.description ?? selected?.description ? (
-                <div className="mt-3 text-sm text-slate-700">{detail?.description ?? selected?.description}</div>
-              ) : (
-                <div className="mt-3 text-sm text-slate-500">Keine Beschreibung.</div>
-              )}
-
-              {isInvalidTemplate ? (
-                <div className="mt-4">
-                  <InlineWarn title="Vorlage unvollständig" message="Diese Vorlage enthält keine Felder. Speichere sie im Builder erneut als Vorlage oder wähle eine andere." />
+                <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <div className="text-xs font-semibold text-slate-600">Kategorie</div>
+                    <div className="mt-1 text-sm text-slate-900">{(detail?.category ?? selected?.category) ?? "Ohne Kategorie"}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs font-semibold text-slate-600">Felder</div>
+                    <div className="mt-1 text-sm text-slate-900">{typeof effectiveFieldsCount === "number" ? effectiveFieldsCount : "—"}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs font-semibold text-slate-600">Erstellt</div>
+                    <div className="mt-1 text-sm text-slate-900">{fmtDateCH(detail?.createdAt ?? selected?.createdAt ?? null)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs font-semibold text-slate-600">Geändert</div>
+                    <div className="mt-1 text-sm text-slate-900">{fmtDateCH(detail?.updatedAt ?? selected?.updatedAt ?? null)}</div>
+                  </div>
                 </div>
-              ) : null}
 
-              <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-slate-600">
-                <div>
-                  <div className="text-slate-500">Erstellt</div>
-                  <div className="font-medium text-slate-800">{fmtDateCH(detail?.createdAt ?? selected?.createdAt ?? null)}</div>
-                </div>
-                <div>
-                  <div className="text-slate-500">Geändert</div>
-                  <div className="font-medium text-slate-800">{fmtDateCH(detail?.updatedAt ?? selected?.updatedAt ?? null)}</div>
-                </div>
-              </div>
+                {isInvalidTemplate ? (
+                  <div className="mt-4">
+                    <InlineWarn title="Vorlage unvollständig" message="Diese Vorlage enthält keine Felder. Speichere sie im Builder erneut als Vorlage oder wähle eine andere." />
+                  </div>
+                ) : null}
 
-              <div className="mt-5 flex flex-col gap-2">
-                <Button label="Vorlage verwenden" onClick={openCreateFromSelected} disabled={!selected || isInvalidTemplate} />
-                <Button label="Neu laden" kind="secondary" onClick={() => selectedId && void loadDetail(selectedId)} disabled={!selectedId} />
-              </div>
-
-              {isCreateIntent ? (
-                <div className="mt-4 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                  Tipp: Du kannst das Formular später jederzeit umbenennen und im Builder anpassen.
+                <div className="mt-6 flex flex-wrap items-center gap-2">
+                  <Button label="Vorlage verwenden" kind="primary" onClick={openCreateFromSelected} disabled={!selected || isInvalidTemplate} />
+                  <Button label="Neu laden" kind="secondary" onClick={() => selectedId && void loadDetail(selectedId)} disabled={!selectedId} />
                 </div>
-              ) : null}
-            </>
-          )}
+
+                {isCreateIntent ? (
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                    Tipp: Du kannst das Formular später jederzeit umbenennen und im Builder anpassen.
+                  </div>
+                ) : null}
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -713,22 +713,22 @@ export function TemplatesScreenClient() {
         <div className="text-sm text-slate-600">Gib dem Formular einen Namen. Danach landest du direkt im Builder.</div>
 
         <div className="mt-4">
-          <label className="text-xs font-semibold text-slate-700">Formularname</label>
+          <label className="text-xs font-semibold text-slate-600">Formularname</label>
           <input
             value={createName}
             onChange={(e) => setCreateName(e.target.value)}
             placeholder="z.B. Messe Leads – Tag 1"
-            className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+            className="mt-1 h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400"
             disabled={createBusy}
           />
           {createErr ? <div className="mt-2 text-sm text-rose-700">{createErr}</div> : null}
         </div>
 
-        <div className="mt-5 flex items-center justify-end gap-2">
+        <div className="mt-6 flex items-center justify-end gap-2">
           <Button label="Abbrechen" kind="secondary" onClick={() => setCreateOpen(false)} disabled={createBusy} />
-          <Button label={createBusy ? "Erstelle…" : "Erstellen"} onClick={() => void doCreate()} disabled={createBusy || isInvalidTemplate} />
+          <Button label={createBusy ? "Erstelle…" : "Erstellen"} kind="primary" onClick={() => void doCreate()} disabled={createBusy || isInvalidTemplate} />
         </div>
       </ModalShell>
-    </div>
+    </section>
   );
 }
