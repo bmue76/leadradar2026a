@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { jsonError, jsonOk } from "@/lib/api";
 import { isHttpError, validateQuery } from "@/lib/http";
 import { requireAdminAuth } from "@/lib/auth";
+import { ensureSystemPresets } from "@/lib/templates/systemPresets";
 
 export const runtime = "nodejs";
 
@@ -68,6 +69,10 @@ function toSource(tenantId: string | null, isPublic: boolean): TemplateSource {
 export async function GET(req: Request) {
   try {
     const { tenantId } = await requireAdminAuth(req);
+
+    // Ensure system templates exist (idempotent)
+    await ensureSystemPresets();
+
     const q = await validateQuery(req, ListTemplatesQuerySchema);
 
     let where: Prisma.FormPresetWhereInput;

@@ -1,17 +1,15 @@
 import { z } from "zod";
 import { FieldType, Prisma } from "@prisma/client";
-import type { NextRequest } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { jsonError, jsonOk } from "@/lib/api";
 import { httpError, isHttpError, validateBody } from "@/lib/http";
 import { requireAdminAuth } from "@/lib/auth";
+import { ensureSystemPresets } from "@/lib/templates/systemPresets";
 
 export const runtime = "nodejs";
 
-const IdSchema = z.string().trim().min(1).max(64);
-
-const BodySchema = z
+const CreateFormSchema = z
   .object({
     name: z.string().trim().min(1).max(200).optional(),
   })
@@ -21,230 +19,208 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-type FieldDraft = {
+type FieldSnap = {
   key: string;
   label: string;
-  type: FieldType;
-  required: boolean;
-  isActive: boolean;
-  sortOrder: number;
-  placeholder: string | null;
-  helpText: string | null;
-  config: Record<string, unknown> | null;
+  type: string;
+  required?: boolean;
+  placeholder?: string | null;
+  helpText?: string | null;
+  isActive?: boolean;
+  config?: Record<string, unknown>;
 };
 
-const FieldDraftLooseSchema = z
-  .object({
-    key: z.string().trim().min(1).max(120),
-    label: z.string().trim().min(1).max(200),
-    type: z.string().trim().min(1).max(80),
-    required: z.boolean().optional(),
-    isActive: z.boolean().optional(),
-    sortOrder: z.number().int().optional(),
-    placeholder: z.string().nullable().optional(),
-    helpText: z.string().nullable().optional(),
-    config: z.unknown().optional(),
-  })
-  .passthrough();
-
-function normalizeFieldType(t: string): FieldType {
-  const v = String(t || "").trim().toUpperCase();
-  const allowed = new Set<string>(Object.values(FieldType));
-  if (allowed.has(v)) return v as FieldType;
-  return "TEXT" as FieldType;
-}
-
-function tryGetFieldsArray(cfg: unknown): unknown[] {
-  if (!isRecord(cfg)) return [];
-
-  const direct = cfg.fields;
-  if (Array.isArray(direct)) return direct;
-
-  const snap = cfg.fieldsSnapshot;
-  if (Array.isArray(snap)) return snap;
-
-  // light deep-scan (max depth 4)
-  const seen = new Set<unknown>();
-  const walk = (v: unknown, depth: number): unknown[] => {
-    if (!v || typeof v !== "object") return [];
-    if (seen.has(v)) return [];
-    seen.add(v);
-
-    if (Array.isArray(v)) {
-      if (
-        v.length &&
-        isRecord(v[0]) &&
-        ("key" in (v[0] as Record<string, unknown>) || "label" in (v[0] as Record<string, unknown>))
-      )
-        return v;
-      if (depth <= 0) return [];
-      for (const it of v) {
-        const r = walk(it, depth - 1);
-        if (r.length) return r;
-      }
-      return [];
-    }
-
-    if (depth <= 0) return [];
-    const o = v as Record<string, unknown>;
-    for (const k of Object.keys(o)) {
-      if (k === "fields" && Array.isArray(o[k])) return o[k] as unknown[];
-      if (k === "fieldsSnapshot" && Array.isArray(o[k])) return o[k] as unknown[];
-      const r = walk(o[k], depth - 1);
-      if (r.length) return r;
-    }
-    return [];
-  };
-
-  const nested = walk(cfg, 4);
-  return Array.isArray(nested) ? nested : [];
-}
-
-function extractFieldsFromPresetConfig(cfg: unknown): FieldDraft[] {
-  const raw = tryGetFieldsArray(cfg);
-  if (!raw.length) return [];
-
-  const out: FieldDraft[] = [];
-  let i = 0;
-
-  for (const it of raw) {
-    const parsed = FieldDraftLooseSchema.safeParse(it);
-    if (!parsed.success) continue;
-
-    const d = parsed.data;
-
-    const key = d.key.trim();
-    const label = d.label.trim();
-    if (!key || !label) continue;
-
-    out.push({
-      key,
-      label,
-      type: normalizeFieldType(d.type),
-      required: Boolean(d.required),
-      isActive: d.isActive === false ? false : true,
-      sortOrder: Number.isFinite(d.sortOrder as number) ? (d.sortOrder as number) : i,
-      placeholder: typeof d.placeholder === "string" ? d.placeholder : d.placeholder === null ? null : null,
-      helpText: typeof d.helpText === "string" ? d.helpText : d.helpText === null ? null : null,
-      config: isRecord(d.config) ? (d.config as Record<string, unknown>) : null,
-    });
-
-    i += 1;
-  }
-
-  return out;
+function safeFieldType(input: string): FieldType {
+  const allowed = new Set<string>(Object.values(FieldType) as unknown as string[]);
+  const fallback = (Object.values(FieldType)[0] as unknown as FieldType) ?? ("TEXT" as unknown as FieldType);
+  return allowed.has(input) ? (input as unknown as FieldType) : fallback;
 }
 
 function uniqueKey(base: string, used: Set<string>): string {
   const clean = base.replace(/[^a-zA-Z0-9_]/g, "_") || "field";
   if (!used.has(clean)) return clean;
-  let n = 2;
-  while (used.has(`${clean}_${n}`)) n += 1;
-  return `${clean}_${n}`;
+  let i = 2;
+  while (used.has(`${clean}_${i}`)) i++;
+  return `${clean}_${i}`;
 }
 
-function pickCaptureStart(cfg: unknown): "FORM_FIRST" | "CONTACT_FIRST" {
-  if (!isRecord(cfg)) return "FORM_FIRST";
-  const v = cfg.captureStart;
-  return v === "CONTACT_FIRST" ? "CONTACT_FIRST" : "FORM_FIRST";
+function extractFieldsFromConfig(cfg: unknown): FieldSnap[] {
+  if (!isRecord(cfg)) return [];
+
+  const direct = cfg.fields;
+  if (Array.isArray(direct)) {
+    const out: FieldSnap[] = [];
+    for (const it of direct) {
+      if (!isRecord(it)) continue;
+      const key = typeof it.key === "string" ? it.key : "";
+      const label = typeof it.label === "string" ? it.label : "";
+      const type = typeof it.type === "string" ? it.type : "";
+      if (!key.trim() || !label.trim() || !type.trim()) continue;
+
+      out.push({
+        key: key.trim(),
+        label: label.trim(),
+        type: type.trim(),
+        required: Boolean(it.required),
+        placeholder: (typeof it.placeholder === "string" ? it.placeholder : null) as string | null,
+        helpText: (typeof it.helpText === "string" ? it.helpText : null) as string | null,
+        isActive: typeof it.isActive === "boolean" ? it.isActive : true,
+        config: isRecord(it.config) ? (it.config as Record<string, unknown>) : {},
+      });
+    }
+    return out;
+  }
+
+  const snap = cfg.fieldsSnapshot;
+  if (Array.isArray(snap)) {
+    const out: FieldSnap[] = [];
+    for (const it of snap) {
+      if (!isRecord(it)) continue;
+      const key = typeof it.key === "string" ? it.key : "";
+      const label = typeof it.label === "string" ? it.label : "";
+      const type = typeof it.type === "string" ? it.type : "";
+      if (!key.trim() || !label.trim() || !type.trim()) continue;
+
+      out.push({
+        key: key.trim(),
+        label: label.trim(),
+        type: type.trim(),
+        required: Boolean(it.required),
+        placeholder: (typeof it.placeholder === "string" ? it.placeholder : null) as string | null,
+        helpText: (typeof it.helpText === "string" ? it.helpText : null) as string | null,
+        isActive: typeof it.isActive === "boolean" ? it.isActive : true,
+        config: isRecord(it.config) ? (it.config as Record<string, unknown>) : {},
+      });
+    }
+    return out;
+  }
+
+  // Deep scan (light): try to find an array that looks like fields
+  const seen = new Set<unknown>();
+  const walk = (v: unknown, depth: number): FieldSnap[] => {
+    if (!v || typeof v !== "object") return [];
+    if (seen.has(v)) return [];
+    seen.add(v);
+
+    if (Array.isArray(v)) {
+      // try interpret as fields array
+      const asFields = extractFieldsFromConfig({ fields: v } as unknown);
+      if (asFields.length) return asFields;
+      if (depth <= 0) return [];
+      for (const x of v) {
+        const hit = walk(x, depth - 1);
+        if (hit.length) return hit;
+      }
+      return [];
+    }
+
+    if (depth <= 0) return [];
+
+    const obj = v as Record<string, unknown>;
+    for (const k of Object.keys(obj)) {
+      const hit = walk(obj[k], depth - 1);
+      if (hit.length) return hit;
+    }
+    return [];
+  };
+
+  return walk(cfg, 5);
 }
 
-function pickFormConfig(cfg: unknown): Record<string, unknown> {
+function extractFormConfig(cfg: unknown): Record<string, unknown> {
   if (!isRecord(cfg)) return {};
   const fc = cfg.formConfig;
   return isRecord(fc) ? { ...(fc as Record<string, unknown>) } : {};
 }
 
-type RouteCtx = { params: Promise<{ id: string }> };
+function extractCaptureStart(cfg: unknown): "FORM_FIRST" | "CONTACT_FIRST" | null {
+  if (!isRecord(cfg)) return null;
+  const v = cfg.captureStart;
+  if (v === "FORM_FIRST" || v === "CONTACT_FIRST") return v;
+  return null;
+}
 
-export async function POST(req: NextRequest, ctx: RouteCtx) {
+export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const { tenantId } = await requireAdminAuth(req);
-
     const { id } = await ctx.params;
-    const templateId = IdSchema.parse(id);
 
-    const body = await validateBody(req, BodySchema);
+    await ensureSystemPresets();
 
-    // allow tenant templates OR system templates (tenantId=null,isPublic=true)
+    const body = await validateBody(req, CreateFormSchema);
+
+    // Allowed: tenant-owned OR system-public
     const preset = await prisma.formPreset.findFirst({
       where: {
-        id: templateId,
+        id,
         OR: [{ tenantId }, { tenantId: null, isPublic: true }],
       },
       select: {
         id: true,
-        tenantId: true,
-        isPublic: true,
         name: true,
         description: true,
         config: true,
       },
     });
 
-    if (!preset) {
-      throw httpError(404, "NOT_FOUND", "Vorlage nicht gefunden.");
+    if (!preset) throw httpError(404, "NOT_FOUND", "Not found.");
+
+    const rawCfg = preset.config as unknown;
+
+    const rawFields = extractFieldsFromConfig(rawCfg);
+    if (!rawFields.length) {
+      throw httpError(400, "TEMPLATE_INVALID", "Template has no fields (config.fields missing).");
     }
 
-    const cfg = preset.config as unknown;
+    const captureStart = extractCaptureStart(rawCfg);
+    const formConfig = extractFormConfig(rawCfg);
+    const nextConfig: Record<string, unknown> = { ...formConfig };
+    if (captureStart) nextConfig.captureStart = captureStart;
 
-    const fields = extractFieldsFromPresetConfig(cfg);
-    if (!fields.length) {
-      throw httpError(400, "TEMPLATE_INVALID", "Vorlage enthält keine Felder.");
-    }
-
-    const baseName = (body.name ?? "").trim() || preset.name;
-    const formName = baseName.trim() || "Neues Formular";
-
-    const baseConfig = pickFormConfig(cfg);
-    const captureStart = pickCaptureStart(cfg);
-    const nextConfig: Record<string, unknown> = { ...baseConfig, captureStart };
+    const formName = (body.name ?? "").trim() || preset.name;
 
     const created = await prisma.$transaction(async (tx) => {
       const form = await tx.form.create({
         data: {
           tenantId,
           name: formName,
-          description: preset.description ?? null,
+          description: (preset.description ?? "").trim() ? preset.description : null,
           status: "DRAFT",
           config: nextConfig as Prisma.InputJsonValue,
         },
         select: { id: true },
       });
 
-      const usedKeys = new Set<string>();
-      const sorted = fields.slice().sort((a, b) => a.sortOrder - b.sortOrder);
+      const used = new Set<string>();
+      const fieldsData = rawFields.map((f, idx) => {
+        const key = uniqueKey(String(f.key ?? "field"), used);
+        used.add(key);
 
-      let sortIdx = 0;
-      for (const f of sorted) {
-        const key = uniqueKey(f.key, usedKeys);
-        usedKeys.add(key);
+        const cfg = isRecord(f.config) ? (f.config as Record<string, unknown>) : {};
+        const section = cfg.section === "CONTACT" || cfg.section === "FORM" ? cfg.section : "FORM";
 
-        await tx.formField.create({
-          data: {
-            tenantId,
-            formId: form.id,
-            key,
-            label: f.label,
-            type: f.type,
-            required: f.required,
-            isActive: f.isActive,
-            sortOrder: sortIdx,
-            placeholder: f.placeholder,
-            helpText: f.helpText,
-            config: f.config ? (f.config as Prisma.InputJsonValue) : undefined,
-          },
-        });
+        return {
+          tenantId,
+          formId: form.id,
+          key,
+          label: String(f.label ?? "").trim() || key,
+          type: safeFieldType(String(f.type ?? "")),
+          required: Boolean(f.required),
+          isActive: typeof f.isActive === "boolean" ? f.isActive : true,
+          sortOrder: idx,
+          placeholder: typeof f.placeholder === "string" ? f.placeholder : null,
+          helpText: typeof f.helpText === "string" ? f.helpText : null,
+          config: { ...cfg, section } as Prisma.InputJsonValue,
+        };
+      });
 
-        sortIdx += 1;
-      }
+      await tx.formField.createMany({ data: fieldsData });
 
       return form;
     });
 
-    return jsonOk(req, { id: created.id, formId: created.id }, { status: 201 });
+    return jsonOk(req, { formId: created.id }, { status: 201 });
   } catch (e) {
-    console.error("templates/[id]/create-form failed", e);
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     return jsonError(req, 500, "INTERNAL_ERROR", "Unexpected error.");
   }

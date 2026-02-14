@@ -33,14 +33,6 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function safeJsonParse<T>(txt: string): T | null {
-  try {
-    return JSON.parse(txt) as T;
-  } catch {
-    return null;
-  }
-}
-
 function toIsoDateShort(iso: string): string {
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return iso;
@@ -60,7 +52,6 @@ function normalizeLegacySort(rawSort: string | null): { sort: SortKey; dir: Sort
     if (k === "updated" || k === "updatedAt") return { sort: "updatedAt", dir };
   }
 
-  // new style
   if (s === "name") return { sort: "name", dir: "asc" };
   if (s === "updatedAt") return { sort: "updatedAt", dir: "desc" };
 
@@ -87,6 +78,7 @@ function pickDir(raw: string | null): SortDir {
 
 function extractFormId(dto: unknown): string | null {
   if (!isRecord(dto)) return null;
+
   const direct = dto.formId;
   if (typeof direct === "string" && direct.trim()) return direct.trim();
 
@@ -114,9 +106,9 @@ function ConfirmDialog(props: {
   description?: string;
   confirmLabel?: string;
   danger?: boolean;
-  busy?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
+  busy?: boolean;
 }) {
   if (!props.open) return null;
 
@@ -161,18 +153,16 @@ function ConfirmDialog(props: {
 export default function TemplatesScreenClient() {
   const router = useRouter();
   const sp = useSearchParams();
+  const spKey = sp.toString();
 
   // --- URL state (robust defaults) ---
   const q = (sp.get("q") ?? "").trim();
 
-  // category: allow "ALL" or empty
   const categoryRaw = (sp.get("category") ?? "").trim();
   const category = categoryRaw && categoryRaw !== "ALL" ? categoryRaw : "";
 
-  // source: default ALL (important!)
   const source: SourceFilter = pickSource(sp.get("source"));
 
-  // sort/dir: support legacy "sort=updated_desc"
   const legacy = normalizeLegacySort(sp.get("sort"));
   const sort: SortKey = sp.get("dir") ? pickSortKey(sp.get("sort")) : legacy.sort;
   const dir: SortDir = sp.get("dir") ? pickDir(sp.get("dir")) : legacy.dir;
@@ -184,8 +174,7 @@ export default function TemplatesScreenClient() {
 
   const [toast, setToast] = useState<null | { kind: "error" | "success"; message: string }>(null);
 
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const deleteTarget = useMemo(() => items.find((x) => x.id === confirmDeleteId) ?? null, [items, confirmDeleteId]);
+  const [confirmDelete, setConfirmDelete] = useState<null | { id: string; name: string }>(null);
 
   const categories = useMemo(() => {
     const set = new Set<string>();
@@ -211,12 +200,10 @@ export default function TemplatesScreenClient() {
         next.set("sort", n.sort);
         next.set("dir", n.dir);
       } else {
-        // if dir missing, inject default
         if (!next.get("sort")) next.set("sort", "updatedAt");
         if (!next.get("dir")) next.set("dir", "desc");
       }
 
-      // IMPORTANT: default source ALL should be explicit to avoid weird UI defaults
       if (!next.get("source")) next.set("source", "ALL");
 
       const qs = next.toString();
@@ -241,7 +228,7 @@ export default function TemplatesScreenClient() {
       const res = await fetch(`/api/admin/v1/templates?${qp.toString()}`, { method: "GET", cache: "no-store" });
       const txt = await res.text();
 
-      const json = safeJsonParse<ApiResp<ListResp>>(txt);
+      const json = JSON.parse(txt) as ApiResp<ListResp>;
 
       if (!json || typeof json !== "object") {
         setError("Ungültige Serverantwort (non-JSON).");
@@ -263,7 +250,6 @@ export default function TemplatesScreenClient() {
   }, [q, category, source, sort, dir]);
 
   useEffect(() => {
-    // ensure URL has explicit modern defaults once
     if (!sp.get("source") || sp.get("sort")?.includes("_") || !sp.get("dir")) {
       setParam({
         source: sp.get("source") ? sp.get("source") : "ALL",
@@ -273,8 +259,7 @@ export default function TemplatesScreenClient() {
       return;
     }
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sp.toString()]);
+  }, [spKey, sp, load, setParam]);
 
   const onCreateFromTemplate = useCallback(
     async (templateId: string) => {
@@ -289,7 +274,7 @@ export default function TemplatesScreenClient() {
         });
 
         const txt = await res.text();
-        const json = safeJsonParse<ApiResp<unknown>>(txt);
+        const json = JSON.parse(txt) as ApiResp<unknown>;
 
         if (!json || typeof json !== "object") {
           setToast({ kind: "error", message: "Ungültige Serverantwort (non-JSON)." });
@@ -320,56 +305,51 @@ export default function TemplatesScreenClient() {
     [router]
   );
 
-  const onDeleteTemplate = useCallback(
-    async (templateId: string) => {
-      setBusy(true);
-      setToast(null);
+  const doDelete = useCallback(async () => {
+    if (!confirmDelete) return;
 
-      try {
-        // NOTE: Templates UI lists FormPreset rows; deletion is done via presets endpoint (tenant-scoped).
-        const res = await fetch(`/api/admin/v1/presets/${templateId}`, { method: "DELETE" });
-        const txt = await res.text();
-        const json = safeJsonParse<ApiResp<{ deleted: boolean }>>(txt);
+    setBusy(true);
+    setToast(null);
 
-        if (!json || typeof json !== "object") {
-          setToast({ kind: "error", message: "Ungültige Serverantwort (non-JSON)." });
-          return;
-        }
-        if (!json.ok) {
-          setToast({ kind: "error", message: json.error?.message || "Vorlage konnte nicht gelöscht werden." });
-          return;
-        }
+    try {
+      const res = await fetch(`/api/admin/v1/templates/${confirmDelete.id}`, { method: "DELETE" });
+      const txt = await res.text();
+      const json = JSON.parse(txt) as ApiResp<{ deleted: boolean }>;
 
-        setToast({ kind: "success", message: "Vorlage gelöscht." });
-        setConfirmDeleteId(null);
-        await load();
-      } catch {
-        setToast({ kind: "error", message: "Vorlage konnte nicht gelöscht werden." });
-      } finally {
+      if (!json || typeof json !== "object") {
+        setToast({ kind: "error", message: "Ungültige Serverantwort (non-JSON)." });
         setBusy(false);
+        return;
       }
-    },
-    [load]
-  );
+      if (!json.ok) {
+        setToast({ kind: "error", message: json.error?.message || "Konnte Vorlage nicht löschen." });
+        setBusy(false);
+        return;
+      }
+
+      setToast({ kind: "success", message: "Vorlage gelöscht." });
+      setConfirmDelete(null);
+      await load();
+    } catch {
+      setToast({ kind: "error", message: "Konnte Vorlage nicht löschen." });
+    } finally {
+      setBusy(false);
+    }
+  }, [confirmDelete, load]);
 
   return (
     <>
       <ConfirmDialog
-        open={!!deleteTarget}
+        open={!!confirmDelete}
         title="Vorlage löschen?"
         description={
-          deleteTarget
-            ? `„${deleteTarget.name}“ wird gelöscht. Dieser Schritt kann nicht rückgängig gemacht werden.`
-            : undefined
+          confirmDelete ? `„${confirmDelete.name}“ wird gelöscht. Bereits erstellte Formulare bleiben unverändert.` : undefined
         }
         confirmLabel="Löschen"
         danger
         busy={busy}
-        onCancel={() => setConfirmDeleteId(null)}
-        onConfirm={() => {
-          if (!deleteTarget) return;
-          void onDeleteTemplate(deleteTarget.id);
-        }}
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={() => void doDelete()}
       />
 
       {toast ? (
@@ -377,9 +357,7 @@ export default function TemplatesScreenClient() {
           <div className={cx("text-sm font-semibold", toast.kind === "error" ? "text-rose-900" : "text-emerald-900")}>
             {toast.kind === "error" ? "Fehler" : "OK"}
           </div>
-          <div className={cx("mt-1 text-sm", toast.kind === "error" ? "text-rose-800" : "text-emerald-800")}>
-            {toast.message}
-          </div>
+          <div className={cx("mt-1 text-sm", toast.kind === "error" ? "text-rose-800" : "text-emerald-800")}>{toast.message}</div>
         </div>
       ) : null}
 
@@ -472,16 +450,6 @@ export default function TemplatesScreenClient() {
             <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5">
               <div className="text-sm font-semibold text-rose-900">Konnte Vorlagen nicht laden</div>
               <div className="mt-1 text-sm text-rose-800">{error}</div>
-              <div className="mt-3">
-                <button
-                  type="button"
-                  className="rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm font-semibold text-rose-800 hover:bg-rose-100 disabled:opacity-60"
-                  onClick={() => void load()}
-                  disabled={busy}
-                >
-                  Erneut versuchen
-                </button>
-              </div>
             </div>
           </div>
         ) : items.length === 0 ? (
@@ -492,10 +460,7 @@ export default function TemplatesScreenClient() {
                 Öffne ein Formular im Builder und nutze <span className="font-semibold">„Als Vorlage speichern“</span>.
               </div>
               <div className="mt-3">
-                <Link
-                  className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-                  href="/admin/forms"
-                >
+                <Link className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800" href="/admin/forms">
                   Formulare öffnen
                 </Link>
               </div>
@@ -526,20 +491,7 @@ export default function TemplatesScreenClient() {
                     <td className="py-3 text-sm text-slate-700">{String(it.fieldCount ?? 0)}</td>
                     <td className="py-3 text-sm text-slate-700">{toIsoDateShort(it.updatedAt)}</td>
                     <td className="py-3 text-right">
-                      <div className="inline-flex items-center justify-end gap-2">
-                        {it.source === "TENANT" ? (
-                          <button
-                            type="button"
-                            className="h-9 w-9 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                            title="Vorlage löschen"
-                            aria-label="Vorlage löschen"
-                            disabled={busy}
-                            onClick={() => setConfirmDeleteId(it.id)}
-                          >
-                            🗑
-                          </button>
-                        ) : null}
-
+                      <div className="flex justify-end gap-2">
                         <button
                           type="button"
                           className="rounded-xl border border-slate-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
@@ -548,16 +500,23 @@ export default function TemplatesScreenClient() {
                         >
                           Verwenden
                         </button>
+
+                        {it.source === "TENANT" ? (
+                          <button
+                            type="button"
+                            className="rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-60"
+                            disabled={busy}
+                            onClick={() => setConfirmDelete({ id: it.id, name: it.name })}
+                          >
+                            Löschen
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-
-            <div className="mt-4 text-xs text-slate-500">
-              Hinweis: System-Vorlagen sind schreibgeschützt (kein Löschen möglich).
-            </div>
           </div>
         )}
       </section>

@@ -1,13 +1,13 @@
-import { z } from "zod";
-
 import { prisma } from "@/lib/prisma";
 import { jsonError, jsonOk } from "@/lib/api";
 import { httpError, isHttpError } from "@/lib/http";
 import { requireAdminAuth } from "@/lib/auth";
+import { ensureSystemPresets } from "@/lib/templates/systemPresets";
 
 export const runtime = "nodejs";
 
-const IdSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9]+$/i);
+type TemplateSource = "SYSTEM" | "TENANT";
+
 function countFields(cfg: unknown): number {
   if (!cfg || typeof cfg !== "object") return 0;
   const o = cfg as Record<string, unknown>;
@@ -16,7 +16,6 @@ function countFields(cfg: unknown): number {
   return 0;
 }
 
-type TemplateSource = "SYSTEM" | "TENANT";
 function toSource(tenantId: string | null, isPublic: boolean): TemplateSource {
   if (!tenantId && isPublic) return "SYSTEM";
   return "TENANT";
@@ -26,11 +25,12 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   try {
     const { tenantId } = await requireAdminAuth(req);
     const { id } = await ctx.params;
-    const templateId = IdSchema.parse(id);
+
+    await ensureSystemPresets();
 
     const row = await prisma.formPreset.findFirst({
       where: {
-        id: templateId,
+        id,
         OR: [{ tenantId }, { tenantId: null, isPublic: true }],
       },
       select: {
@@ -41,8 +41,9 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
         category: true,
         description: true,
         imageUrl: true,
-        updatedAt: true,
         config: true,
+        createdAt: true,
+        updatedAt: true,
       },
     });
 
@@ -51,11 +52,12 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     return jsonOk(req, {
       id: row.id,
       name: row.name,
-      category: (row.category ?? "").trim() ? row.category : null,
+      category: row.category ?? null,
       description: row.description ?? null,
       imageUrl: row.imageUrl ?? null,
       source: toSource(row.tenantId, Boolean(row.isPublic)),
       fieldCount: countFields(row.config as unknown),
+      createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     });
   } catch (e) {
@@ -68,23 +70,13 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
   try {
     const { tenantId } = await requireAdminAuth(req);
     const { id } = await ctx.params;
-    const templateId = IdSchema.parse(id);
 
-    // Leak-safe: only delete tenant-owned, non-public presets
+    // Leak-safe + protect system presets: only tenant-owned (isPublic=false) deletable
     const res = await prisma.formPreset.deleteMany({
-      where: { id: templateId, tenantId, isPublic: false },
+      where: { id, tenantId, isPublic: false },
     });
 
-    if (res.count <= 0) {
-      // if it's a system template, return a clear forbidden (no deletion)
-      const isSystem = await prisma.formPreset.findFirst({
-        where: { id: templateId, tenantId: null, isPublic: true },
-        select: { id: true },
-      });
-      if (isSystem) throw httpError(403, "FORBIDDEN", "System-Vorlagen können nicht gelöscht werden.");
-      throw httpError(404, "NOT_FOUND", "Not found.");
-    }
-
+    if (res.count <= 0) throw httpError(404, "NOT_FOUND", "Not found.");
     return jsonOk(req, { deleted: true });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
