@@ -57,10 +57,10 @@ const CreatePresetSchema = z
     description: z.string().trim().max(2000).optional(),
     imageUrl: z.string().trim().max(2000).url().optional(),
 
-    // Snapshot payload (Builder config). May or may not include fields.
+    // Snapshot payload (Builder config).
     config: z.unknown(),
 
-    // Optional: helps server to attach fieldsSnapshot from DB
+    // Optional: allows server to attach fields snapshot from DB
     sourceFormId: IdSchema.optional(),
     formId: IdSchema.optional(), // accept legacy naming
   })
@@ -71,45 +71,65 @@ function normalizeCategory(v?: string): string {
   return t ? t : "Standard";
 }
 
+/**
+ * We validate "presence" + basic shape (key/label/type).
+ * Keep tolerant (passthrough) because Builder snapshots may include extra keys.
+ */
 function tryParseFieldsArray(arr: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(arr)) return [];
-  // we only need "presence", not strict validation here
   const out: Array<Record<string, unknown>> = [];
   for (const it of arr) {
-    if (isRecord(it) && typeof it.key === "string" && typeof it.label === "string" && typeof it.type === "string") out.push(it);
+    if (!isRecord(it)) continue;
+    if (typeof it.key !== "string" || typeof it.label !== "string" || typeof it.type !== "string") continue;
+    out.push(it);
   }
   return out;
 }
 
-function presetHasFields(cfg: unknown): boolean {
-  if (!cfg || typeof cfg !== "object") return false;
+function extractFieldsFromConfig(cfg: unknown): Array<Record<string, unknown>> {
+  if (!cfg || typeof cfg !== "object") return [];
   const o = cfg as Record<string, unknown>;
-  if (tryParseFieldsArray(o.fields).length) return true;
-  if (tryParseFieldsArray(o.fieldsSnapshot).length) return true;
+
+  const direct = tryParseFieldsArray(o.fields);
+  if (direct.length) return direct;
+
+  const snap = tryParseFieldsArray(o.fieldsSnapshot);
+  if (snap.length) return snap;
 
   // Deep scan (light): stop early on first hit
   const seen = new Set<unknown>();
-  const walk = (v: unknown, depth: number): boolean => {
-    if (!v || typeof v !== "object") return false;
-    if (seen.has(v)) return false;
+  const walk = (v: unknown, depth: number): Array<Record<string, unknown>> => {
+    if (!v || typeof v !== "object") return [];
+    if (seen.has(v)) return [];
     seen.add(v);
 
     if (Array.isArray(v)) {
-      if (tryParseFieldsArray(v).length) return true;
-      if (depth <= 0) return false;
-      return v.some((x) => walk(x, depth - 1));
+      const hit = tryParseFieldsArray(v);
+      if (hit.length) return hit;
+      if (depth <= 0) return [];
+      for (const x of v) {
+        const r = walk(x, depth - 1);
+        if (r.length) return r;
+      }
+      return [];
     }
 
-    if (depth <= 0) return false;
-
+    if (depth <= 0) return [];
     const obj = v as Record<string, unknown>;
     for (const k of Object.keys(obj)) {
-      if (walk(obj[k], depth - 1)) return true;
+      const r = walk(obj[k], depth - 1);
+      if (r.length) return r;
     }
-    return false;
+    return [];
   };
 
   return walk(cfg, 5);
+}
+
+function ensureSchemaVersionV1(cfgObj: Record<string, unknown>) {
+  const v = cfgObj.schemaVersion;
+  if (typeof v === "number" && Number.isFinite(v) && Math.floor(v) === v && v >= 1) return;
+  cfgObj.schemaVersion = 1;
 }
 
 export async function GET(req: Request) {
@@ -170,13 +190,14 @@ export async function POST(req: Request) {
 
     const sourceFormId = (body.sourceFormId ?? body.formId ?? "").trim() || null;
 
-    // Ensure config is an object if we want to attach snapshot
+    // Ensure config is an object (so we can normalize)
     const cfgObj: Record<string, unknown> = isRecord(body.config) ? { ...body.config } : {};
+    ensureSchemaVersionV1(cfgObj);
 
     // If config has no fields, but we know the source form => snapshot from DB
-    if (!presetHasFields(body.config) && sourceFormId) {
+    if (extractFieldsFromConfig(cfgObj).length === 0 && sourceFormId) {
       const form = await prisma.form.findFirst({ where: { id: sourceFormId, tenantId }, select: { id: true } });
-      if (!form) throw httpError(404, "NOT_FOUND", "Source form not found.");
+      if (!form) throw httpError(404, "NOT_FOUND", "Quellformular nicht gefunden.");
 
       const rows = await prisma.formField.findMany({
         where: { tenantId, formId: sourceFormId },
@@ -193,9 +214,9 @@ export async function POST(req: Request) {
         },
       });
 
-      if (!rows.length) throw httpError(400, "SOURCE_FORM_HAS_NO_FIELDS", "Source form has no fields.");
+      if (!rows.length) throw httpError(400, "SOURCE_FORM_HAS_NO_FIELDS", "Quellformular hat keine Felder.");
 
-      cfgObj.fieldsSnapshot = rows.map((r) => ({
+      cfgObj.fields = rows.map((r) => ({
         key: r.key,
         label: r.label,
         type: String(r.type),
@@ -206,8 +227,13 @@ export async function POST(req: Request) {
         config: (typeof r.config === "undefined" ? null : r.config) as unknown,
       }));
 
-      // keep traceability (optional)
+      // traceability (optional)
       cfgObj.sourceFormId = sourceFormId;
+    }
+
+    // FINAL GUARANTEE: no empty presets/templates
+    if (extractFieldsFromConfig(cfgObj).length === 0) {
+      throw httpError(400, "PRESET_INVALID", "Vorlage muss mindestens ein Feld enthalten.");
     }
 
     const created = await prisma.formPreset.create({
@@ -218,7 +244,7 @@ export async function POST(req: Request) {
         description: body.description ?? null,
         imageUrl: body.imageUrl ?? null,
         isPublic: false,
-        config: (Object.keys(cfgObj).length ? (cfgObj as Prisma.InputJsonValue) : (body.config as Prisma.InputJsonValue)),
+        config: (cfgObj as Prisma.InputJsonValue),
       },
       select: {
         id: true,
