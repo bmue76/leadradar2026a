@@ -103,7 +103,6 @@ function extractFieldsFromConfig(cfg: unknown): FieldSnap[] {
     seen.add(v);
 
     if (Array.isArray(v)) {
-      // try interpret as fields array
       const asFields = extractFieldsFromConfig({ fields: v } as unknown);
       if (asFields.length) return asFields;
       if (depth <= 0) return [];
@@ -157,6 +156,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       },
       select: {
         id: true,
+        tenantId: true,
+        isPublic: true,
         name: true,
         description: true,
         config: true,
@@ -174,8 +175,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
     const captureStart = extractCaptureStart(rawCfg);
     const formConfig = extractFormConfig(rawCfg);
+
+    // Merge form config + add trace (non-breaking)
     const nextConfig: Record<string, unknown> = { ...formConfig };
     if (captureStart) nextConfig.captureStart = captureStart;
+
+    nextConfig.createdFromTemplateId = preset.id;
+    nextConfig.createdFromTemplateName = preset.name;
+    nextConfig.createdFromTemplateAt = new Date().toISOString();
+    nextConfig.createdFromTemplateSource = !preset.tenantId && preset.isPublic ? "SYSTEM" : "TENANT";
 
     const formName = (body.name ?? "").trim() || preset.name;
 

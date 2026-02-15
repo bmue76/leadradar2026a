@@ -40,7 +40,6 @@ function toIsoDateShort(iso: string): string {
 }
 
 function normalizeLegacySort(rawSort: string | null): { sort: SortKey; dir: SortDir } {
-  // legacy: updated_desc / updated_asc / name_desc / name_asc
   const s = (rawSort ?? "").trim();
   if (!s) return { sort: "updatedAt", dir: "desc" };
 
@@ -150,12 +149,90 @@ function ConfirmDialog(props: {
   );
 }
 
+function CreateFromTemplateModal(props: {
+  open: boolean;
+  template: TemplateItem | null;
+  busy?: boolean;
+  onClose: () => void;
+  onCreate: (name: string) => void;
+}) {
+  const t = props.template;
+  const [name, setName] = useState("");
+
+  useEffect(() => {
+    if (!props.open || !t) return;
+    setName(`${t.name} (Kopie)`);
+  }, [props.open, t?.id, t?.name]);
+
+  if (!props.open || !t) return null;
+
+  return (
+    <div className="fixed inset-0 z-[82]">
+      <button type="button" className="absolute inset-0 bg-black/25" aria-label="Schliessen" onClick={props.onClose} />
+      <div className="absolute left-1/2 top-1/2 w-[min(640px,calc(100%-24px))] -translate-x-1/2 -translate-y-1/2">
+        <section className="rounded-2xl border border-slate-200 bg-white shadow-2xl">
+          <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+            <div className="min-w-0">
+              <div className="truncate text-base font-semibold text-slate-900">Formular erstellen</div>
+              <div className="mt-0.5 truncate text-xs text-slate-500">
+                Vorlage: <span className="font-semibold text-slate-700">{t.name}</span> · Quelle:{" "}
+                <span className="font-semibold text-slate-700">{t.source === "SYSTEM" ? "System" : "Eigen"}</span>
+              </div>
+            </div>
+            <button
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              onClick={props.onClose}
+              disabled={props.busy}
+            >
+              Schliessen
+            </button>
+          </header>
+
+          <div className="p-5">
+            <div className="grid gap-3">
+              <div>
+                <label className="text-xs font-semibold text-slate-700">Formularname</label>
+                <input
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="z.B. Messekontakt Swissbau 2026"
+                />
+                <div className="mt-1 text-xs text-slate-500">Wird als DRAFT erstellt und im Builder geöffnet.</div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  onClick={props.onClose}
+                  disabled={props.busy}
+                >
+                  Abbrechen
+                </button>
+                <button
+                  className={cx(
+                    "rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800",
+                    props.busy && "opacity-60"
+                  )}
+                  disabled={props.busy || name.trim().length === 0}
+                  onClick={() => props.onCreate(name.trim())}
+                >
+                  {props.busy ? "Erstellen…" : "Erstellen"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 export default function TemplatesScreenClient() {
   const router = useRouter();
   const sp = useSearchParams();
   const spKey = sp.toString();
 
-  // --- URL state (robust defaults) ---
   const q = (sp.get("q") ?? "").trim();
 
   const categoryRaw = (sp.get("category") ?? "").trim();
@@ -175,6 +252,7 @@ export default function TemplatesScreenClient() {
   const [toast, setToast] = useState<null | { kind: "error" | "success"; message: string }>(null);
 
   const [confirmDelete, setConfirmDelete] = useState<null | { id: string; name: string }>(null);
+  const [createModal, setCreateModal] = useState<null | TemplateItem>(null);
 
   const categories = useMemo(() => {
     const set = new Set<string>();
@@ -194,7 +272,6 @@ export default function TemplatesScreenClient() {
         else next.set(k, v);
       }
 
-      // normalize: always store modern sort/dir keys (avoid legacy)
       if (next.get("sort")?.includes("_")) {
         const n = normalizeLegacySort(next.get("sort"));
         next.set("sort", n.sort);
@@ -227,7 +304,6 @@ export default function TemplatesScreenClient() {
 
       const res = await fetch(`/api/admin/v1/templates?${qp.toString()}`, { method: "GET", cache: "no-store" });
       const txt = await res.text();
-
       const json = JSON.parse(txt) as ApiResp<ListResp>;
 
       if (!json || typeof json !== "object") {
@@ -262,7 +338,7 @@ export default function TemplatesScreenClient() {
   }, [spKey, sp, load, setParam]);
 
   const onCreateFromTemplate = useCallback(
-    async (templateId: string) => {
+    async (templateId: string, name: string) => {
       setBusy(true);
       setToast(null);
 
@@ -270,7 +346,7 @@ export default function TemplatesScreenClient() {
         const res = await fetch(`/api/admin/v1/templates/${templateId}/create-form`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({}),
+          body: JSON.stringify({ name }),
         });
 
         const txt = await res.text();
@@ -295,6 +371,7 @@ export default function TemplatesScreenClient() {
         }
 
         setToast({ kind: "success", message: "Formular erstellt." });
+        setCreateModal(null);
         router.push(`/admin/forms/${formId}/builder`);
       } catch {
         setToast({ kind: "error", message: "Konnte Formular nicht erstellen." });
@@ -339,6 +416,17 @@ export default function TemplatesScreenClient() {
 
   return (
     <>
+      <CreateFromTemplateModal
+        open={!!createModal}
+        template={createModal}
+        busy={busy}
+        onClose={() => setCreateModal(null)}
+        onCreate={(name) => {
+          if (!createModal) return;
+          void onCreateFromTemplate(createModal.id, name);
+        }}
+      />
+
       <ConfirmDialog
         open={!!confirmDelete}
         title="Vorlage löschen?"
@@ -362,7 +450,6 @@ export default function TemplatesScreenClient() {
       ) : null}
 
       <section className="rounded-2xl border border-slate-200 bg-white">
-        {/* Toolbar */}
         <div className="p-5">
           <div className="flex flex-wrap items-center gap-3">
             <input
@@ -437,7 +524,6 @@ export default function TemplatesScreenClient() {
 
         <div className="h-px w-full bg-slate-200" />
 
-        {/* Content */}
         {loading ? (
           <div className="p-6">
             <div className="h-5 w-52 animate-pulse rounded bg-slate-100" />
@@ -496,7 +582,7 @@ export default function TemplatesScreenClient() {
                           type="button"
                           className="rounded-xl border border-slate-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
                           disabled={busy}
-                          onClick={() => void onCreateFromTemplate(it.id)}
+                          onClick={() => setCreateModal(it)}
                         >
                           Verwenden
                         </button>
