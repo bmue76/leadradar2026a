@@ -150,21 +150,15 @@ function ConfirmDialog(props: {
 }
 
 function CreateFromTemplateModal(props: {
-  open: boolean;
-  template: TemplateItem | null;
+  template: TemplateItem;
   busy?: boolean;
   onClose: () => void;
   onCreate: (name: string) => void;
 }) {
   const t = props.template;
-  const [name, setName] = useState("");
 
-  useEffect(() => {
-    if (!props.open || !t) return;
-    setName(`${t.name} (Kopie)`);
-  }, [props.open, t?.id, t?.name]);
-
-  if (!props.open || !t) return null;
+  // lint-clean: initialize once on mount; modal is unmounted on close
+  const [name, setName] = useState<string>(() => `${t.name} (Kopie)`);
 
   return (
     <div className="fixed inset-0 z-[82]">
@@ -231,18 +225,24 @@ function CreateFromTemplateModal(props: {
 export default function TemplatesScreenClient() {
   const router = useRouter();
   const sp = useSearchParams();
-  const spKey = sp.toString();
 
+  // for stable deps
+  const spKey = sp.toString();
+  const sourceParam = sp.get("source");
+  const sortParam = sp.get("sort");
+  const dirParam = sp.get("dir");
+
+  // --- URL state (robust defaults) ---
   const q = (sp.get("q") ?? "").trim();
 
   const categoryRaw = (sp.get("category") ?? "").trim();
   const category = categoryRaw && categoryRaw !== "ALL" ? categoryRaw : "";
 
-  const source: SourceFilter = pickSource(sp.get("source"));
+  const source: SourceFilter = pickSource(sourceParam);
 
-  const legacy = normalizeLegacySort(sp.get("sort"));
-  const sort: SortKey = sp.get("dir") ? pickSortKey(sp.get("sort")) : legacy.sort;
-  const dir: SortDir = sp.get("dir") ? pickDir(sp.get("dir")) : legacy.dir;
+  const legacy = normalizeLegacySort(sortParam);
+  const sort: SortKey = dirParam ? pickSortKey(sortParam) : legacy.sort;
+  const dir: SortDir = dirParam ? pickDir(dirParam) : legacy.dir;
 
   const [items, setItems] = useState<TemplateItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -326,16 +326,16 @@ export default function TemplatesScreenClient() {
   }, [q, category, source, sort, dir]);
 
   useEffect(() => {
-    if (!sp.get("source") || sp.get("sort")?.includes("_") || !sp.get("dir")) {
+    if (!sourceParam || sortParam?.includes("_") || !dirParam) {
       setParam({
-        source: sp.get("source") ? sp.get("source") : "ALL",
-        sort: sp.get("sort"),
-        dir: sp.get("dir"),
+        source: sourceParam ? sourceParam : "ALL",
+        sort: sortParam,
+        dir: dirParam,
       });
       return;
     }
     void load();
-  }, [spKey, sp, load, setParam]);
+  }, [spKey, sourceParam, sortParam, dirParam, load, setParam]);
 
   const onCreateFromTemplate = useCallback(
     async (templateId: string, name: string) => {
@@ -416,16 +416,15 @@ export default function TemplatesScreenClient() {
 
   return (
     <>
-      <CreateFromTemplateModal
-        open={!!createModal}
-        template={createModal}
-        busy={busy}
-        onClose={() => setCreateModal(null)}
-        onCreate={(name) => {
-          if (!createModal) return;
-          void onCreateFromTemplate(createModal.id, name);
-        }}
-      />
+      {createModal ? (
+        <CreateFromTemplateModal
+          key={createModal.id}
+          template={createModal}
+          busy={busy}
+          onClose={() => setCreateModal(null)}
+          onCreate={(name) => void onCreateFromTemplate(createModal.id, name)}
+        />
+      ) : null}
 
       <ConfirmDialog
         open={!!confirmDelete}
