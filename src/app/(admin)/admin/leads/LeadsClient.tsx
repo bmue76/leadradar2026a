@@ -1,7 +1,9 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { PageShell } from "../_ui/Page";
 
 type ApiOk<T> = { ok: true; data: T; traceId: string };
 type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
@@ -820,7 +822,7 @@ export default function LeadsClient() {
   }, [detail, ocrData, ocrApplying, loadDetail, loadList]);
 
   return (
-    <div className="space-y-4">
+    <PageShell className="space-y-4">
       {/* Active Event Card */}
       <section className="rounded-2xl border border-slate-200 bg-white p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -839,19 +841,17 @@ export default function LeadsClient() {
           </div>
 
           <div className="flex items-center gap-2">
-            <a
+            <Link
               href="/admin/events"
               className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
             >
               Events öffnen
-            </a>
+            </Link>
             <IconButton title="Aktualisieren" onClick={() => void refreshAll()} />
           </div>
         </div>
 
-        <div className="mt-2 text-xs text-slate-500">
-          Hinweis: Wenn kein aktives Event existiert, bleibt die Liste leer (GoLive-safe).
-        </div>
+        <div className="mt-2 text-xs text-slate-500">Hinweis: Wenn kein aktives Event existiert, bleibt die Liste leer (GoLive-safe).</div>
       </section>
 
       {/* Toolbar */}
@@ -910,12 +910,8 @@ export default function LeadsClient() {
                   />
                 </th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Kontakt</th>
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">
-                  E-Mail / Telefon
-                </th>
-                <th className="hidden px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600 md:table-cell">
-                  Event
-                </th>
+                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">E-Mail / Telefon</th>
+                <th className="hidden px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600 md:table-cell">Event</th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Status</th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Erfasst am</th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Info</th>
@@ -935,9 +931,7 @@ export default function LeadsClient() {
                     <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
                       <div className="text-sm font-medium text-rose-900">Fehler</div>
                       <div className="mt-1 text-sm text-rose-800">{listError.message}</div>
-                      {listError.traceId ? (
-                        <div className="mt-2 text-xs text-rose-700">Trace: {listError.traceId}</div>
-                      ) : null}
+                      {listError.traceId ? <div className="mt-2 text-xs text-rose-700">Support-Code: {listError.traceId}</div> : null}
                       <div className="mt-3">
                         <Button label="Erneut versuchen" kind="secondary" onClick={() => void loadList()} />
                       </div>
@@ -972,9 +966,7 @@ export default function LeadsClient() {
                       <td className="px-4 py-3">
                         <div className="text-sm font-medium text-slate-900">{it.contactName ?? "—"}</div>
                         <div className="text-xs text-slate-600">{it.company ?? "—"}</div>
-                        {it.sourceDeviceName ? (
-                          <div className="mt-1 text-[11px] text-slate-500">Quelle: {it.sourceDeviceName}</div>
-                        ) : null}
+                        {it.sourceDeviceName ? <div className="mt-1 text-[11px] text-slate-500">Quelle: {it.sourceDeviceName}</div> : null}
                       </td>
 
                       <td className="px-4 py-3">
@@ -987,9 +979,7 @@ export default function LeadsClient() {
                       </td>
 
                       <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(it.reviewStatus)}`}
-                        >
+                        <span className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(it.reviewStatus)}`}>
                           {statusLabel(it.reviewStatus)}
                         </span>
                       </td>
@@ -1033,7 +1023,7 @@ export default function LeadsClient() {
           <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
             <div className="text-sm font-medium text-rose-900">Fehler</div>
             <div className="mt-1 text-sm text-rose-800">{errMessage(drawerErr)}</div>
-            {errTraceId(drawerErr) ? <div className="mt-2 text-xs text-rose-700">Trace: {errTraceId(drawerErr)}</div> : null}
+            {errTraceId(drawerErr) ? <div className="mt-2 text-xs text-rose-700">Support-Code: {errTraceId(drawerErr)}</div> : null}
             <div className="mt-3">
               {selectedId ? <Button label="Erneut versuchen" kind="secondary" onClick={() => void loadDetail(selectedId)} /> : null}
             </div>
@@ -1044,7 +1034,7 @@ export default function LeadsClient() {
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-xs text-slate-500">
-                Lead-ID: <span className="font-mono">{detail.id}</span>
+                Erfasst: <span className="font-medium text-slate-700">{fmtDateTime(detail.createdAt)}</span>
               </div>
 
               <div className="flex items-center gap-2">
@@ -1089,9 +1079,7 @@ export default function LeadsClient() {
                 onChange={setDraftNotes}
                 placeholder="z.B. Danke, will Offerte; Nachfassen am Dienstag…"
               />
-              <div className="mt-2 text-xs text-slate-500">
-                Notizen werden MVP-lean in <span className="font-mono">meta.adminNotes</span> gespeichert.
-              </div>
+              <div className="mt-2 text-xs text-slate-500">Nur intern (nicht in der App sichtbar).</div>
             </Card>
 
             <Card title="Quelle / Meta">
@@ -1163,7 +1151,7 @@ export default function LeadsClient() {
                     <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3">
                       <div className="text-sm font-medium text-rose-900">OCR Fehler</div>
                       <div className="mt-1 text-sm text-rose-800">{ocrError.message}</div>
-                      {ocrError.traceId ? <div className="mt-2 text-xs text-rose-700">Trace: {ocrError.traceId}</div> : null}
+                      {ocrError.traceId ? <div className="mt-2 text-xs text-rose-700">Support-Code: {ocrError.traceId}</div> : null}
                     </div>
                   ) : null}
 
@@ -1192,12 +1180,12 @@ export default function LeadsClient() {
               <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
                 <div className="text-sm font-medium text-rose-900">Fehler</div>
                 <div className="mt-1 text-sm text-rose-800">{errMessage(drawerErr)}</div>
-                {errTraceId(drawerErr) ? <div className="mt-2 text-xs text-rose-700">Trace: {errTraceId(drawerErr)}</div> : null}
+                {errTraceId(drawerErr) ? <div className="mt-2 text-xs text-rose-700">Support-Code: {errTraceId(drawerErr)}</div> : null}
               </div>
             ) : null}
           </div>
         )}
       </DrawerShell>
-    </div>
+    </PageShell>
   );
 }
