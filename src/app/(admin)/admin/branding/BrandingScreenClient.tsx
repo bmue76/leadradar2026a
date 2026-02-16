@@ -159,28 +159,28 @@ function cmykToRgb(cmyk: CMYK): RGB {
 }
 
 function Button(
-  props: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "ghost" },
+  props: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "ghost" | "soft" },
 ) {
   const { variant = "secondary", className = "", ...rest } = props;
+
   const base =
-    "inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed";
+    "lr-focusRing inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed";
+
   const cls =
     variant === "primary"
-      ? "bg-slate-900 text-white hover:bg-slate-800 focus:ring-slate-400"
+      ? "bg-slate-900 text-white hover:bg-slate-800"
       : variant === "ghost"
-        ? "bg-transparent text-slate-700 hover:bg-slate-100 focus:ring-slate-300"
-        : "bg-white text-slate-800 border border-slate-200 hover:bg-slate-50 focus:ring-slate-300";
+        ? "bg-transparent text-slate-700 hover:bg-slate-100"
+        : variant === "soft"
+          ? "lr-btnSoft"
+          : "bg-white text-slate-800 border border-slate-200 hover:bg-slate-50";
+
   return <button className={`${base} ${cls} ${className}`} {...rest} />;
 }
 
 function Input(props: InputHTMLAttributes<HTMLInputElement>) {
   const { className = "", ...rest } = props;
-  return (
-    <input
-      className={`h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300 ${className}`}
-      {...rest}
-    />
-  );
+  return <input className={`lr-input lr-focusRing ${className}`} {...rest} />;
 }
 
 function Label({ children }: { children: React.ReactNode }) {
@@ -262,10 +262,11 @@ function isAllowedLogoFile(file: File): boolean {
   if (mime === "image/png") return true;
   if (mime === "image/jpeg") return true;
   if (mime === "image/webp") return true;
+  if (mime === "image/svg+xml") return true;
 
   // fallback by extension if mime missing
   const name = file.name.toLowerCase();
-  if (!mime && (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".webp"))) return true;
+  if (!mime && (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".webp") || name.endsWith(".svg"))) return true;
 
   return false;
 }
@@ -465,7 +466,7 @@ export default function BrandingScreenClient() {
     }
 
     if (!isAllowedLogoFile(file)) {
-      setInlineError({ message: "Bitte nur PNG, JPG oder WebP als Logo hochladen.", traceId: undefined });
+      setInlineError({ message: "Bitte nur PNG, JPG, WebP oder SVG als Logo hochladen.", traceId: undefined });
       if (fileInputRef.current) fileInputRef.current.value = "";
       return;
     }
@@ -643,9 +644,9 @@ export default function BrandingScreenClient() {
 
   return (
     <div className="space-y-6">
-      <header className="space-y-2">
-        <h1 className="text-xl font-semibold text-slate-900">Branding &amp; Firma</h1>
-        <p className="text-sm text-slate-600">Logo, Farben und Rechnungsadresse – für Wiedererkennung und Belege.</p>
+      <header className="lr-pageHeader space-y-2">
+        <h1 className="lr-h1">Branding &amp; Firma</h1>
+        <p className="lr-muted">Logo, Farben und Rechnungsadresse – für Wiedererkennung und Belege.</p>
       </header>
 
       {loading ? (
@@ -663,7 +664,7 @@ export default function BrandingScreenClient() {
         />
       ) : (
         <>
-          <Card title="Branding" subtitle="Logo (PNG/JPG/WebP) und optionale Akzentfarbe – wird in App & Admin verwendet.">
+          <Card title="Branding" subtitle="Logo (PNG/JPG/WebP/SVG) und optionale Akzentfarbe – wird in App & Admin verwendet.">
             <div className="grid gap-6 md:grid-cols-2">
               {/* Logo preview (nice, not tiny icon) */}
               <div className="space-y-3">
@@ -692,7 +693,7 @@ export default function BrandingScreenClient() {
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept="image/png,image/jpeg,image/webp"
+                    accept="image/png,image/jpeg,image/webp,image/svg+xml,.svg"
                     className="block w-full text-sm text-slate-700 file:mr-3 file:rounded-xl file:border file:border-slate-200 file:bg-white file:px-4 file:py-2 file:text-sm file:font-medium file:text-slate-800 hover:file:bg-slate-50"
                     onChange={(e) => onPickLogo(e.target.files?.[0] ?? null)}
                   />
@@ -700,7 +701,14 @@ export default function BrandingScreenClient() {
                     <Button variant="secondary" type="button" onClick={onRemoveLogo} disabled={saving}>
                       Logo entfernen
                     </Button>
-                    <Button variant="ghost" type="button" onClick={() => { setLogoServerOk(true); setLogoBust(Date.now()); }}>
+                    <Button
+                      variant="ghost"
+                      type="button"
+                      onClick={() => {
+                        setLogoServerOk(true);
+                        setLogoBust(Date.now());
+                      }}
+                    >
                       Vorschau aktualisieren
                     </Button>
                   </div>
@@ -722,8 +730,8 @@ export default function BrandingScreenClient() {
                           key={hex}
                           type="button"
                           className={[
-                            "h-9 w-9 rounded-xl border transition",
-                            active ? "border-slate-900 ring-2 ring-slate-300" : "border-slate-200 hover:border-slate-300",
+                            "lr-focusRing h-9 w-9 rounded-xl border transition",
+                            active ? "border-slate-900" : "border-slate-200 hover:border-slate-300",
                           ].join(" ")}
                           style={{ backgroundColor: hex }}
                           onClick={() => setField("accentColor", hex.toUpperCase())}
@@ -735,7 +743,7 @@ export default function BrandingScreenClient() {
                     <button
                       type="button"
                       className={[
-                        "h-9 rounded-xl border px-3 text-xs font-semibold transition",
+                        "lr-focusRing h-9 rounded-xl border px-3 text-xs font-semibold transition",
                         !normalizedHex ? "border-slate-900 bg-white" : "border-slate-200 bg-white hover:border-slate-300",
                       ].join(" ")}
                       onClick={() => setField("accentColor", null)}
@@ -751,7 +759,7 @@ export default function BrandingScreenClient() {
                       <input
                         type="color"
                         value={normalizedHex ?? "#000000"}
-                        className="h-10 w-12 cursor-pointer rounded-xl border border-slate-200 bg-white p-1"
+                        className="lr-focusRing h-10 w-12 cursor-pointer rounded-xl border border-slate-200 bg-white p-1"
                         onChange={(e) => setField("accentColor", e.target.value.toUpperCase())}
                         aria-label="Color Picker"
                         title="Color Picker"
@@ -913,7 +921,7 @@ export default function BrandingScreenClient() {
               <div className="space-y-2">
                 <Label>Land</Label>
                 <select
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300"
+                  className="lr-select lr-focusRing"
                   value={form.countryCode}
                   onChange={(e) => setField("countryCode", e.target.value)}
                 >
