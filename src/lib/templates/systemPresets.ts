@@ -1,134 +1,94 @@
-import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
+
+/**
+ * ensureSystemPresets()
+ * - seedet System-Vorlagen (tenantId=null, isPublic=true), aber überschreibt bestehende Datensätze NICHT.
+ * - Seeds werden (wenn vorhanden) aus src/lib/systemTemplates.ts gelesen (mehrere mögliche Export-Namen).
+ */
 
 type SystemPresetSeed = {
   id: string;
   name: string;
-  category: string;
-  description: string;
-  config: Prisma.InputJsonValue;
+  category?: string | null;
+  description?: string | null;
+  imageUrl?: string | null;
+  config?: unknown;
 };
 
-function field(input: {
-  key: string;
-  label: string;
-  section: "FORM" | "CONTACT";
-  type?: string;
-  required?: boolean;
-  placeholder?: string | null;
-  helpText?: string | null;
-  config?: Record<string, unknown>;
-}) {
-  return {
-    key: input.key,
-    label: input.label,
-    type: input.type ?? "TEXT",
-    required: Boolean(input.required),
-    placeholder: typeof input.placeholder === "undefined" ? null : input.placeholder,
-    helpText: typeof input.helpText === "undefined" ? null : input.helpText,
-    isActive: true,
-    config: { section: input.section, ...(input.config ?? {}) },
-  };
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-// Stable IDs = robust + no extra DB columns needed
-const SYSTEM_PRESETS: SystemPresetSeed[] = [
-  {
-    id: "sys-messekontakt-standard-v1",
-    name: "Messekontakt Standard",
-    category: "Messe",
-    description: "Kontaktblock + Notiz + Interesse (Start: Kontakt zuerst).",
-    config: {
-      v: 1,
-      source: "SYSTEM",
-      captureStart: "CONTACT_FIRST",
-      formConfig: {},
-      fields: [
-        // CONTACT
-        field({ key: "firstName", label: "Vorname", section: "CONTACT", type: "TEXT" }),
-        field({ key: "lastName", label: "Nachname", section: "CONTACT", type: "TEXT" }),
-        field({ key: "company", label: "Firma", section: "CONTACT", type: "TEXT" }),
-        field({ key: "email", label: "E-Mail", section: "CONTACT", type: "TEXT" }),
-        field({ key: "mobile", label: "Mobile", section: "CONTACT", type: "TEXT" }),
+function isSeedArray(v: unknown): v is SystemPresetSeed[] {
+  if (!Array.isArray(v)) return false;
+  return v.every((x) => isRecord(x) && typeof x.id === "string" && x.id.trim() && typeof x.name === "string");
+}
 
-        // FORM
-        field({
-          key: "interest",
-          label: "Interesse",
-          section: "FORM",
-          type: "SINGLE_SELECT",
-          required: false,
-          config: { options: ["hoch", "mittel", "tief"] },
-        }),
-        field({ key: "notes", label: "Notiz", section: "FORM", type: "TEXT", required: false, placeholder: "Kurz notieren…" }),
-      ],
-    } as unknown as Prisma.InputJsonValue,
-  },
-  {
-    id: "sys-qualify-lead-v1",
-    name: "Lead Qualifizierung",
-    category: "Vertrieb",
-    description: "Kurze Quali-Fragen + Kontaktblock (Start: Kontakt zuerst).",
-    config: {
-      v: 1,
-      source: "SYSTEM",
-      captureStart: "CONTACT_FIRST",
-      formConfig: {},
-      fields: [
-        // CONTACT
-        field({ key: "firstName", label: "Vorname", section: "CONTACT", type: "TEXT" }),
-        field({ key: "lastName", label: "Nachname", section: "CONTACT", type: "TEXT" }),
-        field({ key: "company", label: "Firma", section: "CONTACT", type: "TEXT" }),
-        field({ key: "email", label: "E-Mail", section: "CONTACT", type: "TEXT" }),
+function normalizeCategory(v: string | null | undefined): string {
+  const c = (v ?? "").trim();
+  return c || "Standard";
+}
 
-        // FORM
-        field({
-          key: "topic",
-          label: "Thema",
-          section: "FORM",
-          type: "SINGLE_SELECT",
-          config: { options: ["Produkt", "Preis", "Demo", "Support", "Sonstiges"] },
-        }),
-        field({
-          key: "priority",
-          label: "Priorität",
-          section: "FORM",
-          type: "SINGLE_SELECT",
-          config: { options: ["A (heiss)", "B", "C"] },
-        }),
-        field({ key: "notes", label: "Notiz", section: "FORM", type: "TEXT", placeholder: "Was ist wichtig?" }),
-      ],
-    } as unknown as Prisma.InputJsonValue,
-  },
-];
+function toInputJson(v: unknown): Prisma.InputJsonValue {
+  return (v ?? {}) as Prisma.InputJsonValue;
+}
+
+async function getSeedsFromSystemTemplatesModule(): Promise<SystemPresetSeed[]> {
+  const modUnknown: unknown = await import("@/lib/systemTemplates");
+  const m = isRecord(modUnknown) ? modUnknown : {};
+
+  const candidates: unknown[] = [
+    m.SYSTEM_PRESET_SEEDS,
+    m.SYSTEM_PRESETS,
+    m.SYSTEM_TEMPLATES,
+    m.SYSTEM_TEMPLATE_SEEDS,
+    m.SYSTEM_TEMPLATE_PRESETS,
+  ];
+
+  for (const c of candidates) {
+    if (isSeedArray(c)) return c;
+  }
+
+  return [];
+}
+
+let ensured: Promise<void> | null = null;
 
 export async function ensureSystemPresets(): Promise<void> {
-  const ids = SYSTEM_PRESETS.map((x) => x.id);
+  if (ensured) return ensured;
 
-  const existing = await prisma.formPreset.findMany({
-    where: { id: { in: ids } },
-    select: { id: true },
-  });
+  ensured = (async () => {
+    const seeds = await getSeedsFromSystemTemplatesModule();
 
-  const have = new Set(existing.map((x) => x.id));
-  const missing = SYSTEM_PRESETS.filter((x) => !have.has(x.id));
-  if (!missing.length) return;
+    // Wenn keine Seeds vorhanden sind, ist das OK (du seedest aktuell via Prisma Studio).
+    if (!seeds.length) return;
 
-  await prisma.$transaction(
-    missing.map((s) =>
-      prisma.formPreset.create({
+    const ids = seeds.map((s) => s.id);
+
+    const existing = await prisma.formPreset.findMany({
+      where: { id: { in: ids } },
+      select: { id: true },
+    });
+
+    const existingIds = new Set(existing.map((x) => x.id));
+    const missing = seeds.filter((s) => !existingIds.has(s.id));
+
+    for (const seed of missing) {
+      await prisma.formPreset.create({
         data: {
-          id: s.id,
+          id: seed.id,
           tenantId: null,
           isPublic: true,
-          name: s.name,
-          category: s.category,
-          description: s.description,
-          imageUrl: null,
-          config: s.config,
+          name: seed.name,
+          category: normalizeCategory(seed.category),
+          description: seed.description ?? null,
+          imageUrl: seed.imageUrl ?? null,
+          config: toInputJson(seed.config),
         },
-        select: { id: true },
-      })
-    )
-  );
+      });
+    }
+  })();
+
+  return ensured;
 }

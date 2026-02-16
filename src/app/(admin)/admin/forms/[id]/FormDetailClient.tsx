@@ -12,7 +12,7 @@ function formatDateTime(iso?: string) {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("de-CH", {
     year: "numeric",
     month: "short",
     day: "2-digit",
@@ -67,7 +67,7 @@ export default function FormDetailClient({ formId, initialTab }: { formId: strin
     <div className="mx-auto w-full max-w-[1400px] space-y-4 px-6 py-6">
       <div className="flex items-center justify-between gap-3">
         <Link href="/admin/forms" className="text-sm text-gray-600 hover:text-gray-900">
-          ← Forms
+          ← Formulare
         </Link>
 
         {toast ? (
@@ -85,12 +85,8 @@ export default function FormDetailClient({ formId, initialTab }: { formId: strin
                 {toast.actionLabel}
               </button>
             ) : (
-              <button
-                type="button"
-                onClick={dismissToast}
-                className="rounded-full border px-2 py-0.5 text-xs hover:bg-gray-50"
-              >
-                Close
+              <button type="button" onClick={dismissToast} className="rounded-full border px-2 py-0.5 text-xs hover:bg-gray-50">
+                Schliessen
               </button>
             )}
           </div>
@@ -107,22 +103,18 @@ export default function FormDetailClient({ formId, initialTab }: { formId: strin
         </div>
       ) : loadErr ? (
         <div className="rounded-2xl border bg-white p-6">
-          <div className="text-lg font-semibold">Could not load form</div>
+          <div className="text-lg font-semibold">Formular konnte nicht geladen werden</div>
           <div className="mt-2 text-sm text-gray-600">{loadErr.message}</div>
           <div className="mt-2 text-xs text-gray-500">
             {loadErr.code ? `Code: ${loadErr.code} · ` : null}
-            {loadErr.traceId ? `traceId: ${loadErr.traceId}` : null}
+            {loadErr.traceId ? `Support-Code: ${loadErr.traceId}` : null}
           </div>
           <div className="mt-4 flex gap-2">
-            <button
-              type="button"
-              onClick={() => void refresh()}
-              className="rounded-lg bg-black px-4 py-2 text-sm text-white hover:bg-black/90"
-            >
-              Retry
+            <button type="button" onClick={() => void refresh()} className="rounded-lg bg-black px-4 py-2 text-sm text-white hover:bg-black/90">
+              Erneut versuchen
             </button>
             <Link href="/admin/forms" className="rounded-lg border px-4 py-2 text-sm hover:bg-gray-50">
-              Back to Forms
+              Zurück zur Liste
             </Link>
           </div>
         </div>
@@ -135,13 +127,12 @@ export default function FormDetailClient({ formId, initialTab }: { formId: strin
                 {form.description ? (
                   <div className="mt-1 text-sm text-gray-600">{form.description}</div>
                 ) : (
-                  <div className="mt-1 text-sm text-gray-400">No description.</div>
+                  <div className="mt-1 text-sm text-gray-400">Keine Beschreibung.</div>
                 )}
 
                 <div className="mt-3 flex flex-wrap gap-3 text-xs text-gray-500">
-                  <div>Created: {formatDateTime(form.createdAt)}</div>
-                  <div>Updated: {formatDateTime(form.updatedAt)}</div>
-                  <div className="font-mono">ID: {form.id}</div>
+                  <div>Erstellt: {formatDateTime(form.createdAt)}</div>
+                  <div>Aktualisiert: {formatDateTime(form.updatedAt)}</div>
                 </div>
               </div>
 
@@ -164,13 +155,8 @@ export default function FormDetailClient({ formId, initialTab }: { formId: strin
                   </select>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => void refresh()}
-                  className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50"
-                  disabled={loading}
-                >
-                  Refresh
+                <button type="button" onClick={() => void refresh()} className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50" disabled={loading}>
+                  Aktualisieren
                 </button>
               </div>
             </div>
@@ -178,9 +164,9 @@ export default function FormDetailClient({ formId, initialTab }: { formId: strin
 
           {tab === "overview" ? (
             <div className="rounded-2xl border bg-white p-6">
-              <div className="text-lg font-semibold">Overview</div>
+              <div className="text-lg font-semibold">Übersicht</div>
               <div className="mt-2 text-sm text-gray-600">
-                Builder ist der Primär-Workflow. (Overview kannst du später für Settings/Meta/Assignments ausbauen.)
+                Der Builder ist der Primär-Workflow. (Overview kann später für Settings/Meta/Assignments ausgebaut werden.)
               </div>
             </div>
           ) : (

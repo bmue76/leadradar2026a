@@ -64,18 +64,47 @@ function shouldAutoOpenSettings(item: LibraryItem): boolean {
   if (item.kind === "contact") return false;
 
   const variant = (item.defaultConfig as any)?.variant;
-  if (
-    variant === "attachment" ||
-    variant === "audio" ||
-    variant === "rating" ||
-    variant === "date" ||
-    variant === "datetime"
-  )
+  if (variant === "attachment" || variant === "audio" || variant === "rating" || variant === "date" || variant === "datetime")
     return true;
 
   if (String((item as any).type) === "SINGLE_SELECT" || String((item as any).type) === "MULTI_SELECT") return true;
   if (variant === "consent" || variant === "yesNo") return true;
   return false;
+}
+
+/* ----------------------------- Draft helpers ----------------------------- */
+
+type FieldEditableSnapshot = {
+  label: string;
+  required: boolean;
+  placeholder: string | null;
+  helpText: string | null;
+  config: Record<string, unknown>;
+};
+
+function stableStringify(v: unknown): string {
+  if (v === null) return "null";
+  const t = typeof v;
+  if (t === "string") return JSON.stringify(v);
+  if (t === "number" || t === "boolean") return String(v);
+  if (Array.isArray(v)) return `[${v.map((x) => stableStringify(x)).join(",")}]`;
+  if (isRecord(v)) {
+    const keys = Object.keys(v).sort((a, b) => a.localeCompare(b));
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(v[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(v);
+}
+
+function editableSnapOf(field: BuilderField | null): FieldEditableSnapshot | null {
+  if (!field) return null;
+  const cfg = isRecord(field.config) ? ({ ...(field.config as Record<string, unknown>) } as Record<string, unknown>) : {};
+  return {
+    label: String(field.label ?? ""),
+    required: Boolean(field.required),
+    placeholder: (field.placeholder ?? null) as string | null,
+    helpText: (field.helpText ?? null) as string | null,
+    config: cfg,
+  };
 }
 
 /* ----------------------------- UI helpers ----------------------------- */
@@ -170,6 +199,59 @@ function DragCard(props: { title: string; subtitle?: string }) {
 
 /* -------------------------- Field settings drawer -------------------------- */
 
+function OptionsEditor(props: { fieldId: string; initialOptions: string[]; onCommit: (raw: string) => void }) {
+  const [raw, setRaw] = useState<string>(() => props.initialOptions.map((x) => String(x)).join("\n"));
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    setRaw(props.initialOptions.map((x) => String(x)).join("\n"));
+    setDirty(false);
+  }, [props.fieldId, props.initialOptions]);
+
+  const apply = useCallback(() => {
+    props.onCommit(raw);
+    setDirty(false);
+  }, [props, raw]);
+
+  return (
+    <div className="grid grid-cols-1 gap-2">
+      <div className="flex items-center justify-between gap-3">
+        <label className="text-xs font-semibold text-slate-600">Optionen (eine pro Zeile)</label>
+        <button
+          type="button"
+          className={cx(
+            "rounded-xl border px-3 py-1.5 text-xs font-semibold",
+            dirty ? "border-slate-900 bg-slate-900 text-white hover:bg-slate-800" : "border-slate-200 bg-white text-slate-500"
+          )}
+          onClick={apply}
+          disabled={!dirty}
+          title={dirty ? "Änderungen übernehmen" : "Keine Änderungen"}
+        >
+          Übernehmen
+        </button>
+      </div>
+
+      <textarea
+        className="min-h-[160px] rounded-xl border border-slate-200 bg-white px-3 py-2 font-mono text-sm"
+        value={raw}
+        onChange={(e) => {
+          setRaw(e.target.value);
+          setDirty(true);
+        }}
+        onBlur={() => {
+          if (dirty) apply();
+        }}
+        spellCheck={false}
+        placeholder={"Option 1\nOption 2\nOption 3"}
+      />
+
+      <div className="text-[11px] text-slate-500">
+        Tipp: <span className="font-semibold">Enter</span> fügt eine neue Zeile ein. Änderungen werden beim Verlassen automatisch übernommen.
+      </div>
+    </div>
+  );
+}
+
 function FieldSettingsDrawer(props: {
   open: boolean;
   field: BuilderField | null;
@@ -178,23 +260,55 @@ function FieldSettingsDrawer(props: {
   onMoveSection: (id: string, section: FieldSection) => void;
 }) {
   const f = props.field;
+
   const [local, setLocal] = useState<BuilderField | null>(f);
+  const [initialSnap, setInitialSnap] = useState<FieldEditableSnapshot | null>(() => editableSnapOf(f));
 
   useEffect(() => {
     setLocal(f);
+    setInitialSnap(editableSnapOf(f));
   }, [f?.id]);
 
-  const optionsText = useMemo(() => {
-    const opts = Array.isArray(local?.config?.options) ? (local?.config?.options as unknown[]) : [];
-    return (opts ?? []).map((x) => String(x)).join("\n");
-  }, [local?.config?.options]);
+  const variant = (local?.config?.variant ?? undefined) as string | undefined;
+  const type = String((local as any)?.type ?? "");
 
-  if (!props.open || !local) return null;
+  const optionsList = useMemo(() => {
+    const raw = (local?.config as any)?.options;
+    if (!Array.isArray(raw)) return [];
+    return raw.map((x: any) => String(x));
+  }, [local?.config]);
 
-  const variant = (local.config?.variant ?? undefined) as string | undefined;
-  const type = String((local as any).type ?? "");
+  const setConfig = useCallback((patch: Record<string, unknown>) => {
+    setLocal((cur) => {
+      if (!cur) return cur;
+      const next = { ...(cur.config ?? {}), ...patch };
+      return { ...cur, config: next } as BuilderField;
+    });
+  }, []);
 
-  const commit = () => {
+  const commitOptionsFromRaw = useCallback(
+    (raw: string) => {
+      const lines = raw
+        .split(/\r?\n/g)
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      setConfig({ options: lines.length ? lines : ["Option 1"] });
+    },
+    [setConfig]
+  );
+
+  const localSnap = useMemo(() => editableSnapOf(local), [local]);
+
+  const dirty = useMemo(() => {
+    const a = localSnap;
+    const b = initialSnap;
+    if (!a || !b) return false;
+    return stableStringify(a) !== stableStringify(b);
+  }, [initialSnap, localSnap]);
+
+  const commit = useCallback(() => {
+    if (!local) return;
     props.onPatch(local.id, {
       label: local.label,
       required: local.required,
@@ -202,32 +316,64 @@ function FieldSettingsDrawer(props: {
       helpText: local.helpText,
       config: local.config,
     } as Partial<BuilderField>);
-  };
 
-  const setConfig = (patch: Record<string, unknown>) => {
-    const next = { ...(local.config ?? {}), ...patch };
-    setLocal({ ...local, config: next });
-  };
+    setInitialSnap(editableSnapOf(local));
+  }, [local, props]);
+
+  const closeAutosave = useCallback(() => {
+    if (dirty) commit();
+    props.onClose();
+  }, [commit, dirty, props]);
+
+  const closeDiscard = useCallback(() => {
+    props.onClose();
+  }, [props]);
+
+  useEffect(() => {
+    if (!props.open) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeAutosave();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [props.open, closeAutosave]);
+
+  if (!props.open || !local) return null;
 
   return (
     <div className="fixed inset-0 z-50">
-      <button type="button" className="absolute inset-0 bg-black/20" aria-label="Schliessen" onClick={props.onClose} />
+      <button type="button" className="absolute inset-0 bg-black/20" aria-label="Schliessen" onClick={closeAutosave} />
+
       <aside className="absolute right-0 top-0 h-full w-full max-w-[520px] bg-white shadow-2xl">
         <div className="flex h-14 items-center justify-between border-b border-slate-200 px-6">
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-slate-900">Feld-Einstellungen</div>
             <div className="truncate font-mono text-xs text-slate-500">{local.key}</div>
           </div>
-          <button
-            type="button"
-            className="inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-200"
-            onClick={() => {
-              commit();
-              props.onClose();
-            }}
-          >
-            Fertig
-          </button>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              onClick={closeDiscard}
+              title="Änderungen verwerfen"
+            >
+              Abbrechen
+            </button>
+            <button
+              type="button"
+              className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+              onClick={closeAutosave}
+              title={dirty ? "Speichern & schliessen" : "Schliessen"}
+            >
+              Fertig
+            </button>
+          </div>
         </div>
 
         <div className="h-[calc(100%-3.5rem)] space-y-5 overflow-auto px-6 py-6">
@@ -280,20 +426,12 @@ function FieldSettingsDrawer(props: {
           </div>
 
           {type === "SINGLE_SELECT" || type === "MULTI_SELECT" || variant === "yesNo" ? (
-            <div className="grid grid-cols-1 gap-3">
-              <label className="text-xs font-semibold text-slate-600">Optionen (eine pro Zeile)</label>
-              <textarea
-                className="min-h-[120px] rounded-xl border border-slate-200 bg-white px-3 py-2 font-mono text-sm"
-                value={optionsText}
-                onChange={(e) => {
-                  const lines = e.target.value
-                    .split(/\r?\n/g)
-                    .map((s) => s.trim())
-                    .filter(Boolean);
-                  setConfig({ options: lines.length ? lines : ["Option 1"] });
-                }}
-              />
-            </div>
+            <OptionsEditor
+              key={local.id}
+              fieldId={local.id}
+              initialOptions={optionsList.length ? optionsList : ["Option 1"]}
+              onCommit={commitOptionsFromRaw}
+            />
           ) : null}
 
           {variant === "rating" ? (
@@ -379,9 +517,7 @@ function FieldSettingsDrawer(props: {
                       type="checkbox"
                       className="h-4 w-4"
                       checked={Boolean(((local.config as any)?.audio as any)?.allowRecord ?? true)}
-                      onChange={(e) =>
-                        setConfig({ audio: { ...(((local.config as any)?.audio as any) ?? {}), allowRecord: e.target.checked } })
-                      }
+                      onChange={(e) => setConfig({ audio: { ...(((local.config as any)?.audio as any) ?? {}), allowRecord: e.target.checked } })}
                     />
                     aufnehmen
                   </label>
@@ -390,9 +526,7 @@ function FieldSettingsDrawer(props: {
                       type="checkbox"
                       className="h-4 w-4"
                       checked={Boolean(((local.config as any)?.audio as any)?.allowPick ?? true)}
-                      onChange={(e) =>
-                        setConfig({ audio: { ...(((local.config as any)?.audio as any) ?? {}), allowPick: e.target.checked } })
-                      }
+                      onChange={(e) => setConfig({ audio: { ...(((local.config as any)?.audio as any) ?? {}), allowPick: e.target.checked } })}
                     />
                     wählen
                   </label>
@@ -477,13 +611,7 @@ function buildPresetConfigV1(form: BuilderForm, fields: BuilderField[]): PresetC
   };
 }
 
-function SettingsModal(props: {
-  open: boolean;
-  form: BuilderForm;
-  saving: boolean;
-  onClose: () => void;
-  onSave: (draft: SettingsDraft) => void;
-}) {
+function SettingsModal(props: { open: boolean; form: BuilderForm; saving: boolean; onClose: () => void; onSave: (draft: SettingsDraft) => void }) {
   const [draft, setDraft] = useState<SettingsDraft>({
     name: props.form.name ?? "",
     description: props.form.description ?? "",
@@ -673,7 +801,6 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const existingKeys = useMemo(() => new Set(fields.map((f) => f.key)), [fields]);
-
   const canSaveAsTemplate = !readOnly && fields.length > 0;
 
   useEffect(() => {
@@ -734,6 +861,7 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
           "firstName",
           "lastName",
           "company",
+          "title",
           "email",
           "phone",
           "address",
@@ -751,7 +879,6 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
       setForm((json.data as any).form as BuilderForm);
       setFields(normalized.sort((a, b) => a.sortOrder - b.sortOrder));
 
-      // keep tab/section valid after reload
       setActiveSection((cur) => (cur === "CONTACT" ? "CONTACT" : "FORM"));
       setTab((cur) => (cur === "CONTACT" ? "CONTACT" : "FORM"));
 
@@ -817,8 +944,8 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
     [patchBuilder, load]
   );
 
-  const onDeleteField = useCallback(async (id: string) => {
-    setConfirmDeleteId(id);
+  const onDeleteField = useCallback(async (_id: string) => {
+    setConfirmDeleteId(_id);
   }, []);
 
   const moveFieldToSection = useCallback(
@@ -985,9 +1112,7 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
         : null;
 
     const overMidY =
-      overRect && typeof overRect.top === "number" && typeof overRect.height === "number"
-        ? overRect.top + overRect.height / 2
-        : null;
+      overRect && typeof overRect.top === "number" && typeof overRect.height === "number" ? overRect.top + overRect.height / 2 : null;
 
     const after = activeCenterY !== null && overMidY !== null ? activeCenterY > overMidY : false;
     return { section: sec, index: after ? idx + 1 : idx };
@@ -1066,8 +1191,7 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
         const toListNext = toList.slice();
         toListNext.push(activeField);
 
-        const nextAll =
-          targetSection === "FORM" ? [...toListNext, ...fromListWithout] : [...fromListWithout, ...toListNext];
+        const nextAll = targetSection === "FORM" ? [...toListNext, ...fromListWithout] : [...fromListWithout, ...toListNext];
 
         if (fromSection !== targetSection) {
           await onPatchField(activeField.id, { config: { ...(activeField.config ?? {}), section: targetSection } as any });
@@ -1270,13 +1394,7 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
         }}
       />
 
-      <SettingsModal
-        open={settingsOpen}
-        form={form}
-        saving={settingsSaving}
-        onClose={() => setSettingsOpen(false)}
-        onSave={onSaveSettings}
-      />
+      <SettingsModal open={settingsOpen} form={form} saving={settingsSaving} onClose={() => setSettingsOpen(false)} onSave={onSaveSettings} />
 
       <SaveTemplateModal
         open={saveTemplateOpen}
@@ -1292,8 +1410,7 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
           <div className="text-xl font-semibold text-slate-900">{form.name}</div>
           <div className="mt-1 text-sm text-slate-500">
             Modus: <span className="font-semibold text-slate-700">{readOnly ? "Vorschau" : "Bearbeiten"}</span>{" "}
-            <span className="text-slate-300">•</span>{" "}
-            Status:{" "}
+            <span className="text-slate-300">•</span> Status:{" "}
             <span className="font-semibold text-slate-700">
               {form.status === "ACTIVE" ? "Aktiv" : form.status === "ARCHIVED" ? "Archiviert" : "Entwurf"}
             </span>
@@ -1318,10 +1435,7 @@ export default function BuilderShell(props: { formId: string; mode?: "edit" | "p
             disabled={!canSaveAsTemplate || saveTemplateBusy}
             onClick={() => {
               if (!fieldsRef.current.length) {
-                setToast({
-                  kind: "error",
-                  message: "Bitte zuerst mindestens ein Feld hinzufügen, bevor du eine Vorlage speicherst.",
-                });
+                setToast({ kind: "error", message: "Bitte zuerst mindestens ein Feld hinzufügen, bevor du eine Vorlage speicherst." });
                 return;
               }
               setSaveTemplateOpen(true);

@@ -69,6 +69,21 @@ function fmtDt(iso: string): string {
   }
 }
 
+function labelScope(s: ExportScope): string {
+  return s === "ACTIVE_EVENT" ? "Aktives Event" : "Alle (Tenant)";
+}
+function labelLeadStatus(s: LeadStatusFilter): string {
+  if (s === "NEW") return "Nur neue";
+  if (s === "REVIEWED") return "Nur bearbeitet";
+  return "Alle";
+}
+function labelStatus(s: ExportStatus): string {
+  if (s === "DONE") return "Fertig";
+  if (s === "FAILED") return "Fehler";
+  if (s === "RUNNING") return "Läuft";
+  return "Wartet";
+}
+
 function statusPill(status: ExportStatus) {
   const base = "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium";
   switch (status) {
@@ -89,8 +104,7 @@ function buttonClass(kind: "primary" | "secondary" | "ghost", disabled?: boolean
     "inline-flex items-center justify-center rounded-md px-3 py-2 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-neutral-300";
   const dis = disabled ? "opacity-50 pointer-events-none" : "";
   if (kind === "primary") return `${base} ${dis} bg-neutral-900 text-white hover:bg-neutral-800`;
-  if (kind === "secondary")
-    return `${base} ${dis} bg-white text-neutral-900 ring-1 ring-inset ring-neutral-300 hover:bg-neutral-50`;
+  if (kind === "secondary") return `${base} ${dis} bg-white text-neutral-900 ring-1 ring-inset ring-neutral-300 hover:bg-neutral-50`;
   return `${base} ${dis} bg-transparent text-neutral-800 hover:bg-neutral-100`;
 }
 
@@ -148,7 +162,6 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
     };
   }, []);
 
-  // Prefill query params (first load only)
   useEffect(() => {
     if (didInitPrefillRef.current) return;
     didInitPrefillRef.current = true;
@@ -170,25 +183,22 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
     setQ(nextDefaults.q);
   }, [sp, initialDefaults]);
 
-  const load = useCallback(
-    async (opts?: { silent?: boolean }) => {
-      const silent = Boolean(opts?.silent);
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = Boolean(opts?.silent);
 
-      if (!silent) setRefreshing(true);
-      setError(null);
+    if (!silent) setRefreshing(true);
+    setError(null);
 
-      const data = await fetchJson<ListResp>("/api/admin/v1/exports?take=20");
-      if (!data.ok) {
-        setError({ message: data.error.message, traceId: data.traceId });
-        if (!silent) setRefreshing(false);
-        return;
-      }
-
-      setItems(data.data.items);
+    const data = await fetchJson<ListResp>("/api/admin/v1/exports?take=20");
+    if (!data.ok) {
+      setError({ message: data.error.message, traceId: data.traceId });
       if (!silent) setRefreshing(false);
-    },
-    []
-  );
+      return;
+    }
+
+    setItems(data.data.items);
+    if (!silent) setRefreshing(false);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -288,11 +298,7 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
     <div className="relative space-y-6">
       {toast ? (
         <div className="fixed bottom-4 right-4 z-50">
-          <div
-            className={`rounded-xl border bg-white px-4 py-3 text-sm shadow-lg ${
-              toast.kind === "success" ? "border-emerald-200" : "border-rose-200"
-            }`}
-          >
+          <div className={`rounded-xl border bg-white px-4 py-3 text-sm shadow-lg ${toast.kind === "success" ? "border-emerald-200" : "border-rose-200"}`}>
             <div className={toast.kind === "success" ? "text-emerald-800" : "text-rose-800"}>{toast.message}</div>
           </div>
         </div>
@@ -313,13 +319,8 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
                 Reset
               </button>
             ) : null}
-            <button
-              className={buttonClass("secondary", loading || refreshing)}
-              onClick={() => load()}
-              type="button"
-              title="Liste aktualisieren"
-            >
-              {refreshing ? "Refresh…" : "Refresh"}
+            <button className={buttonClass("secondary", loading || refreshing)} onClick={() => load()} type="button" title="Liste aktualisieren">
+              {refreshing ? "Aktualisiere…" : "Aktualisieren"}
             </button>
           </div>
         </div>
@@ -334,7 +335,7 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
               disabled={creating}
             >
               <option value="ACTIVE_EVENT">Aktives Event</option>
-              <option value="ALL">Alle (tenant)</option>
+              <option value="ALL">Alle (Tenant)</option>
             </select>
           </label>
 
@@ -368,29 +369,35 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
           <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
             <div className="font-medium">Export fehlgeschlagen</div>
             <div className="mt-1">{createError.message}</div>
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-rose-700">
-              {createError.code ? <span className="rounded bg-white/60 px-2 py-0.5">Code: {createError.code}</span> : null}
-              {createError.traceId ? (
-                <>
-                  <span className="rounded bg-white/60 px-2 py-0.5">TraceId: {createError.traceId}</span>
-                  <button className="underline" type="button" onClick={() => copyToClipboard(createError.traceId!)}>
-                    TraceId kopieren
-                  </button>
-                </>
-              ) : null}
-              {createError.code === "NO_ACTIVE_EVENT" ? (
-                <Link className="underline" href={eventsLinkHref}>
-                  Zu Events
-                </Link>
-              ) : null}
-            </div>
+
+            {(createError.traceId || createError.code) ? (
+              <details className="mt-2">
+                <summary className="cursor-pointer text-xs text-rose-800 underline underline-offset-4">Support-Infos</summary>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-rose-700">
+                  {createError.code ? <span className="rounded bg-white/60 px-2 py-0.5">Code: {createError.code}</span> : null}
+                  {createError.traceId ? (
+                    <>
+                      <span className="rounded bg-white/60 px-2 py-0.5">
+                        Support-Code: <span className="font-mono">{createError.traceId}</span>
+                      </span>
+                      <button className="underline" type="button" onClick={() => copyToClipboard(createError.traceId!)}>
+                        Kopieren
+                      </button>
+                    </>
+                  ) : null}
+                  {createError.code === "NO_ACTIVE_EVENT" ? (
+                    <Link className="underline" href={eventsLinkHref}>
+                      Zu Events
+                    </Link>
+                  ) : null}
+                </div>
+              </details>
+            ) : null}
           </div>
         ) : null}
 
         <div className="mt-4 flex items-center justify-between gap-3">
-          <div className="text-xs text-neutral-500">
-            CSV ist Excel-kompatibel (UTF-8). Dynamische Felder werden als <span className="font-mono">field_*</span> exportiert.
-          </div>
+          <div className="text-xs text-neutral-500">CSV ist Excel-kompatibel (UTF-8).</div>
 
           <button className={buttonClass("primary", creating)} onClick={onCreate} type="button" aria-busy={creating}>
             {creating ? (
@@ -411,7 +418,7 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
             <div className="text-sm font-medium text-neutral-900">Letzte Exporte</div>
             <div className="mt-1 text-xs text-neutral-600">Jobs werden bei RUNNING/QUEUED automatisch aktualisiert.</div>
           </div>
-          {hasRunning ? <span className="text-xs text-neutral-600">Polling aktiv…</span> : <span className="text-xs text-neutral-500">—</span>}
+          {hasRunning ? <span className="text-xs text-neutral-600">Aktualisierung aktiv…</span> : <span className="text-xs text-neutral-500">—</span>}
         </div>
 
         {loading ? (
@@ -421,16 +428,22 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
             <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
               <div className="font-medium">Fehler</div>
               <div className="mt-1">{error.message}</div>
+
               {error.traceId ? (
-                <div className="mt-2 flex items-center gap-2 text-xs text-rose-700">
-                  <span className="rounded bg-white/60 px-2 py-0.5">TraceId: {error.traceId}</span>
-                  <button className="underline" type="button" onClick={() => copyToClipboard(error.traceId!)}>
-                    TraceId kopieren
-                  </button>
-                  <button className="underline" type="button" onClick={() => load()}>
-                    Retry
-                  </button>
-                </div>
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-xs text-rose-800 underline underline-offset-4">Support-Infos</summary>
+                  <div className="mt-2 flex items-center gap-2 text-xs text-rose-700">
+                    <span className="rounded bg-white/60 px-2 py-0.5">
+                      Support-Code: <span className="font-mono">{error.traceId}</span>
+                    </span>
+                    <button className="underline" type="button" onClick={() => copyToClipboard(error.traceId!)}>
+                      Kopieren
+                    </button>
+                    <button className="underline" type="button" onClick={() => load()}>
+                      Erneut versuchen
+                    </button>
+                  </div>
+                </details>
               ) : null}
             </div>
           </div>
@@ -460,6 +473,7 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
                           <div>{fmtDt(it.createdAt)}</div>
                           <div className="mt-0.5 text-xs text-neutral-500">Update: {fmtDt(it.updatedAt)}</div>
                         </td>
+
                         <td className="border-b border-neutral-100 px-4 py-3 text-sm text-neutral-900">
                           <div className="font-medium">{it.title}</div>
                           <div className="mt-0.5 text-xs text-neutral-600">
@@ -467,9 +481,11 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
                             {it.fileName ? <span className="ml-2 font-mono text-[11px] text-neutral-500">{it.fileName}</span> : null}
                           </div>
                         </td>
+
                         <td className="border-b border-neutral-100 px-4 py-3 text-sm text-neutral-700">
-                          <span className={statusPill(it.status)}>{it.status}</span>
+                          <span className={statusPill(it.status)}>{labelStatus(it.status)}</span>
                         </td>
+
                         <td className="border-b border-neutral-100 px-4 py-3 text-sm text-neutral-700">
                           <div className="flex flex-wrap items-center gap-2">
                             <button
@@ -477,22 +493,18 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
                               type="button"
                               onClick={() => onDownload(it)}
                               disabled={!canDownload || downloading}
-                              title={!canDownload ? "Download ist erst bei DONE verfügbar." : "CSV herunterladen"}
+                              title={!canDownload ? "Download ist erst bei Fertig verfügbar." : "CSV herunterladen"}
                             >
                               {downloading ? "Download…" : "Download"}
                             </button>
 
                             {it.status === "FAILED" ? (
                               <button className={buttonClass("secondary", creating)} type="button" onClick={onRetry} disabled={creating}>
-                                Retry
+                                Erneut versuchen
                               </button>
                             ) : null}
 
-                            <button
-                              className={buttonClass("ghost")}
-                              type="button"
-                              onClick={() => setExpandedId(expanded ? null : it.id)}
-                            >
+                            <button className={buttonClass("ghost")} type="button" onClick={() => setExpandedId(expanded ? null : it.id)}>
                               Details
                             </button>
                           </div>
@@ -505,37 +517,41 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
                             <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
                               <div className="text-xs text-neutral-600">
                                 <div className="font-medium text-neutral-800">Filter</div>
-                                <div className="mt-1">
-                                  Scope: <span className="font-mono">{it.filters.scope}</span>
-                                </div>
-                                <div>
-                                  Leads: <span className="font-mono">{it.filters.leadStatus}</span>
-                                </div>
-                                <div>
-                                  Suche: <span className="font-mono">{it.filters.q ? `"${it.filters.q}"` : "—"}</span>
-                                </div>
+                                <div className="mt-1">Scope: <span className="font-medium">{labelScope(it.filters.scope)}</span></div>
+                                <div>Leads: <span className="font-medium">{labelLeadStatus(it.filters.leadStatus)}</span></div>
+                                <div>Suche: <span className="font-medium">{it.filters.q ? `"${it.filters.q}"` : "—"}</span></div>
                               </div>
 
                               <div className="text-xs text-neutral-600">
-                                <div className="font-medium text-neutral-800">Job</div>
+                                <div className="font-medium text-neutral-800">Status</div>
                                 <div className="mt-1">
-                                  ID: <span className="font-mono">{it.id}</span>
+                                  <span className={statusPill(it.status)}>{labelStatus(it.status)}</span>
                                 </div>
-                                <div>
-                                  Status: <span className="font-mono">{it.status}</span>
-                                </div>
+
+                                <details className="mt-2">
+                                  <summary className="cursor-pointer text-xs text-neutral-700 underline underline-offset-4">Support-Infos</summary>
+                                  <div className="mt-2 space-y-1 text-xs text-neutral-700">
+                                    <div>
+                                      Referenz: <span className="font-mono">{it.id}</span>
+                                    </div>
+                                  </div>
+                                </details>
                               </div>
 
                               <div className="text-xs text-neutral-600">
                                 <div className="font-medium text-neutral-800">Fehler</div>
                                 <div className="mt-1">{it.errorMessage ?? "—"}</div>
+
                                 {it.errorTraceId ? (
-                                  <div className="mt-1 flex items-center gap-2">
-                                    <span className="rounded bg-white px-2 py-0.5 font-mono text-[11px]">{it.errorTraceId}</span>
-                                    <button className="underline" type="button" onClick={() => copyToClipboard(it.errorTraceId!)}>
-                                      TraceId kopieren
-                                    </button>
-                                  </div>
+                                  <details className="mt-2">
+                                    <summary className="cursor-pointer text-xs text-neutral-700 underline underline-offset-4">Support-Infos</summary>
+                                    <div className="mt-2 flex items-center gap-2">
+                                      <span className="rounded bg-white px-2 py-0.5 font-mono text-[11px]">{it.errorTraceId}</span>
+                                      <button className="underline" type="button" onClick={() => copyToClipboard(it.errorTraceId!)}>
+                                        Kopieren
+                                      </button>
+                                    </div>
+                                  </details>
                                 ) : null}
                               </div>
                             </div>

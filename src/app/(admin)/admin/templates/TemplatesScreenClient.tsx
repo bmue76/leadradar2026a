@@ -149,6 +149,20 @@ function ConfirmDialog(props: {
   );
 }
 
+function SourcePill(props: { source: TemplateSource }) {
+  return (
+    <span
+      className={cx(
+        "inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold",
+        props.source === "SYSTEM" ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700"
+      )}
+      title={props.source === "SYSTEM" ? "Systemvorlage" : "Eigene Vorlage"}
+    >
+      {props.source === "SYSTEM" ? "System" : "Eigen"}
+    </span>
+  );
+}
+
 function CreateFromTemplateModal(props: {
   template: TemplateItem;
   busy?: boolean;
@@ -169,7 +183,8 @@ function CreateFromTemplateModal(props: {
             <div className="min-w-0">
               <div className="truncate text-base font-semibold text-slate-900">Formular erstellen</div>
               <div className="mt-0.5 truncate text-xs text-slate-500">
-                Vorlage: <span className="font-semibold text-slate-700">{t.name}</span> · Quelle:{" "}
+                Vorlage: <span className="font-semibold text-slate-700">{t.name}</span> · Kategorie:{" "}
+                <span className="font-semibold text-slate-700">{t.category ?? "—"}</span> · Quelle:{" "}
                 <span className="font-semibold text-slate-700">{t.source === "SYSTEM" ? "System" : "Eigen"}</span>
               </div>
             </div>
@@ -429,9 +444,7 @@ export default function TemplatesScreenClient() {
       <ConfirmDialog
         open={!!confirmDelete}
         title="Vorlage löschen?"
-        description={
-          confirmDelete ? `„${confirmDelete.name}“ wird gelöscht. Bereits erstellte Formulare bleiben unverändert.` : undefined
-        }
+        description={confirmDelete ? `„${confirmDelete.name}“ wird gelöscht. Bereits erstellte Formulare bleiben unverändert.` : undefined}
         confirmLabel="Löschen"
         danger
         busy={busy}
@@ -458,12 +471,7 @@ export default function TemplatesScreenClient() {
               onChange={(e) => setParam({ q: e.target.value.trim() ? e.target.value : "" })}
             />
 
-            <select
-              className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm"
-              value={source}
-              onChange={(e) => setParam({ source: e.target.value })}
-              title="Quelle"
-            >
+            <select className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm" value={source} onChange={(e) => setParam({ source: e.target.value })} title="Quelle">
               <option value="ALL">Alle</option>
               <option value="TENANT">Eigene</option>
               <option value="SYSTEM">System</option>
@@ -483,12 +491,7 @@ export default function TemplatesScreenClient() {
               ))}
             </select>
 
-            <select
-              className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm"
-              value={sort}
-              onChange={(e) => setParam({ sort: e.target.value })}
-              title="Sortierung"
-            >
+            <select className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm" value={sort} onChange={(e) => setParam({ sort: e.target.value })} title="Sortierung">
               <option value="updatedAt">Zuletzt geändert</option>
               <option value="name">Name</option>
             </select>
@@ -511,10 +514,7 @@ export default function TemplatesScreenClient() {
               >
                 Aktualisieren
               </button>
-              <Link
-                className="h-9 rounded-xl border border-slate-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-                href="/admin/forms"
-              >
+              <Link className="h-9 rounded-xl border border-slate-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800" href="/admin/forms">
                 Zu Formularen
               </Link>
             </div>
@@ -572,7 +572,9 @@ export default function TemplatesScreenClient() {
                       {it.description ? <div className="mt-0.5 text-xs text-slate-500">{it.description}</div> : null}
                     </td>
                     <td className="py-3 text-sm text-slate-700">{it.category ?? "—"}</td>
-                    <td className="py-3 text-sm text-slate-700">{it.source === "SYSTEM" ? "System" : "Eigen"}</td>
+                    <td className="py-3 text-sm text-slate-700">
+                      <SourcePill source={it.source} />
+                    </td>
                     <td className="py-3 text-sm text-slate-700">{String(it.fieldCount ?? 0)}</td>
                     <td className="py-3 text-sm text-slate-700">{toIsoDateShort(it.updatedAt)}</td>
                     <td className="py-3 text-right">
@@ -592,6 +594,7 @@ export default function TemplatesScreenClient() {
                             className="rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-60"
                             disabled={busy}
                             onClick={() => setConfirmDelete({ id: it.id, name: it.name })}
+                            title="Nur eigene Vorlagen sind löschbar."
                           >
                             Löschen
                           </button>

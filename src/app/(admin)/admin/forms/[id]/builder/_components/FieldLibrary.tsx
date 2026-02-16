@@ -288,6 +288,17 @@ export const LIB_ITEMS: LibraryItem[] = [
     defaultConfig: { section: "CONTACT" },
   },
   {
+    id:"c_title",
+    tab: "CONTACT",
+    kind: "contact",
+    title: "Funktion",
+    subtitle: "Kontakt",
+    type: ("TEXT" as FieldType),
+    key: "title",
+    defaultLabel: "Funktion",
+    defaultPlaceholder: "z.B. Verkaufsleiter",
+  },
+  {
     id: "c_email",
     tab: "CONTACT",
     kind: "contact",
