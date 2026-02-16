@@ -35,38 +35,35 @@ function pickArray(payload: unknown): unknown[] {
   return [];
 }
 
-function isoShort(d?: string | null): string {
-  if (!d) return "—";
-  const dt = new Date(d);
-  if (Number.isNaN(dt.getTime())) return "—";
-  return dt.toISOString().replace("T", " ").slice(0, 16) + "Z";
+function fmtDt(iso?: string | null): string {
+  if (!iso) return "—";
+  try {
+    return new Intl.DateTimeFormat("de-CH", { dateStyle: "short", timeStyle: "short" }).format(new Date(iso));
+  } catch {
+    return iso;
+  }
+}
+
+function statusLabel(s: string): string {
+  const v = (s || "").toUpperCase();
+  if (v === "ACTIVE") return "Aktiv";
+  if (v === "DRAFT") return "Entwurf";
+  if (v === "ARCHIVED") return "Archiviert";
+  return v || "—";
 }
 
 function chip(status: string): string {
   const s = (status || "").toUpperCase();
-  const base =
-    "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border";
-  if (s === "ACTIVE")
-    return `${base} bg-emerald-50 text-emerald-900 border-emerald-200`;
-  if (s === "DRAFT")
-    return `${base} bg-neutral-50 text-neutral-800 border-neutral-200`;
-  if (s === "ARCHIVED")
-    return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
+  const base = "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border";
+  if (s === "ACTIVE") return `${base} bg-emerald-50 text-emerald-900 border-emerald-200`;
+  if (s === "DRAFT") return `${base} bg-neutral-50 text-neutral-800 border-neutral-200`;
+  if (s === "ARCHIVED") return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
   return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
-}
-
-async function copyToClipboard(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function fmtApiErr(res: ApiResult<unknown>): string {
   if (res.ok) return "";
-  return `${res.code}: ${res.message}${res.traceId ? ` · trace ${res.traceId}` : ""}`;
+  return `${res.code}: ${res.message}${res.traceId ? ` · Support-Code: ${res.traceId}` : ""}`;
 }
 
 export default function EventsClient() {
@@ -76,7 +73,6 @@ export default function EventsClient() {
 
   const [items, setItems] = React.useState<EventListItem[]>([]);
   const [filterStatus, setFilterStatus] = React.useState<string>("ALL");
-  const [copiedId, setCopiedId] = React.useState<string | null>(null);
   const [busyEventId, setBusyEventId] = React.useState<string | null>(null);
 
   function pushNotice(msg: string) {
@@ -108,19 +104,17 @@ export default function EventsClient() {
     const parsed: EventListItem[] = arr
       .map((x) => {
         if (!isRecord(x)) return null;
+
         const id = typeof x.id === "string" ? x.id : "";
         const name = typeof x.name === "string" ? x.name : "";
         const st = typeof x.status === "string" ? x.status : "—";
         if (!id || !name) return null;
 
-        const startsAt =
-          typeof x.startsAt === "string" ? x.startsAt : x.startsAt === null ? null : null;
-        const endsAt =
-          typeof x.endsAt === "string" ? x.endsAt : x.endsAt === null ? null : null;
+        const startsAt = typeof x.startsAt === "string" ? x.startsAt : x.startsAt === null ? null : null;
+        const endsAt = typeof x.endsAt === "string" ? x.endsAt : x.endsAt === null ? null : null;
 
         const createdAt = typeof x.createdAt === "string" ? x.createdAt : undefined;
-        const boundDevicesCount =
-          typeof x.boundDevicesCount === "number" ? x.boundDevicesCount : undefined;
+        const boundDevicesCount = typeof x.boundDevicesCount === "number" ? x.boundDevicesCount : undefined;
 
         return { id, name, status: st, startsAt, endsAt, boundDevicesCount, createdAt };
       })
@@ -146,17 +140,16 @@ export default function EventsClient() {
       return;
     }
 
-    let msg = `Status gesetzt: ${status}`;
+    let msg = `Status gesetzt: ${statusLabel(status)}`;
+
     if (isRecord(res.data)) {
-      const autoArchivedEventId =
-        typeof res.data.autoArchivedEventId === "string" ? res.data.autoArchivedEventId : null;
-      const devicesUnboundCount =
-        typeof res.data.devicesUnboundCount === "number" ? res.data.devicesUnboundCount : null;
+      const autoArchivedEventId = typeof res.data.autoArchivedEventId === "string" ? res.data.autoArchivedEventId : null;
+      const devicesUnboundCount = typeof res.data.devicesUnboundCount === "number" ? res.data.devicesUnboundCount : null;
 
       if (status === "ACTIVE" && autoArchivedEventId) {
-        msg = `Event aktiviert · vorheriges ACTIVE archiviert · Devices unbound: ${devicesUnboundCount ?? 0}`;
+        msg = `Event aktiviert · vorheriges ACTIVE archiviert · Devices gelöst: ${devicesUnboundCount ?? 0}`;
       } else if (status !== "ACTIVE") {
-        msg = `Event ${status} · Devices unbound: ${devicesUnboundCount ?? 0}`;
+        msg = `Event ${statusLabel(status)} · Devices gelöst: ${devicesUnboundCount ?? 0}`;
       }
     }
 
@@ -203,8 +196,7 @@ export default function EventsClient() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Events</h1>
           <p className="mt-1 text-sm text-neutral-600">
-            Übersicht deiner Messen/Events. Guardrail (MVP): Nur 1 ACTIVE Event pro Tenant — Aktivieren archiviert das
-            bisher aktive Event (und löst Devices).
+            Übersicht deiner Messen/Events. MVP-Guardrail: Nur 1 ACTIVE Event pro Tenant — Aktivieren archiviert das bisher aktive Event (und löst Devices).
           </p>
         </div>
 
@@ -214,11 +206,12 @@ export default function EventsClient() {
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
             disabled={loading}
+            aria-label="Statusfilter"
           >
-            <option value="ALL">All</option>
-            <option value="ACTIVE">ACTIVE</option>
-            <option value="DRAFT">DRAFT</option>
-            <option value="ARCHIVED">ARCHIVED</option>
+            <option value="ALL">Alle</option>
+            <option value="ACTIVE">Aktiv</option>
+            <option value="DRAFT">Entwurf</option>
+            <option value="ARCHIVED">Archiviert</option>
           </select>
 
           <button
@@ -226,7 +219,7 @@ export default function EventsClient() {
             onClick={() => void load()}
             className="rounded-xl border border-neutral-200 px-3 py-2 text-sm text-neutral-800 hover:bg-neutral-50"
           >
-            Refresh
+            Aktualisieren
           </button>
 
           <Link
@@ -245,12 +238,7 @@ export default function EventsClient() {
       ) : null}
 
       {error ? (
-        <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          {error}
-          <div className="mt-2 text-xs text-red-800/70">
-            Teste API direkt: <span className="font-mono">/api/admin/v1/events</span>
-          </div>
-        </div>
+        <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       ) : null}
 
       <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white">
@@ -259,45 +247,45 @@ export default function EventsClient() {
             <tr>
               <th className="px-4 py-3">Name</th>
               <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Starts</th>
-              <th className="px-4 py-3">Ends</th>
+              <th className="px-4 py-3">Start</th>
+              <th className="px-4 py-3">Ende</th>
               <th className="px-4 py-3">Devices</th>
-              <th className="px-4 py-3">Event ID</th>
-              <th className="px-4 py-3 text-right">Actions</th>
+              <th className="px-4 py-3 text-right">Aktionen</th>
             </tr>
           </thead>
 
           <tbody>
             {loading ? (
               <tr>
-                <td className="px-4 py-4 text-neutral-600" colSpan={7}>
-                  Loading…
+                <td className="px-4 py-4 text-neutral-600" colSpan={6}>
+                  Lade…
                 </td>
               </tr>
             ) : items.length === 0 ? (
               <tr>
-                <td className="px-4 py-4 text-neutral-600" colSpan={7}>
-                  No events found.
+                <td className="px-4 py-4 text-neutral-600" colSpan={6}>
+                  Keine Events gefunden.
                 </td>
               </tr>
             ) : (
               items.map((ev) => {
                 const st = (ev.status || "").toUpperCase();
                 const isBusy = busyEventId === ev.id;
-
-                const countLabel =
-                  typeof ev.boundDevicesCount === "number" ? String(ev.boundDevicesCount) : "—";
+                const devicesLabel = typeof ev.boundDevicesCount === "number" ? String(ev.boundDevicesCount) : "—";
 
                 return (
                   <tr key={ev.id} className="border-t border-neutral-100">
                     <td className="px-4 py-3">{ev.name}</td>
+
                     <td className="px-4 py-3">
-                      <span className={chip(ev.status)}>{ev.status}</span>
+                      <span className={chip(ev.status)}>{statusLabel(ev.status)}</span>
                     </td>
-                    <td className="px-4 py-3">{isoShort(ev.startsAt)}</td>
-                    <td className="px-4 py-3">{isoShort(ev.endsAt)}</td>
-                    <td className="px-4 py-3 text-neutral-800">{countLabel}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{ev.id}</td>
+
+                    <td className="px-4 py-3">{fmtDt(ev.startsAt)}</td>
+                    <td className="px-4 py-3">{fmtDt(ev.endsAt)}</td>
+
+                    <td className="px-4 py-3 text-neutral-800">{devicesLabel}</td>
+
                     <td className="px-4 py-3 text-right">
                       <div className="inline-flex flex-wrap items-center justify-end gap-2">
                         {st !== "ACTIVE" ? (
@@ -308,7 +296,7 @@ export default function EventsClient() {
                             className="rounded-xl border border-neutral-200 px-3 py-1.5 text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-50"
                             title="Setzt dieses Event aktiv. Ein anderes ACTIVE Event wird automatisch archiviert."
                           >
-                            Activate
+                            Aktivieren
                           </button>
                         ) : (
                           <button
@@ -316,9 +304,9 @@ export default function EventsClient() {
                             onClick={() => void setEventStatus(ev.id, "ARCHIVED")}
                             disabled={isBusy}
                             className="rounded-xl border border-neutral-200 px-3 py-1.5 text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-50"
-                            title="Archiviert dieses Event und unbindet Devices."
+                            title="Archiviert dieses Event und löst Devices."
                           >
-                            Archive
+                            Archivieren
                           </button>
                         )}
 
@@ -330,20 +318,6 @@ export default function EventsClient() {
                           title="Danger Zone: setzt activeEventId=null für alle Devices, die auf dieses Event zeigen."
                         >
                           Devices lösen
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            const ok = await copyToClipboard(ev.id);
-                            if (ok) {
-                              setCopiedId(ev.id);
-                              setTimeout(() => setCopiedId(null), 1200);
-                            }
-                          }}
-                          className="rounded-xl border border-neutral-200 px-3 py-1.5 text-sm text-neutral-800 hover:bg-neutral-50"
-                        >
-                          {copiedId === ev.id ? "Copied" : "Copy ID"}
                         </button>
                       </div>
                     </td>
