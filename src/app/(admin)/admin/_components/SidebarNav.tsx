@@ -14,7 +14,11 @@ import {
   IconStats,
 } from "./icons";
 
-type NavItem = { href: string; label: string };
+type NavItem = {
+  href: string;
+  label: string;
+  exact?: boolean;
+};
 
 type NavGroup = {
   key: string;
@@ -24,7 +28,12 @@ type NavGroup = {
 };
 
 const NAV: NavGroup[] = [
-  { key: "start", title: "Start", Icon: IconHome, items: [{ href: "/admin", label: "Übersicht" }] },
+  {
+    key: "start",
+    title: "Start",
+    Icon: IconHome,
+    items: [{ href: "/admin", label: "Übersicht", exact: true }],
+  },
   {
     key: "setup",
     title: "Setup",
@@ -54,27 +63,36 @@ const NAV: NavGroup[] = [
       { href: "/admin/exports", label: "Exporte" },
     ],
   },
-  { key: "stats", title: "Statistik", Icon: IconStats, items: [{ href: "/admin/stats", label: "Statistik" }] },
+  {
+    key: "stats",
+    title: "Statistik",
+    Icon: IconStats,
+    items: [{ href: "/admin/stats", label: "Statistik" }],
+  },
   {
     key: "billing",
     title: "Abrechnung",
     Icon: IconBilling,
     items: [
-      { href: "/admin/billing", label: "Übersicht" },
+      // Overview should NOT be active when user is in /admin/billing/*
+      { href: "/admin/billing", label: "Übersicht", exact: true },
       { href: "/admin/billing/accounting", label: "Firma & Belege" },
     ],
   },
 ];
 
-function isActivePath(pathname: string, href: string) {
-  if (href === "/admin") return pathname === "/admin";
+function isActivePath(pathname: string, item: NavItem) {
+  const href = item.href;
+
+  if (item.exact) return pathname === href;
+
   return pathname === href || pathname.startsWith(href + "/");
 }
 
 function findActiveGroupKey(pathname: string): string {
   for (const group of NAV) {
     for (const item of group.items) {
-      if (isActivePath(pathname, item.href)) return group.key;
+      if (isActivePath(pathname, item)) return group.key;
     }
   }
   return "start";
@@ -103,7 +121,7 @@ export function SidebarNav() {
               onClick={() => setOpenKey((prev) => (prev === group.key ? "" : group.key))}
               className={[
                 "group flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-sm",
-                "hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-[color:var(--lr-accent-soft)]",
+                "hover:bg-slate-100",
                 isGroupActive ? "bg-white text-slate-900" : "text-slate-700",
               ].join(" ")}
               aria-expanded={isOpen}
@@ -140,14 +158,14 @@ export function SidebarNav() {
               <div className="relative ml-6 border-l border-slate-200 pl-5">
                 <div className="flex flex-col gap-1 py-1">
                   {group.items.map((item) => {
-                    const active = isActivePath(pathname, item.href);
+                    const active = isActivePath(pathname, item);
+
                     return (
                       <Link
                         key={item.href}
                         href={item.href}
                         className={[
                           "relative flex items-center rounded-lg px-3 py-1.5 text-sm",
-                          "focus:outline-none focus:ring-2 focus:ring-[color:var(--lr-accent-soft)]",
                           active
                             ? "bg-[color:var(--lr-accent-soft)] text-slate-900"
                             : "text-slate-700 hover:bg-slate-100",
