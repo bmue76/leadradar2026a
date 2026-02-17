@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Input, Select } from "../../_ui/Input";
 
 type ApiOk<T> = { ok: true; data: T; traceId: string };
 type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
@@ -175,11 +176,15 @@ export default function AccountingClient() {
       const json = (await safeReadJson(res)) as ApiResp<BrandingGetDto> | undefined;
 
       if (!res.ok || !json || json.ok !== true) {
-        const traceId = res.headers.get("x-trace-id") ?? (json && isRecord(json) ? pickString(json.traceId) ?? undefined : undefined);
+        const traceId =
+          res.headers.get("x-trace-id") ??
+          (json && isRecord(json) ? (pickString(json.traceId) ?? undefined) : undefined);
+
         const msg =
           json && isRecord(json) && json.ok === false && isRecord(json.error) && typeof json.error.message === "string"
             ? json.error.message
             : "Fehler beim Laden.";
+
         setLoadError({ message: msg, traceId });
         setLoading(false);
         return;
@@ -251,11 +256,15 @@ export default function AccountingClient() {
       const json = (await safeReadJson(res)) as ApiResp<{ tenant: TenantDto; profile: ProfileDto | null }> | undefined;
 
       if (!res.ok || !json || json.ok !== true) {
-        const traceId = res.headers.get("x-trace-id") ?? (json && isRecord(json) ? pickString(json.traceId) ?? undefined : undefined);
+        const traceId =
+          res.headers.get("x-trace-id") ??
+          (json && isRecord(json) ? (pickString(json.traceId) ?? undefined) : undefined);
+
         const msg =
           json && isRecord(json) && json.ok === false && isRecord(json.error) && typeof json.error.message === "string"
             ? json.error.message
             : "Fehler beim Speichern.";
+
         setInlineError({ message: msg, traceId });
         setSaving(false);
         return;
@@ -306,15 +315,14 @@ export default function AccountingClient() {
         </section>
       ) : (
         <>
-          <section className="rounded-2xl border border-slate-200 bg-white p-6">
+          <section className="lr-panel">
             <h2 className="lr-h2">Firma / Rechnungsadresse</h2>
-            <p className="lr-muted mt-1">Diese Daten sind Basis für Belege und spätere Rechnungen.</p>
+            <p className="mt-1 lr-muted">Diese Daten sind Basis für Belege und spätere Rechnungen.</p>
 
             <div className="mt-5 grid gap-4 md:grid-cols-2">
               <div className="space-y-2 md:col-span-2">
-                <div className="text-sm font-medium text-slate-800">Offizieller Firmenname *</div>
-                <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300"
+                <div className="lr-fieldLabel">Offizieller Firmenname *</div>
+                <Input
                   value={form.legalName}
                   placeholder={tenant?.name ?? "Firmenname"}
                   onChange={(e) => setField("legalName", e.target.value)}
@@ -322,48 +330,40 @@ export default function AccountingClient() {
               </div>
 
               <div className="space-y-2">
-                <div className="text-sm font-medium text-slate-800">Adresse</div>
-                <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300"
+                <div className="lr-fieldLabel">Adresse</div>
+                <Input
                   value={form.addressLine1 ?? ""}
                   onChange={(e) => setField("addressLine1", normalizeNull(e.target.value))}
                 />
               </div>
 
               <div className="space-y-2">
-                <div className="text-sm font-medium text-slate-800">Adresszusatz</div>
-                <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300"
+                <div className="lr-fieldLabel">Adresszusatz</div>
+                <Input
                   value={form.addressLine2 ?? ""}
                   onChange={(e) => setField("addressLine2", normalizeNull(e.target.value))}
                 />
               </div>
 
               <div className="space-y-2">
-                <div className="text-sm font-medium text-slate-800">PLZ</div>
-                <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300"
+                <div className="lr-fieldLabel">PLZ</div>
+                <Input
                   value={form.postalCode ?? ""}
                   onChange={(e) => setField("postalCode", normalizeNull(e.target.value))}
                 />
               </div>
 
               <div className="space-y-2">
-                <div className="text-sm font-medium text-slate-800">Ort</div>
-                <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300"
+                <div className="lr-fieldLabel">Ort</div>
+                <Input
                   value={form.city ?? ""}
                   onChange={(e) => setField("city", normalizeNull(e.target.value))}
                 />
               </div>
 
               <div className="space-y-2">
-                <div className="text-sm font-medium text-slate-800">Land</div>
-                <select
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300"
-                  value={form.countryCode}
-                  onChange={(e) => setField("countryCode", e.target.value)}
-                >
+                <div className="lr-fieldLabel">Land</div>
+                <Select value={form.countryCode} onChange={(e) => setField("countryCode", e.target.value)}>
                   <option value="CH">CH — Schweiz</option>
                   <option value="DE">DE — Deutschland</option>
                   <option value="AT">AT — Österreich</option>
@@ -372,13 +372,12 @@ export default function AccountingClient() {
                   <option value="IT">IT — Italien</option>
                   <option value="GB">GB — Vereinigtes Königreich</option>
                   <option value="US">US — USA</option>
-                </select>
+                </Select>
               </div>
 
               <div className="space-y-2">
-                <div className="text-sm font-medium text-slate-800">UID / MWST (optional)</div>
-                <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300"
+                <div className="lr-fieldLabel">UID / MWST (optional)</div>
+                <Input
                   value={form.vatId ?? ""}
                   onChange={(e) => setField("vatId", normalizeNull(e.target.value))}
                 />
@@ -386,33 +385,30 @@ export default function AccountingClient() {
             </div>
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-6">
+          <section className="lr-panel">
             <h2 className="lr-h2">Ansprechpartner</h2>
-            <p className="lr-muted mt-1">Optional – für spätere Kommunikation / Belege.</p>
+            <p className="mt-1 lr-muted">Optional – für spätere Kommunikation / Belege.</p>
 
             <div className="mt-5 grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
-                <div className="text-sm font-medium text-slate-800">Vorname</div>
-                <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300"
+                <div className="lr-fieldLabel">Vorname</div>
+                <Input
                   value={form.contactGivenName ?? ""}
                   onChange={(e) => setField("contactGivenName", normalizeNull(e.target.value))}
                 />
               </div>
 
               <div className="space-y-2">
-                <div className="text-sm font-medium text-slate-800">Nachname</div>
-                <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300"
+                <div className="lr-fieldLabel">Nachname</div>
+                <Input
                   value={form.contactFamilyName ?? ""}
                   onChange={(e) => setField("contactFamilyName", normalizeNull(e.target.value))}
                 />
               </div>
 
               <div className="space-y-2 md:col-span-2">
-                <div className="text-sm font-medium text-slate-800">E-Mail</div>
-                <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300"
+                <div className="lr-fieldLabel">E-Mail</div>
+                <Input
                   value={form.contactEmail ?? ""}
                   onChange={(e) => setField("contactEmail", normalizeNull(e.target.value))}
                   placeholder="name@firma.ch"
@@ -432,12 +428,9 @@ export default function AccountingClient() {
             ) : null}
           </section>
 
-          {/* Owner Transfer placeholder */}
-          <section className="rounded-2xl border border-slate-200 bg-white p-6">
+          <section className="lr-panel">
             <h2 className="lr-h2">Tenant-Inhaber</h2>
-            <p className="lr-muted mt-1">
-              Übergabe/Übertragung (z.B. Mitarbeiteraustritt) kommt als eigener Flow (TP7.4+). MVP: Owner-only.
-            </p>
+            <p className="mt-1 lr-muted">Übergabe/Übertragung (z.B. Mitarbeiteraustritt) kommt als eigener Flow (TP7.4+). MVP: Owner-only.</p>
           </section>
 
           <div className="flex flex-wrap items-center justify-between gap-3">

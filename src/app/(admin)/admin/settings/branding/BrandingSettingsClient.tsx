@@ -1,14 +1,7 @@
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ButtonHTMLAttributes,
-  type InputHTMLAttributes,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Input } from "../../_ui/Input";
 
 type ApiOk<T> = { ok: true; data: T; traceId: string };
 type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
@@ -66,16 +59,7 @@ type CMYK = { c: number; m: number; y: number; k: number };
 
 const BRANDING_UPDATED_EVENT = "lr_tenant_branding_updated";
 
-const ACCENT_PRESETS: string[] = [
-  "#0F172A",
-  "#2563EB",
-  "#0EA5E9",
-  "#16A34A",
-  "#DC2626",
-  "#7C3AED",
-  "#EA580C",
-  "#0D9488",
-];
+const ACCENT_PRESETS: string[] = ["#0F172A", "#2563EB", "#0EA5E9", "#16A34A", "#DC2626", "#7C3AED", "#EA580C", "#0D9488"];
 
 function normalizeNull(s: string): string | null {
   const t = s.trim();
@@ -138,12 +122,7 @@ function rgbToCmyk(rgb: RGB): CMYK {
   const m = ((1 - g - k) / (1 - k)) * 100;
   const y = ((1 - b - k) / (1 - k)) * 100;
 
-  return {
-    c: clampInt(c, 0, 100),
-    m: clampInt(m, 0, 100),
-    y: clampInt(y, 0, 100),
-    k: clampInt(k * 100, 0, 100),
-  };
+  return { c: clampInt(c, 0, 100), m: clampInt(m, 0, 100), y: clampInt(y, 0, 100), k: clampInt(k * 100, 0, 100) };
 }
 
 function cmykToRgb(cmyk: CMYK): RGB {
@@ -159,42 +138,17 @@ function cmykToRgb(cmyk: CMYK): RGB {
   return { r: clampInt(r, 0, 255), g: clampInt(g, 0, 255), b: clampInt(b, 0, 255) };
 }
 
-function Button(
-  props: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "ghost" | "soft" },
-) {
-  const { variant = "secondary", className = "", ...rest } = props;
-
-  const base =
-    "lr-focusRing inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed";
-
-  const cls =
-    variant === "primary"
-      ? "bg-slate-900 text-white hover:bg-slate-800"
-      : variant === "ghost"
-        ? "bg-transparent text-slate-700 hover:bg-slate-100"
-        : variant === "soft"
-          ? "lr-btnSoft"
-          : "bg-white text-slate-800 border border-slate-200 hover:bg-slate-50";
-
-  return <button className={`${base} ${cls} ${className}`} {...rest} />;
+function Label({ children }: { children: ReactNode }) {
+  return <div className="lr-fieldLabel">{children}</div>;
 }
 
-function Input(props: InputHTMLAttributes<HTMLInputElement>) {
-  const { className = "", ...rest } = props;
-  return <input className={`lr-input lr-focusRing ${className}`} {...rest} />;
-}
-
-function Label({ children }: { children: React.ReactNode }) {
-  return <div className="text-sm font-medium text-slate-800">{children}</div>;
-}
-
-function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-6">
-      <div className="flex items-start justify-between gap-4">
+    <section className="lr-panel">
+      <div className="lr-panelHeader">
         <div>
-          <h2 className="text-base font-semibold text-slate-900">{title}</h2>
-          {subtitle ? <p className="mt-1 text-sm text-slate-600">{subtitle}</p> : null}
+          <h2 className="lr-h2">{title}</h2>
+          {subtitle ? <p className="mt-1 lr-muted">{subtitle}</p> : null}
         </div>
       </div>
       <div className="mt-5">{children}</div>
@@ -203,11 +157,7 @@ function Card({ title, subtitle, children }: { title: string; subtitle?: string;
 }
 
 function Toast({ text }: { text: string }) {
-  return (
-    <div className="fixed bottom-5 right-5 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
-      {text}
-    </div>
-  );
+  return <div className="fixed bottom-5 right-5 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">{text}</div>;
 }
 
 function makeLogoSrc(bust: number) {
@@ -571,21 +521,12 @@ export default function BrandingSettingsClient() {
   const cmyk = useMemo(() => rgbToCmyk(rgb), [rgb]);
 
   function setFromRgb(next: Partial<RGB>) {
-    const merged: RGB = {
-      r: next.r ?? rgb.r,
-      g: next.g ?? rgb.g,
-      b: next.b ?? rgb.b,
-    };
+    const merged: RGB = { r: next.r ?? rgb.r, g: next.g ?? rgb.g, b: next.b ?? rgb.b };
     setField("accentColor", rgbToHex(merged));
   }
 
   function setFromCmyk(next: Partial<CMYK>) {
-    const merged: CMYK = {
-      c: next.c ?? cmyk.c,
-      m: next.m ?? cmyk.m,
-      y: next.y ?? cmyk.y,
-      k: next.k ?? cmyk.k,
-    };
+    const merged: CMYK = { c: next.c ?? cmyk.c, m: next.m ?? cmyk.m, y: next.y ?? cmyk.y, k: next.k ?? cmyk.k };
     const nextRgb = cmykToRgb(merged);
     setField("accentColor", rgbToHex(nextRgb));
   }
@@ -605,7 +546,7 @@ export default function BrandingSettingsClient() {
       </header>
 
       {loading ? (
-        <section className="rounded-2xl border border-slate-200 bg-white p-6">
+        <section className="lr-panel">
           <div className="h-4 w-40 rounded bg-slate-100" />
           <div className="mt-3 h-10 w-full rounded bg-slate-100" />
           <div className="mt-3 h-10 w-full rounded bg-slate-100" />
@@ -624,12 +565,7 @@ export default function BrandingSettingsClient() {
                       <img src={logoLocalPreview} alt="Logo Preview" className="h-full w-auto object-contain" />
                     ) : logoServerOk ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={logoServerSrc}
-                        alt=""
-                        className="h-full w-auto object-contain"
-                        onError={() => setLogoServerOk(false)}
-                      />
+                      <img src={logoServerSrc} alt="" className="h-full w-auto object-contain" onError={() => setLogoServerOk(false)} />
                     ) : (
                       <div className="text-xs text-slate-500">Kein Logo gesetzt</div>
                     )}
@@ -646,11 +582,11 @@ export default function BrandingSettingsClient() {
                     onChange={(e) => onPickLogo(e.target.files?.[0] ?? null)}
                   />
                   <div className="flex flex-wrap items-center gap-2">
-                    <Button variant="secondary" type="button" onClick={onRemoveLogo} disabled={saving}>
+                    <button className="lr-btnSecondary" type="button" onClick={onRemoveLogo} disabled={saving}>
                       Logo entfernen
-                    </Button>
-                    <Button
-                      variant="ghost"
+                    </button>
+                    <button
+                      className="lr-btnSecondary border-transparent bg-transparent text-slate-700 hover:bg-slate-100"
                       type="button"
                       onClick={() => {
                         setLogoServerOk(true);
@@ -658,9 +594,9 @@ export default function BrandingSettingsClient() {
                       }}
                     >
                       Vorschau aktualisieren
-                    </Button>
+                    </button>
                   </div>
-                  <p className="text-xs text-slate-500">Empfohlen: transparentes PNG. Max. 2 MB.</p>
+                  <p className="lr-help">Empfohlen: transparentes PNG. Max. 2 MB.</p>
                 </div>
               </div>
 
@@ -677,22 +613,28 @@ export default function BrandingSettingsClient() {
                           key={hex}
                           type="button"
                           className={[
-                            "lr-focusRing h-9 w-9 rounded-xl border transition",
+                            "h-9 w-9 rounded-xl border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2",
                             active ? "border-slate-900" : "border-slate-200 hover:border-slate-300",
                           ].join(" ")}
-                          style={{ backgroundColor: hex }}
+                          style={{
+                            backgroundColor: hex,
+                            // make ring accent-aware
+                            ["--tw-ring-color" as never]: "var(--lr-accent-soft)" as never,
+                          }}
                           onClick={() => setField("accentColor", hex.toUpperCase())}
                           aria-label={`Preset ${hex}`}
                           title={hex}
                         />
                       );
                     })}
+
                     <button
                       type="button"
                       className={[
-                        "lr-focusRing h-9 rounded-xl border px-3 text-xs font-semibold transition",
+                        "h-9 rounded-xl border px-3 text-xs font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2",
                         !normalizedHex ? "border-slate-900 bg-white" : "border-slate-200 bg-white hover:border-slate-300",
                       ].join(" ")}
+                      style={{ ["--tw-ring-color" as never]: "var(--lr-accent-soft)" as never }}
                       onClick={() => setField("accentColor", null)}
                       title="Akzent entfernen"
                     >
@@ -705,16 +647,13 @@ export default function BrandingSettingsClient() {
                       <input
                         type="color"
                         value={normalizedHex ?? "#000000"}
-                        className="lr-focusRing h-10 w-12 cursor-pointer rounded-xl border border-slate-200 bg-white p-1"
+                        className="h-10 w-12 cursor-pointer rounded-xl border border-slate-200 bg-white p-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+                        style={{ ["--tw-ring-color" as never]: "var(--lr-accent-soft)" as never }}
                         onChange={(e) => setField("accentColor", e.target.value.toUpperCase())}
                         aria-label="Color Picker"
                         title="Color Picker"
                       />
-                      <div
-                        className="h-10 w-10 rounded-xl border border-slate-200"
-                        style={{ backgroundColor: normalizedHex ?? "transparent" }}
-                        title={normalizedHex ?? "—"}
-                      />
+                      <div className="h-10 w-10 rounded-xl border border-slate-200" style={{ backgroundColor: normalizedHex ?? "transparent" }} title={normalizedHex ?? "—"} />
                     </div>
 
                     <div className="min-w-[170px] flex-1">
@@ -726,94 +665,55 @@ export default function BrandingSettingsClient() {
                       />
                     </div>
 
-                    <Button variant="secondary" type="button" onClick={() => setField("accentColor", null)}>
+                    <button className="lr-btnSecondary" type="button" onClick={() => setField("accentColor", null)}>
                       Entfernen
-                    </Button>
+                    </button>
 
-                    <Button variant="ghost" type="button" onClick={() => void copyHex()} disabled={!form.accentColor}>
+                    <button
+                      className="lr-btnSecondary border-transparent bg-transparent text-slate-700 hover:bg-slate-100"
+                      type="button"
+                      onClick={() => void copyHex()}
+                      disabled={!form.accentColor}
+                    >
                       HEX kopieren
-                    </Button>
+                    </button>
                   </div>
 
                   <div className="mt-4 grid gap-3 md:grid-cols-3">
                     <div className="space-y-1">
                       <div className="text-xs font-medium text-slate-600">RGB — R</div>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={255}
-                        value={rgb.r}
-                        onChange={(e) => setFromRgb({ r: clampInt(Number(e.target.value), 0, 255) })}
-                      />
+                      <Input type="number" min={0} max={255} value={rgb.r} onChange={(e) => setFromRgb({ r: clampInt(Number(e.target.value), 0, 255) })} />
                     </div>
                     <div className="space-y-1">
                       <div className="text-xs font-medium text-slate-600">RGB — G</div>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={255}
-                        value={rgb.g}
-                        onChange={(e) => setFromRgb({ g: clampInt(Number(e.target.value), 0, 255) })}
-                      />
+                      <Input type="number" min={0} max={255} value={rgb.g} onChange={(e) => setFromRgb({ g: clampInt(Number(e.target.value), 0, 255) })} />
                     </div>
                     <div className="space-y-1">
                       <div className="text-xs font-medium text-slate-600">RGB — B</div>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={255}
-                        value={rgb.b}
-                        onChange={(e) => setFromRgb({ b: clampInt(Number(e.target.value), 0, 255) })}
-                      />
+                      <Input type="number" min={0} max={255} value={rgb.b} onChange={(e) => setFromRgb({ b: clampInt(Number(e.target.value), 0, 255) })} />
                     </div>
                   </div>
 
                   <div className="mt-4 grid gap-3 md:grid-cols-4">
                     <div className="space-y-1">
                       <div className="text-xs font-medium text-slate-600">CMYK — C</div>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={100}
-                        value={cmyk.c}
-                        onChange={(e) => setFromCmyk({ c: clampInt(Number(e.target.value), 0, 100) })}
-                      />
+                      <Input type="number" min={0} max={100} value={cmyk.c} onChange={(e) => setFromCmyk({ c: clampInt(Number(e.target.value), 0, 100) })} />
                     </div>
                     <div className="space-y-1">
                       <div className="text-xs font-medium text-slate-600">CMYK — M</div>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={100}
-                        value={cmyk.m}
-                        onChange={(e) => setFromCmyk({ m: clampInt(Number(e.target.value), 0, 100) })}
-                      />
+                      <Input type="number" min={0} max={100} value={cmyk.m} onChange={(e) => setFromCmyk({ m: clampInt(Number(e.target.value), 0, 100) })} />
                     </div>
                     <div className="space-y-1">
                       <div className="text-xs font-medium text-slate-600">CMYK — Y</div>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={100}
-                        value={cmyk.y}
-                        onChange={(e) => setFromCmyk({ y: clampInt(Number(e.target.value), 0, 100) })}
-                      />
+                      <Input type="number" min={0} max={100} value={cmyk.y} onChange={(e) => setFromCmyk({ y: clampInt(Number(e.target.value), 0, 100) })} />
                     </div>
                     <div className="space-y-1">
                       <div className="text-xs font-medium text-slate-600">CMYK — K</div>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={100}
-                        value={cmyk.k}
-                        onChange={(e) => setFromCmyk({ k: clampInt(Number(e.target.value), 0, 100) })}
-                      />
+                      <Input type="number" min={0} max={100} value={cmyk.k} onChange={(e) => setFromCmyk({ k: clampInt(Number(e.target.value), 0, 100) })} />
                     </div>
                   </div>
 
-                  <p className="mt-3 text-xs text-slate-500">
-                    Tipp: Preset oder Color Picker nutzen. HEX/RGB/CMYK sind synchronisiert.
-                  </p>
+                  <p className="mt-3 lr-help">Tipp: Preset oder Color Picker nutzen. HEX/RGB/CMYK sind synchronisiert.</p>
 
                   {inlineError ? (
                     <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
@@ -835,14 +735,14 @@ export default function BrandingSettingsClient() {
 
             <div className="flex items-center gap-2">
               {dirty ? (
-                <Button variant="secondary" onClick={reset} disabled={saving} type="button">
+                <button className="lr-btnSecondary" onClick={reset} disabled={saving} type="button">
                   Änderungen verwerfen
-                </Button>
+                </button>
               ) : null}
 
-              <Button variant="primary" onClick={save} disabled={!canSave} type="button">
+              <button className="lr-btn" onClick={() => void save()} disabled={!canSave} type="button">
                 {saving ? "Speichert…" : "Speichern"}
-              </Button>
+              </button>
             </div>
           </div>
         </>
