@@ -29,18 +29,15 @@ type ProfileDto = {
 
   createdAt: string;
   updatedAt: string;
-} | null;
+};
 
-type BrandingGetDto = { tenant: TenantDto; profile: ProfileDto };
-
-type UiState =
-  | { kind: "idle" }
-  | { kind: "loading"; message?: string }
-  | { kind: "success"; message: string }
-  | { kind: "error"; message: string; traceId?: string };
+type BrandingGetDto = { tenant: TenantDto; profile: ProfileDto | null };
 
 type FormState = {
   legalName: string;
+
+  // keep displayName to avoid clobbering Tenant.name logic in API
+  displayName: string | null;
 
   addressLine1: string | null;
   addressLine2: string | null;
@@ -54,11 +51,27 @@ type FormState = {
   contactFamilyName: string | null;
   contactEmail: string | null;
 
-  // wichtig: damit PATCH legalName/displayName/accent nicht "verliert"
-  // displayName/accentColor editieren wir hier NICHT, aber wir schicken sie bewusst nicht mit (API ist jetzt safe).
+  // keep accentColor untouched (not shown here)
+  accentColor: string | null;
 };
 
-const BRANDING_UPDATED_EVENT = "lr_tenant_branding_updated";
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+function pickString(v: unknown): string | null {
+  return typeof v === "string" && v.trim().length ? v : null;
+}
+
+async function safeReadJson(res: Response): Promise<unknown> {
+  const ct = res.headers.get("content-type") || "";
+  if (!ct.includes("application/json")) return undefined;
+  try {
+    return await res.json();
+  } catch {
+    return undefined;
+  }
+}
 
 function normalizeNull(s: string): string | null {
   const t = s.trim();
@@ -69,25 +82,47 @@ function stableStringify(v: unknown): string {
   return JSON.stringify(v);
 }
 
-function mapDto(dto: BrandingGetDto): FormState {
+function mapDtoToForm(dto: BrandingGetDto): FormState {
   const p = dto.profile;
 
-  const legalName = (p?.legalName || dto.tenant.name || "").trim();
+  if (!p) {
+    return {
+      legalName: dto.tenant.name || "",
+      displayName: null,
+
+      addressLine1: null,
+      addressLine2: null,
+      postalCode: null,
+      city: null,
+      countryCode: dto.tenant.country || "CH",
+
+      vatId: null,
+
+      contactGivenName: null,
+      contactFamilyName: null,
+      contactEmail: null,
+
+      accentColor: dto.tenant.accentColor ?? null,
+    };
+  }
 
   return {
-    legalName: legalName.length ? legalName : "LeadRadar",
+    legalName: p.legalName,
+    displayName: p.displayName,
 
-    addressLine1: p?.addressLine1 ?? null,
-    addressLine2: p?.addressLine2 ?? null,
-    postalCode: p?.postalCode ?? null,
-    city: p?.city ?? null,
-    countryCode: (p?.countryCode || dto.tenant.country || "CH").trim() || "CH",
+    addressLine1: p.addressLine1,
+    addressLine2: p.addressLine2,
+    postalCode: p.postalCode,
+    city: p.city,
+    countryCode: p.countryCode || "CH",
 
-    vatId: p?.vatId ?? null,
+    vatId: p.vatId,
 
-    contactGivenName: p?.contactGivenName ?? null,
-    contactFamilyName: p?.contactFamilyName ?? null,
-    contactEmail: p?.contactEmail ?? null,
+    contactGivenName: p.contactGivenName,
+    contactFamilyName: p.contactFamilyName,
+    contactEmail: p.contactEmail,
+
+    accentColor: p.accentColor,
   };
 }
 
@@ -95,22 +130,30 @@ export default function AccountingClient() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const [ui, setUi] = useState<UiState>({ kind: "idle" });
+  const [tenant, setTenant] = useState<TenantDto | null>(null);
 
   const [initial, setInitial] = useState<FormState | null>(null);
   const [form, setForm] = useState<FormState>({
     legalName: "",
+    displayName: null,
+
     addressLine1: null,
     addressLine2: null,
     postalCode: null,
     city: null,
     countryCode: "CH",
+
     vatId: null,
+
     contactGivenName: null,
     contactFamilyName: null,
     contactEmail: null,
+
+    accentColor: null,
   });
 
+  const [loadError, setLoadError] = useState<{ message: string; traceId?: string } | null>(null);
+  const [inlineError, setInlineError] = useState<{ message: string; traceId?: string } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const dirty = useMemo(() => {
@@ -124,25 +167,33 @@ export default function AccountingClient() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    setUi({ kind: "idle" });
+    setLoadError(null);
+    setInlineError(null);
 
     try {
       const res = await fetch("/api/admin/v1/branding", { method: "GET", credentials: "same-origin" });
-      const json = (await res.json()) as ApiResp<BrandingGetDto>;
+      const json = (await safeReadJson(res)) as ApiResp<BrandingGetDto> | undefined;
 
-      if (!json.ok) {
-        setUi({ kind: "error", message: json.error.message || "Fehler beim Laden.", traceId: json.traceId });
+      if (!res.ok || !json || json.ok !== true) {
+        const traceId = res.headers.get("x-trace-id") ?? (json && isRecord(json) ? pickString(json.traceId) ?? undefined : undefined);
+        const msg =
+          json && isRecord(json) && json.ok === false && isRecord(json.error) && typeof json.error.message === "string"
+            ? json.error.message
+            : "Fehler beim Laden.";
+        setLoadError({ message: msg, traceId });
         setLoading(false);
         return;
       }
 
-      const mapped = mapDto(json.data);
+      setTenant(json.data.tenant);
+
+      const mapped = mapDtoToForm(json.data);
       setInitial(mapped);
       setForm(mapped);
 
       setLoading(false);
     } catch {
-      setUi({ kind: "error", message: "Netzwerkfehler beim Laden." });
+      setLoadError({ message: "Netzwerkfehler beim Laden.", traceId: undefined });
       setLoading(false);
     }
   }, []);
@@ -159,18 +210,20 @@ export default function AccountingClient() {
   function reset() {
     if (!initial) return;
     setForm(initial);
-    setUi({ kind: "idle" });
+    setInlineError(null);
   }
 
   async function save() {
     if (!canSave) return;
 
     setSaving(true);
-    setUi({ kind: "loading", message: "Speichert…" });
+    setInlineError(null);
 
     try {
+      // IMPORTANT: Always send displayName explicitly to avoid clobbering Tenant.name logic in API.
       const payload = {
         legalName: form.legalName.trim(),
+        displayName: form.displayName,
 
         addressLine1: form.addressLine1,
         addressLine2: form.addressLine2,
@@ -183,86 +236,87 @@ export default function AccountingClient() {
         contactGivenName: form.contactGivenName,
         contactFamilyName: form.contactFamilyName,
         contactEmail: form.contactEmail,
+
+        // keep accentColor unchanged (explicit)
+        accentColor: form.accentColor,
       };
 
       const res = await fetch("/api/admin/v1/branding", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        credentials: "same-origin",
         body: JSON.stringify(payload),
+        credentials: "same-origin",
       });
 
-      const json = (await res.json()) as ApiResp<{ tenant: TenantDto; profile: ProfileDto }>;
+      const json = (await safeReadJson(res)) as ApiResp<{ tenant: TenantDto; profile: ProfileDto | null }> | undefined;
 
-      if (!json.ok) {
-        setUi({ kind: "error", message: json.error.message || "Fehler beim Speichern.", traceId: json.traceId });
+      if (!res.ok || !json || json.ok !== true) {
+        const traceId = res.headers.get("x-trace-id") ?? (json && isRecord(json) ? pickString(json.traceId) ?? undefined : undefined);
+        const msg =
+          json && isRecord(json) && json.ok === false && isRecord(json.error) && typeof json.error.message === "string"
+            ? json.error.message
+            : "Fehler beim Speichern.";
+        setInlineError({ message: msg, traceId });
         setSaving(false);
         return;
       }
 
-      const mapped = mapDto({ tenant: json.data.tenant, profile: json.data.profile });
-      setInitial(mapped);
-      setForm(mapped);
+      setTenant(json.data.tenant);
 
-      // topbar, etc.
-      window.dispatchEvent(new Event(BRANDING_UPDATED_EVENT));
+      // re-fetch for canonical state (server normalizations)
+      await load();
 
       setToast("Gespeichert.");
-      window.setTimeout(() => setToast(null), 1600);
+      window.setTimeout(() => setToast(null), 1800);
 
-      setUi({ kind: "success", message: "Gespeichert." });
       setSaving(false);
     } catch {
-      setUi({ kind: "error", message: "Netzwerkfehler beim Speichern." });
+      setInlineError({ message: "Netzwerkfehler beim Speichern.", traceId: undefined });
       setSaving(false);
     }
   }
 
   return (
-    <div className="lr-page space-y-6">
+    <div className="space-y-6">
       <header className="lr-pageHeader space-y-2">
-        <h1 className="lr-h1">Billing / Accounting</h1>
-        <p className="lr-muted">Rechnungsadresse, UID/MWST und Ansprechpartner – Basis für Belege und spätere Rechnungen.</p>
+        <h1 className="lr-h1">Firma &amp; Belege</h1>
+        <p className="lr-muted">Rechnungsadresse, UID/MWST und Kontakt für Belege &amp; spätere Abrechnung.</p>
       </header>
 
       {loading ? (
-        <div className="lr-panel">
-          <div className="h-4 w-48 rounded bg-slate-100" />
+        <section className="lr-panel">
+          <div className="h-4 w-44 rounded bg-slate-100" />
           <div className="mt-3 h-10 w-full rounded bg-slate-100" />
           <div className="mt-3 h-10 w-full rounded bg-slate-100" />
-        </div>
-      ) : ui.kind === "error" ? (
-        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5">
-          <div className="text-sm font-semibold text-rose-900">Fehler</div>
-          <div className="mt-1 text-sm text-rose-800">{ui.message}</div>
-          {ui.traceId ? (
-            <div className="mt-2 text-xs text-rose-700">
-              TraceId: <span className="font-mono">{ui.traceId}</span>
-            </div>
+        </section>
+      ) : loadError ? (
+        <section className="rounded-2xl border border-rose-200 bg-rose-50 p-6">
+          <h2 className="text-base font-semibold text-rose-900">Konnte Daten nicht laden</h2>
+          <p className="mt-1 text-sm text-rose-800">{loadError.message}</p>
+          {loadError.traceId ? (
+            <p className="mt-2 text-xs text-rose-700">
+              TraceId: <span className="font-mono">{loadError.traceId}</span>
+            </p>
           ) : null}
-
-          <div className="lr-actions">
+          <div className="mt-4">
             <button className="lr-btnSecondary" type="button" onClick={() => void load()}>
               Erneut versuchen
             </button>
           </div>
-        </div>
+        </section>
       ) : (
         <>
-          <div className="lr-panel">
-            <div className="lr-panelHeader">
-              <div>
-                <div className="lr-h2">Firma / Rechnungsadresse</div>
-                <div className="lr-muted mt-1">Wird für Belege, Abrechnung und spätere Rechnungen verwendet.</div>
-              </div>
-            </div>
+          <section className="rounded-2xl border border-slate-200 bg-white p-6">
+            <h2 className="lr-h2">Firma / Rechnungsadresse</h2>
+            <p className="lr-muted mt-1">Diese Daten sind Basis für Belege und spätere Rechnungen.</p>
 
             <div className="mt-5 grid gap-4 md:grid-cols-2">
               <div className="space-y-2 md:col-span-2">
                 <div className="text-sm font-medium text-slate-800">Offizieller Firmenname *</div>
                 <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300"
                   value={form.legalName}
+                  placeholder={tenant?.name ?? "Firmenname"}
                   onChange={(e) => setField("legalName", e.target.value)}
                 />
               </div>
@@ -270,47 +324,43 @@ export default function AccountingClient() {
               <div className="space-y-2">
                 <div className="text-sm font-medium text-slate-800">Adresse</div>
                 <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300"
                   value={form.addressLine1 ?? ""}
                   onChange={(e) => setField("addressLine1", normalizeNull(e.target.value))}
-                  onBlur={(e) => setField("addressLine1", normalizeNull(e.target.value))}
                 />
               </div>
 
               <div className="space-y-2">
                 <div className="text-sm font-medium text-slate-800">Adresszusatz</div>
                 <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300"
                   value={form.addressLine2 ?? ""}
                   onChange={(e) => setField("addressLine2", normalizeNull(e.target.value))}
-                  onBlur={(e) => setField("addressLine2", normalizeNull(e.target.value))}
                 />
               </div>
 
               <div className="space-y-2">
                 <div className="text-sm font-medium text-slate-800">PLZ</div>
                 <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300"
                   value={form.postalCode ?? ""}
                   onChange={(e) => setField("postalCode", normalizeNull(e.target.value))}
-                  onBlur={(e) => setField("postalCode", normalizeNull(e.target.value))}
                 />
               </div>
 
               <div className="space-y-2">
                 <div className="text-sm font-medium text-slate-800">Ort</div>
                 <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300"
                   value={form.city ?? ""}
                   onChange={(e) => setField("city", normalizeNull(e.target.value))}
-                  onBlur={(e) => setField("city", normalizeNull(e.target.value))}
                 />
               </div>
 
               <div className="space-y-2">
                 <div className="text-sm font-medium text-slate-800">Land</div>
                 <select
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300"
                   value={form.countryCode}
                   onChange={(e) => setField("countryCode", e.target.value)}
                 >
@@ -328,59 +378,67 @@ export default function AccountingClient() {
               <div className="space-y-2">
                 <div className="text-sm font-medium text-slate-800">UID / MWST (optional)</div>
                 <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300"
                   value={form.vatId ?? ""}
                   onChange={(e) => setField("vatId", normalizeNull(e.target.value))}
-                  onBlur={(e) => setField("vatId", normalizeNull(e.target.value))}
                 />
               </div>
             </div>
-          </div>
+          </section>
 
-          <div className="lr-panel">
-            <div className="lr-panelHeader">
-              <div>
-                <div className="lr-h2">Ansprechpartner</div>
-                <div className="lr-muted mt-1">Optional – für Abrechnung / Belege / Rückfragen.</div>
-              </div>
-            </div>
+          <section className="rounded-2xl border border-slate-200 bg-white p-6">
+            <h2 className="lr-h2">Ansprechpartner</h2>
+            <p className="lr-muted mt-1">Optional – für spätere Kommunikation / Belege.</p>
 
             <div className="mt-5 grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
                 <div className="text-sm font-medium text-slate-800">Vorname</div>
                 <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300"
                   value={form.contactGivenName ?? ""}
                   onChange={(e) => setField("contactGivenName", normalizeNull(e.target.value))}
-                  onBlur={(e) => setField("contactGivenName", normalizeNull(e.target.value))}
                 />
               </div>
 
               <div className="space-y-2">
                 <div className="text-sm font-medium text-slate-800">Nachname</div>
                 <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300"
                   value={form.contactFamilyName ?? ""}
                   onChange={(e) => setField("contactFamilyName", normalizeNull(e.target.value))}
-                  onBlur={(e) => setField("contactFamilyName", normalizeNull(e.target.value))}
                 />
               </div>
 
               <div className="space-y-2 md:col-span-2">
                 <div className="text-sm font-medium text-slate-800">E-Mail</div>
                 <input
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300"
                   value={form.contactEmail ?? ""}
-                  placeholder="name@firma.ch"
                   onChange={(e) => setField("contactEmail", normalizeNull(e.target.value))}
-                  onBlur={(e) => setField("contactEmail", normalizeNull(e.target.value))}
+                  placeholder="name@firma.ch"
                 />
               </div>
             </div>
 
-            {ui.kind === "loading" ? <div className="lr-muted mt-4">{ui.message || "Bitte warten…"}</div> : null}
-            {ui.kind === "success" ? <div className="mt-4 text-sm text-slate-700">{ui.message}</div> : null}
-          </div>
+            {inlineError ? (
+              <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+                {inlineError.message}
+                {inlineError.traceId ? (
+                  <span className="ml-2 text-xs text-rose-700">
+                    TraceId: <span className="font-mono">{inlineError.traceId}</span>
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+
+          {/* Owner Transfer placeholder */}
+          <section className="rounded-2xl border border-slate-200 bg-white p-6">
+            <h2 className="lr-h2">Tenant-Inhaber</h2>
+            <p className="lr-muted mt-1">
+              Übergabe/Übertragung (z.B. Mitarbeiteraustritt) kommt als eigener Flow (TP7.4+). MVP: Owner-only.
+            </p>
+          </section>
 
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="text-xs text-slate-500">{dirty ? "Ungespeicherte Änderungen." : "Keine Änderungen."}</div>
@@ -396,14 +454,6 @@ export default function AccountingClient() {
                 {saving ? "Speichert…" : "Speichern"}
               </button>
             </div>
-          </div>
-
-          {/* Placeholder: Owner-Transfer (später) */}
-          <div className="lr-panel">
-            <div className="lr-h2">Tenant-Inhaber übertragen</div>
-            <p className="lr-muted mt-2">
-              Kommt als nächster Block: Übergabe bei Mitarbeiteraustritt (2-Step Transfer, leak-safe).
-            </p>
           </div>
         </>
       )}

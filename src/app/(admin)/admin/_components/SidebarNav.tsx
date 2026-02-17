@@ -74,7 +74,7 @@ const NAV: NavGroup[] = [
     Icon: IconBilling,
     items: [
       { href: "/admin/billing", label: "Übersicht" },
-      { href: "/admin/settings/billing", label: "Rechnungsdaten" },
+      { href: "/admin/billing/accounting", label: "Firma & Belege" },
     ],
   },
 ];
@@ -100,7 +100,6 @@ export function SidebarNav() {
   const [openKey, setOpenKey] = useState<string>(activeGroupKey);
 
   useEffect(() => {
-    // Beim Routenwechsel: passende Kategorie automatisch öffnen
     setOpenKey(activeGroupKey);
   }, [activeGroupKey]);
 
@@ -112,7 +111,6 @@ export function SidebarNav() {
 
         return (
           <div key={group.key} className="flex flex-col">
-            {/* Hauptkategorie */}
             <button
               type="button"
               onClick={() => setOpenKey((prev) => (prev === group.key ? "" : group.key))}
@@ -146,9 +144,7 @@ export function SidebarNav() {
               />
             </button>
 
-            {/* Unterpunkte (Tree) */}
             <div id={`nav-group-${group.key}`} className={["mt-1", isOpen ? "block" : "hidden"].join(" ")}>
-              {/* Tree line aligned to icon center */}
               <div className="relative ml-6 border-l border-slate-200 pl-5">
                 <div className="flex flex-col gap-1 py-1">
                   {group.items.map((item) => {
@@ -163,7 +159,6 @@ export function SidebarNav() {
                         ].join(" ")}
                         aria-current={active ? "page" : undefined}
                       >
-                        {/* dot on the tree line */}
                         <span
                           className={[
                             "absolute -left-[13px] top-1/2 size-2 -translate-y-1/2 rounded-full",
