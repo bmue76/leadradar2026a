@@ -14,10 +14,7 @@ import {
   IconStats,
 } from "./icons";
 
-type NavItem = {
-  href: string;
-  label: string;
-};
+type NavItem = { href: string; label: string };
 
 type NavGroup = {
   key: string;
@@ -27,12 +24,7 @@ type NavGroup = {
 };
 
 const NAV: NavGroup[] = [
-  {
-    key: "start",
-    title: "Start",
-    Icon: IconHome,
-    items: [{ href: "/admin", label: "Übersicht" }],
-  },
+  { key: "start", title: "Start", Icon: IconHome, items: [{ href: "/admin", label: "Übersicht" }] },
   {
     key: "setup",
     title: "Setup",
@@ -62,12 +54,7 @@ const NAV: NavGroup[] = [
       { href: "/admin/exports", label: "Exporte" },
     ],
   },
-  {
-    key: "stats",
-    title: "Statistik",
-    Icon: IconStats,
-    items: [{ href: "/admin/stats", label: "Statistik" }],
-  },
+  { key: "stats", title: "Statistik", Icon: IconStats, items: [{ href: "/admin/stats", label: "Statistik" }] },
   {
     key: "billing",
     title: "Abrechnung",
@@ -116,7 +103,7 @@ export function SidebarNav() {
               onClick={() => setOpenKey((prev) => (prev === group.key ? "" : group.key))}
               className={[
                 "group flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-sm",
-                "hover:bg-slate-100",
+                "hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-[color:var(--lr-accent-soft)]",
                 isGroupActive ? "bg-white text-slate-900" : "text-slate-700",
               ].join(" ")}
               aria-expanded={isOpen}
@@ -125,11 +112,16 @@ export function SidebarNav() {
               <span
                 className={[
                   "grid size-9 place-items-center rounded-xl border bg-white",
-                  isGroupActive ? "border-blue-200" : "border-slate-200",
+                  isGroupActive ? "border-[color:var(--lr-accent-soft)]" : "border-slate-200",
                 ].join(" ")}
                 aria-hidden="true"
               >
-                <group.Icon className={["size-5", isGroupActive ? "text-blue-600" : "text-slate-700"].join(" ")} />
+                <group.Icon
+                  className={[
+                    "size-5",
+                    isGroupActive ? "text-[color:var(--lr-accent)]" : "text-slate-700",
+                  ].join(" ")}
+                />
               </span>
 
               <span className={["flex-1 text-left font-medium", isGroupActive ? "text-slate-900" : ""].join(" ")}>
@@ -155,14 +147,17 @@ export function SidebarNav() {
                         href={item.href}
                         className={[
                           "relative flex items-center rounded-lg px-3 py-1.5 text-sm",
-                          active ? "bg-blue-50 text-slate-900" : "text-slate-700 hover:bg-slate-100",
+                          "focus:outline-none focus:ring-2 focus:ring-[color:var(--lr-accent-soft)]",
+                          active
+                            ? "bg-[color:var(--lr-accent-soft)] text-slate-900"
+                            : "text-slate-700 hover:bg-slate-100",
                         ].join(" ")}
                         aria-current={active ? "page" : undefined}
                       >
                         <span
                           className={[
                             "absolute -left-[13px] top-1/2 size-2 -translate-y-1/2 rounded-full",
-                            active ? "bg-blue-600" : "bg-slate-300",
+                            active ? "bg-[color:var(--lr-accent)]" : "bg-slate-300",
                           ].join(" ")}
                           aria-hidden="true"
                         />

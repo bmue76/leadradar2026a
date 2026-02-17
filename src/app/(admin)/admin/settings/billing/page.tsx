@@ -1,5 +1,5 @@
-import BillingClient from "./BillingClient";
+import { redirect } from "next/navigation";
 
-export default function BillingPage() {
-  return <BillingClient />;
+export default function BillingSettingsRedirect() {
+  redirect("/admin/billing/accounting");
 }
