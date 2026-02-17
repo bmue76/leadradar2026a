@@ -1,29 +1,71 @@
 .chip {
   display: inline-flex;
   align-items: center;
-  border-radius: var(--lr-radius-pill);
-  padding: 4px 10px;
+  justify-content: center;
 
-  font-size: var(--lr-text-sm);
+  border-radius: 999px;
+  padding: 8px 12px;
+
+  font-size: 13px;
+  font-weight: 700;
   line-height: 1;
-  font-weight: var(--lr-weight-medium);
 
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  background: rgba(0, 0, 0, 0.02);
-  color: var(--lr-text-secondary);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: white;
+  color: rgba(15, 23, 42, 0.88);
+
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+
+  transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease, opacity 120ms ease, filter 120ms ease;
 }
 
-.neutral {
-  background: rgba(0, 0, 0, 0.03);
-  color: var(--lr-text-secondary);
+.chip:hover {
+  background: rgba(15, 23, 42, 0.04);
 }
 
-.subtle {
-  background: rgba(0, 0, 0, 0.02);
-  color: var(--lr-text-secondary);
+.chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
-.muted {
-  background: rgba(0, 0, 0, 0.02);
-  color: var(--lr-text-muted);
+.sm {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+/* Backward-compat tones (neutral base, no tenant accent) */
+.toneNeutral {
+  background: white;
+  border-color: rgba(15, 23, 42, 0.12);
+  color: rgba(15, 23, 42, 0.88);
+}
+
+.toneSubtle {
+  background: rgba(15, 23, 42, 0.04);
+  border-color: rgba(15, 23, 42, 0.10);
+  color: rgba(15, 23, 42, 0.88);
+}
+
+.toneMuted {
+  background: rgba(15, 23, 42, 0.02);
+  border-color: transparent;
+  color: rgba(15, 23, 42, 0.62);
+}
+
+/* Selected = tenant accent (soft bg + accent border) */
+.selected {
+  background: var(--lr-accent-soft);
+  border-color: var(--lr-accent);
+  color: rgba(15, 23, 42, 0.95);
+}
+
+.selected:hover {
+  filter: brightness(0.98);
+}
+
+.chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--lr-accent-soft);
 }

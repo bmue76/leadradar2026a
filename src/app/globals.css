@@ -146,4 +146,62 @@ body {
   .lr-cardHint {
     @apply mt-2 text-xs text-slate-500;
   }
+
+  /* ------------------------------------------------------------
+     ✅ Inputs (central, accent-aware)
+     ------------------------------------------------------------ */
+
+  .lr-fieldLabel {
+    @apply text-sm font-medium text-slate-800;
+  }
+
+  .lr-help {
+    @apply text-xs text-slate-500;
+  }
+
+  .lr-errorText {
+    @apply text-xs font-semibold text-rose-700;
+  }
+
+  .lr-input,
+  .lr-select,
+  .lr-textarea {
+    @apply w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 transition;
+  }
+
+  .lr-input,
+  .lr-select {
+    @apply h-10;
+  }
+
+  .lr-textarea {
+    @apply min-h-[96px] py-2;
+  }
+
+  .lr-input:disabled,
+  .lr-select:disabled,
+  .lr-textarea:disabled {
+    @apply cursor-not-allowed opacity-60;
+    background: rgba(0, 0, 0, 0.02);
+  }
+
+  /* Accent focus (kein “Tailwind ring” nötig, sauber & konsistent) */
+  .lr-input:focus,
+  .lr-select:focus,
+  .lr-textarea:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--lr-accent-soft);
+  }
+
+  /* Optional error state */
+  .lr-input[data-invalid="true"],
+  .lr-select[data-invalid="true"],
+  .lr-textarea[data-invalid="true"] {
+    border-color: rgba(244, 63, 94, 0.55); /* rose-500-ish */
+  }
+  .lr-input[data-invalid="true"]:focus,
+  .lr-select[data-invalid="true"]:focus,
+  .lr-textarea[data-invalid="true"]:focus {
+    box-shadow: 0 0 0 2px rgba(244, 63, 94, 0.18);
+  }
 }

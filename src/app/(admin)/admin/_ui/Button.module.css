@@ -4,68 +4,83 @@
   justify-content: center;
   gap: 8px;
 
-  height: 34px;
-  padding: 0 12px;
-  border-radius: 10px;
+  border-radius: 14px;
+  padding: 10px 14px;
 
-  font-size: var(--lr-text-md);
-  line-height: var(--lr-line-sm);
-  font-weight: var(--lr-weight-semibold);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
 
   border: 1px solid transparent;
   background: transparent;
-  color: var(--lr-text);
+  color: rgba(15, 23, 42, 0.95);
 
   cursor: pointer;
-  text-decoration: none;
   user-select: none;
-  -webkit-tap-highlight-color: transparent;
+  white-space: nowrap;
 
-  transition: background 120ms ease, color 120ms ease, filter 120ms ease;
+  transition: filter 120ms ease, background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
+}
+
+.button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .sm {
-  height: 30px;
-  padding: 0 10px;
-  border-radius: 9px;
-  font-size: var(--lr-text-sm);
-  font-weight: var(--lr-weight-medium);
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 13px;
 }
 
+/* Primary = tenant accent */
 .primary {
   background: var(--lr-accent);
-  color: #ffffff;
-  border-color: rgba(0, 0, 0, 0.08);
+  color: white;
+  border-color: rgba(0, 0, 0, 0.0);
 }
 
 .primary:hover {
   filter: brightness(0.96);
 }
 
+.primary:active {
+  filter: brightness(0.92);
+}
+
+.primary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--lr-accent-soft);
+}
+
+/* Secondary = neutral */
 .secondary {
-  border-color: var(--lr-border-subtle);
-  color: var(--lr-text);
+  background: white;
+  color: rgba(15, 23, 42, 0.95);
+  border-color: rgba(15, 23, 42, 0.12);
 }
 
 .secondary:hover {
-  background: var(--lr-hover);
+  background: rgba(15, 23, 42, 0.04);
 }
 
+.secondary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--lr-accent-soft);
+}
+
+/* Ghost = neutral, subtle */
 .ghost {
-  color: var(--lr-text-secondary);
+  background: transparent;
+  color: rgba(15, 23, 42, 0.82);
+  border-color: transparent;
 }
 
 .ghost:hover {
-  background: var(--lr-hover);
-  color: var(--lr-text);
+  background: rgba(15, 23, 42, 0.06);
 }
 
-.button:focus-visible {
-  outline: 3px solid var(--lr-focus);
-  outline-offset: 2px;
-}
-
-.button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.ghost:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--lr-accent-soft);
 }
