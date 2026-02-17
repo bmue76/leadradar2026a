@@ -350,3 +350,109 @@ export async function archiveEvent(
 
   return "OK";
 }
+
+/**
+ * TP7.4: Delete Event if it was never used (“nicht im Betrieb”).
+ * Enforced server-side:
+ * - Event must not be ACTIVE
+ * - no assigned forms referencing the event
+ * - no bound devices (mobileDevice.activeEventId)
+ * - no leads referencing the event (best-effort, but fail-safe: unknown schema => block)
+ */
+export type DeleteEventResult =
+  | { status: "DELETED"; id: string }
+  | { status: "NOT_FOUND" }
+  | {
+      status: "NOT_DELETABLE";
+      code: "EVENT_NOT_DELETABLE" | "EVENT_DELETE_GUARD_UNKNOWN";
+      message: string;
+      details?: {
+        reasons: string[];
+        counts?: { forms: number; devices: number; leads?: number | null };
+      };
+    };
+
+async function safeCount(delegate: CountDelegate, args: unknown): Promise<number | null> {
+  try {
+    const n = await delegate.count(args);
+    return typeof n === "number" ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+async function countLeadsForEvent(prisma: unknown, tenantId: string, eventId: string): Promise<{ known: boolean; count: number | null }> {
+  const leadDelegate = getCountDelegate(prisma, [
+    "lead",
+    "eventLead",
+    "capturedLead",
+    "mobileLead",
+    "leadItem",
+    "formSubmission",
+  ]);
+
+  if (!leadDelegate) return { known: false, count: null };
+
+  const attempts: unknown[] = [
+    { where: { tenantId, eventId } },
+    { where: { tenantId, assignedEventId: eventId } },
+    { where: { tenantId, event: { id: eventId } } },
+  ];
+
+  for (const args of attempts) {
+    const n = await safeCount(leadDelegate, args);
+    if (n !== null) return { known: true, count: n };
+  }
+
+  // Delegate exists but we couldn't count with known field patterns => treat as unknown (fail-safe)
+  return { known: false, count: null };
+}
+
+export async function deleteEventIfAllowed(prisma: PrismaClient, tenantId: string, id: string): Promise<DeleteEventResult> {
+  return await prisma.$transaction(async (tx) => {
+    const ev = await tx.event.findFirst({
+      where: { id, tenantId },
+      select: { id: true, status: true },
+    });
+
+    if (!ev) return { status: "NOT_FOUND" };
+
+    const reasons: string[] = [];
+    if (ev.status === "ACTIVE") reasons.push("EVENT_IS_ACTIVE");
+
+    const [formsCount, devicesCount] = await Promise.all([
+      tx.form.count({ where: { tenantId, assignedEventId: id } }),
+      tx.mobileDevice.count({ where: { tenantId, activeEventId: id } }),
+    ]);
+
+    if (formsCount > 0) reasons.push("HAS_ASSIGNED_FORMS");
+    if (devicesCount > 0) reasons.push("HAS_BOUND_DEVICES");
+
+    const leadInfo = await countLeadsForEvent(tx as unknown as PrismaClient, tenantId, id);
+    if (!leadInfo.known) {
+      // Fail-safe: do not delete if we can't prove lead usage is zero.
+      reasons.push("LEAD_GUARD_UNKNOWN");
+      return {
+        status: "NOT_DELETABLE",
+        code: "EVENT_DELETE_GUARD_UNKNOWN",
+        message: "Event kann aktuell nicht automatisch gelöscht werden (Lead-Guard unbekannt). Bitte Support kontaktieren.",
+        details: { reasons, counts: { forms: formsCount, devices: devicesCount, leads: null } },
+      };
+    }
+
+    if ((leadInfo.count ?? 0) > 0) reasons.push("HAS_LEADS");
+
+    if (reasons.length > 0) {
+      return {
+        status: "NOT_DELETABLE",
+        code: "EVENT_NOT_DELETABLE",
+        message: "Event kann nicht gelöscht werden (bereits genutzt oder noch referenziert).",
+        details: { reasons, counts: { forms: formsCount, devices: devicesCount, leads: leadInfo.count } },
+      };
+    }
+
+    await tx.event.delete({ where: { id } });
+
+    return { status: "DELETED", id };
+  });
+}
