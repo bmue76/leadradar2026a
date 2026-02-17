@@ -56,14 +56,18 @@ function chip(status: string): string {
   const s = (status || "").toUpperCase();
   const base = "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border";
   if (s === "ACTIVE") return `${base} bg-emerald-50 text-emerald-900 border-emerald-200`;
-  if (s === "DRAFT") return `${base} bg-neutral-50 text-neutral-800 border-neutral-200`;
-  if (s === "ARCHIVED") return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
-  return `${base} bg-neutral-100 text-neutral-700 border-neutral-200`;
+  if (s === "DRAFT") return `${base} bg-slate-50 text-slate-800 border-slate-200`;
+  if (s === "ARCHIVED") return `${base} bg-slate-100 text-slate-700 border-slate-200`;
+  return `${base} bg-slate-100 text-slate-700 border-slate-200`;
 }
 
 function fmtApiErr(res: ApiResult<unknown>): string {
   if (res.ok) return "";
   return `${res.code}: ${res.message}${res.traceId ? ` · Support-Code: ${res.traceId}` : ""}`;
+}
+
+function btnBase() {
+  return "rounded-xl px-3 py-1.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-slate-200 disabled:opacity-50";
 }
 
 export default function EventsClient() {
@@ -148,7 +152,7 @@ export default function EventsClient() {
 
       if (status === "ACTIVE" && autoArchivedEventId) {
         msg = `Event aktiviert · vorheriges ACTIVE archiviert · Devices gelöst: ${devicesUnboundCount ?? 0}`;
-      } else if (status !== "ACTIVE") {
+      } else if (status !== "ACTIVE" && devicesUnboundCount !== null) {
         msg = `Event ${statusLabel(status)} · Devices gelöst: ${devicesUnboundCount ?? 0}`;
       }
     }
@@ -185,6 +189,30 @@ export default function EventsClient() {
     await load();
   }
 
+  async function deleteEvent(eventId: string, name: string) {
+    const ok = window.confirm(
+      `Event löschen?\n\n"${name}"\n\nNur möglich, wenn das Event nie genutzt wurde (keine Leads / keine referenzierenden Formulare / keine gebundenen Geräte).`
+    );
+    if (!ok) return;
+
+    setError(null);
+    setBusyEventId(eventId);
+
+    const res = (await adminFetchJson<unknown>(`/api/admin/v1/events/${eventId}`, {
+      method: "DELETE",
+    })) as ApiResult<unknown>;
+
+    if (!res.ok) {
+      setBusyEventId(null);
+      setError(fmtApiErr(res));
+      return;
+    }
+
+    pushNotice("Event gelöscht.");
+    setBusyEventId(null);
+    await load();
+  }
+
   React.useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -194,15 +222,15 @@ export default function EventsClient() {
     <div className="mx-auto w-full max-w-6xl px-6 py-8">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Events</h1>
-          <p className="mt-1 text-sm text-neutral-600">
-            Übersicht deiner Messen/Events. MVP-Guardrail: Nur 1 ACTIVE Event pro Tenant — Aktivieren archiviert das bisher aktive Event (und löst Devices).
+          <h1 className="text-xl font-semibold tracking-tight text-slate-900">Events</h1>
+          <p className="mt-1 text-sm text-slate-600">
+            Übersicht deiner Messen/Events. Status steuert, was in der Praxis aktiv genutzt wird. Löschen ist nur erlaubt, wenn ein Event nie genutzt wurde.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <select
-            className="rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200"
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
             disabled={loading}
@@ -217,14 +245,14 @@ export default function EventsClient() {
           <button
             type="button"
             onClick={() => void load()}
-            className="rounded-xl border border-neutral-200 px-3 py-2 text-sm text-neutral-800 hover:bg-neutral-50"
+            className={`${btnBase()} border border-slate-200 bg-white text-slate-900 hover:bg-slate-50`}
           >
             Aktualisieren
           </button>
 
           <Link
             href="/admin/settings/mobile"
-            className="rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"
+            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-200"
           >
             Mobile Ops
           </Link>
@@ -238,12 +266,12 @@ export default function EventsClient() {
       ) : null}
 
       {error ? (
-        <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
+        <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{error}</div>
       ) : null}
 
-      <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white">
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
         <table className="w-full text-left text-sm">
-          <thead className="bg-neutral-50 text-xs text-neutral-600">
+          <thead className="bg-slate-50 text-xs text-slate-600">
             <tr>
               <th className="px-4 py-3">Name</th>
               <th className="px-4 py-3">Status</th>
@@ -257,13 +285,13 @@ export default function EventsClient() {
           <tbody>
             {loading ? (
               <tr>
-                <td className="px-4 py-4 text-neutral-600" colSpan={6}>
+                <td className="px-4 py-4 text-slate-600" colSpan={6}>
                   Lade…
                 </td>
               </tr>
             ) : items.length === 0 ? (
               <tr>
-                <td className="px-4 py-4 text-neutral-600" colSpan={6}>
+                <td className="px-4 py-4 text-slate-600" colSpan={6}>
                   Keine Events gefunden.
                 </td>
               </tr>
@@ -272,19 +300,20 @@ export default function EventsClient() {
                 const st = (ev.status || "").toUpperCase();
                 const isBusy = busyEventId === ev.id;
                 const devicesLabel = typeof ev.boundDevicesCount === "number" ? String(ev.boundDevicesCount) : "—";
+                const canOfferDelete = st !== "ACTIVE";
 
                 return (
-                  <tr key={ev.id} className="border-t border-neutral-100">
-                    <td className="px-4 py-3">{ev.name}</td>
+                  <tr key={ev.id} className="border-t border-slate-100">
+                    <td className="px-4 py-3 text-slate-900">{ev.name}</td>
 
                     <td className="px-4 py-3">
                       <span className={chip(ev.status)}>{statusLabel(ev.status)}</span>
                     </td>
 
-                    <td className="px-4 py-3">{fmtDt(ev.startsAt)}</td>
-                    <td className="px-4 py-3">{fmtDt(ev.endsAt)}</td>
+                    <td className="px-4 py-3 text-slate-700">{fmtDt(ev.startsAt)}</td>
+                    <td className="px-4 py-3 text-slate-700">{fmtDt(ev.endsAt)}</td>
 
-                    <td className="px-4 py-3 text-neutral-800">{devicesLabel}</td>
+                    <td className="px-4 py-3 text-slate-800">{devicesLabel}</td>
 
                     <td className="px-4 py-3 text-right">
                       <div className="inline-flex flex-wrap items-center justify-end gap-2">
@@ -293,8 +322,8 @@ export default function EventsClient() {
                             type="button"
                             onClick={() => void setEventStatus(ev.id, "ACTIVE")}
                             disabled={isBusy}
-                            className="rounded-xl border border-neutral-200 px-3 py-1.5 text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-50"
-                            title="Setzt dieses Event aktiv. Ein anderes ACTIVE Event wird automatisch archiviert."
+                            className={`${btnBase()} border border-slate-200 bg-white text-slate-900 hover:bg-slate-50`}
+                            title="Setzt dieses Event aktiv."
                           >
                             Aktivieren
                           </button>
@@ -303,8 +332,8 @@ export default function EventsClient() {
                             type="button"
                             onClick={() => void setEventStatus(ev.id, "ARCHIVED")}
                             disabled={isBusy}
-                            className="rounded-xl border border-neutral-200 px-3 py-1.5 text-sm text-neutral-900 hover:bg-neutral-50 disabled:opacity-50"
-                            title="Archiviert dieses Event und löst Devices."
+                            className={`${btnBase()} border border-slate-200 bg-white text-slate-900 hover:bg-slate-50`}
+                            title="Archiviert dieses Event und löst Devices (falls implementiert)."
                           >
                             Archivieren
                           </button>
@@ -314,11 +343,23 @@ export default function EventsClient() {
                           type="button"
                           onClick={() => void unbindDevices(ev.id)}
                           disabled={isBusy}
-                          className="rounded-xl border border-red-200 px-3 py-1.5 text-sm text-red-900 hover:bg-red-50 disabled:opacity-50"
+                          className={`${btnBase()} border border-rose-200 bg-rose-50 text-rose-900 hover:bg-rose-100`}
                           title="Danger Zone: setzt activeEventId=null für alle Devices, die auf dieses Event zeigen."
                         >
                           Devices lösen
                         </button>
+
+                        {canOfferDelete ? (
+                          <button
+                            type="button"
+                            onClick={() => void deleteEvent(ev.id, ev.name)}
+                            disabled={isBusy}
+                            className={`${btnBase()} border border-rose-200 bg-white text-rose-700 hover:bg-rose-50`}
+                            title="Löscht das Event (nur wenn nie genutzt: keine Leads / keine referenzierenden Formulare / keine gebundenen Geräte)."
+                          >
+                            Löschen
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -329,7 +370,7 @@ export default function EventsClient() {
         </table>
       </div>
 
-      <div className="mt-4 text-xs text-neutral-600">
+      <div className="mt-4 text-xs text-slate-600">
         Hinweis: Lead-Zuordnung läuft über <span className="font-mono">mobileDevice.activeEventId</span>. Das setzt du in{" "}
         <Link href="/admin/settings/mobile" className="underline underline-offset-4">
           Mobile Ops
