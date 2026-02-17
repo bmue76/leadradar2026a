@@ -4,6 +4,7 @@ Stand: 2026-02-05
 Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
 
 ## Navigation
+- teilprojekt-7.3-setup-branding-billing.md — Setup: Branding (Logo + Accent) + Billing/Accounting (Firma/Belege)
 - 01_HANDBOOK.md — Arbeitsweise, Standards, Quality Gates
 - 02_DB.md — Datenmodell, Migrations, Seed
 - 03_API.md — API Contracts, Error Codes, Namespaces (inkl. Mobile: events/active, stats/me, branding)
