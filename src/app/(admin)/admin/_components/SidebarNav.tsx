@@ -74,7 +74,7 @@ const NAV: NavGroup[] = [
     Icon: IconBilling,
     items: [
       { href: "/admin/billing", label: "Übersicht" },
-      { href: "/admin/billing/accounting", label: "Billing / Accounting" },
+      { href: "/admin/settings/billing", label: "Rechnungsdaten" },
     ],
   },
 ];
