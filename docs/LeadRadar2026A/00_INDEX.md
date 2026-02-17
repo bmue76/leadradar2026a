@@ -59,3 +59,5 @@ TP 6.6 — Mobile Branding Provider + Cleanup (nur eine Source of Truth) + Admin
 - teilprojekt-7.x-templates-create-form-scripts-cleanup.md — Templates: Create-Form Fallback + Backfill-Tooling + Script-Cleanup
 
 - teilprojekt-7.x-admin-events-leads-exports-cleanup.md — Admin Events/Leads/Exports Cleanup (DONE)
+
+- teilprojekt-7.3-branding-billing-accounting.md — TP7.3 Branding/Billing Split
