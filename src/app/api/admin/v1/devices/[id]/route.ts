@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { jsonError, jsonOk } from "@/lib/api";
 import { isHttpError, validateBody, httpError } from "@/lib/http";
@@ -41,7 +42,9 @@ export async function GET(req: Request, ctxRoute: { params: Promise<{ id: string
         status: device.status,
         lastSeenAt: device.lastSeenAt ? device.lastSeenAt.toISOString() : null,
         createdAt: device.createdAt.toISOString(),
-        activeEvent: device.activeEvent ? { id: device.activeEvent.id, name: device.activeEvent.name, status: device.activeEvent.status } : null,
+        activeEvent: device.activeEvent
+          ? { id: device.activeEvent.id, name: device.activeEvent.name, status: device.activeEvent.status }
+          : null,
         apiKey: {
           id: device.apiKey.id,
           prefix: device.apiKey.prefix,
@@ -53,6 +56,11 @@ export async function GET(req: Request, ctxRoute: { params: Promise<{ id: string
     });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
+
+    if (e instanceof Prisma.PrismaClientKnownRequestError) {
+      return jsonError(req, 500, "DB_ERROR", "Database error.", { code: e.code });
+    }
+
     return jsonError(req, 500, "INTERNAL", "Unexpected error.");
   }
 }
@@ -108,6 +116,52 @@ export async function PATCH(req: Request, ctxRoute: { params: Promise<{ id: stri
     return jsonOk(req, { id: updated.id });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
+
+    if (e instanceof Prisma.PrismaClientKnownRequestError) {
+      return jsonError(req, 500, "DB_ERROR", "Database error.", { code: e.code });
+    }
+
+    return jsonError(req, 500, "INTERNAL", "Unexpected error.");
+  }
+}
+
+export async function DELETE(req: Request, ctxRoute: { params: Promise<{ id: string }> }) {
+  try {
+    const ctx = await requireAdminAuth(req);
+    const { id } = await ctxRoute.params;
+
+    const device = await prisma.mobileDevice.findFirst({
+      where: { id, tenantId: ctx.tenantId },
+      select: {
+        id: true,
+        apiKeyId: true,
+        apiKey: { select: { status: true } },
+      },
+    });
+
+    if (!device) return jsonError(req, 404, "NOT_FOUND", "Not found.");
+
+    const revokedApiKey = device.apiKey.status === "ACTIVE";
+
+    await prisma.$transaction(async (tx) => {
+      if (revokedApiKey) {
+        await tx.mobileApiKey.update({
+          where: { id: device.apiKeyId },
+          data: { status: "REVOKED", revokedAt: new Date() },
+        });
+      }
+
+      await tx.mobileDevice.delete({ where: { id: device.id } });
+    });
+
+    return jsonOk(req, { deleted: true, id: device.id, revokedApiKey });
+  } catch (e) {
+    if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
+
+    if (e instanceof Prisma.PrismaClientKnownRequestError) {
+      return jsonError(req, 500, "DB_ERROR", "Database error.", { code: e.code });
+    }
+
     return jsonError(req, 500, "INTERNAL", "Unexpected error.");
   }
 }

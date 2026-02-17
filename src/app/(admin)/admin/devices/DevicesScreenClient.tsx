@@ -2,25 +2,33 @@
 
 import Image from "next/image";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { ConfirmDialog } from "../_components/ConfirmDialog";
 
 type ApiOk<T> = { ok: true; data: T; traceId: string };
 type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
 type ApiResp<T> = ApiOk<T> | ApiErr;
+
+type ApiKeyInfo = {
+  prefix: string;
+  status: "ACTIVE" | "REVOKED";
+  revokedAt: string | null;
+};
+
+type ActiveEventInfo = null | { id: string; name: string; status: "DRAFT" | "ACTIVE" | "ARCHIVED" };
 
 type DeviceRow = {
   id: string;
   name: string;
   status: "CONNECTED" | "STALE" | "NEVER";
   lastSeenAt: string | null;
-  updatedAt: string;
-  platform: string | null;
-  appVersion: string | null;
-  activeEventId: string | null;
+  createdAt: string;
+  activeEvent: ActiveEventInfo;
+  apiKey: ApiKeyInfo;
 };
 
 type DevicesList = { items: DeviceRow[] };
 
-function formatDateTime(iso: string | null): string {
+function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   try {
     return new Intl.DateTimeFormat("de-CH", { dateStyle: "short", timeStyle: "short" }).format(new Date(iso));
@@ -37,7 +45,11 @@ function statusChip(s: DeviceRow["status"]) {
         ? "bg-amber-50 text-amber-800 border-amber-100"
         : "bg-slate-50 text-slate-700 border-slate-200";
   const label = s === "CONNECTED" ? "Online" : s === "STALE" ? "Stale" : "Nie";
-  return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${cls}`}>{label}</span>;
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${cls}`}>
+      {label}
+    </span>
+  );
 }
 
 function Button({
@@ -80,11 +92,20 @@ function IconButton({ title, onClick, disabled }: { title: string; onClick: () =
   );
 }
 
+type ConfirmState = null | {
+  deviceId: string;
+  title: string;
+  description: React.ReactNode;
+  confirmLabel: string;
+  tone: "danger" | "primary";
+};
+
 export default function DevicesScreenClient() {
   const [data, setData] = useState<DevicesList | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [traceId, setTraceId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const [q, setQ] = useState("");
   const [showConnect, setShowConnect] = useState(false);
@@ -93,6 +114,14 @@ export default function DevicesScreenClient() {
   const [email, setEmail] = useState("");
   const [emailMsg, setEmailMsg] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+
+  const [confirm, setConfirm] = useState<ConfirmState>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+
+  function pushNotice(msg: string) {
+    setNotice(msg);
+    window.setTimeout(() => setNotice(null), 2500);
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -167,6 +196,7 @@ export default function DevicesScreenClient() {
       } else {
         setEmail("");
         setEmailMsg("");
+        pushNotice("E-Mail gesendet.");
       }
     } catch {
       setErr("Netzwerkfehler.");
@@ -183,8 +213,86 @@ export default function DevicesScreenClient() {
     return u.toString();
   }, [provToken]);
 
+  const openDeleteConfirm = useCallback((d: DeviceRow) => {
+    const hasActiveKey = d.apiKey.status === "ACTIVE";
+    const eventLabel = d.activeEvent ? `"${d.activeEvent.name}"` : "—";
+
+    setConfirm({
+      deviceId: d.id,
+      title: "Gerät löschen?",
+      description: (
+        <div className="space-y-2">
+          <div className="text-slate-900">
+            <span className="font-semibold">{d.name}</span>
+            <span className="text-slate-500"> · {d.id}</span>
+          </div>
+
+          <div className="text-sm text-slate-600">
+            Gebundenes Event: <span className="font-semibold text-slate-900">{eventLabel}</span>
+          </div>
+
+          {hasActiveKey ? (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
+              Dieses Gerät hat eine <span className="font-semibold">laufende Lizenz (aktiver API-Key)</span>.
+              Beim Löschen wird der API-Key sofort <span className="font-semibold">widerrufen</span> und die App kann keine Leads mehr senden.
+            </div>
+          ) : (
+            <div className="text-sm text-slate-600">
+              Der API-Key ist bereits widerrufen. Das Gerät wird endgültig entfernt.
+            </div>
+          )}
+
+          <div className="text-xs text-slate-500">
+            Hinweis: Das Löschen ist tenant-sicher (404 bei fremdem Tenant). Der Widerruf passiert serverseitig.
+          </div>
+        </div>
+      ),
+      confirmLabel: "Löschen",
+      tone: "danger",
+    });
+  }, []);
+
+  const doDeleteConfirmed = useCallback(async () => {
+    if (!confirm) return;
+
+    setConfirmBusy(true);
+    setErr(null);
+    setTraceId(null);
+
+    try {
+      const res = await fetch(`/api/admin/v1/devices/${confirm.deviceId}`, { method: "DELETE" });
+      const json = (await res.json()) as ApiResp<{ deleted: true; id: string; revokedApiKey: boolean }>;
+
+      if (!json.ok) {
+        setErr(json.error.message);
+        setTraceId(json.traceId);
+        setConfirmBusy(false);
+        return;
+      }
+
+      setConfirm(null);
+      setConfirmBusy(false);
+      pushNotice(json.data.revokedApiKey ? "Gerät gelöscht · Lizenz widerrufen." : "Gerät gelöscht.");
+      await load();
+    } catch {
+      setErr("Netzwerkfehler.");
+      setConfirmBusy(false);
+    }
+  }, [confirm, load]);
+
   return (
     <div className="space-y-6">
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ""}
+        description={confirm?.description}
+        confirmLabel={confirm?.confirmLabel ?? "OK"}
+        tone={confirm?.tone ?? "primary"}
+        busy={confirmBusy}
+        onCancel={() => (confirmBusy ? null : setConfirm(null))}
+        onConfirm={doDeleteConfirmed}
+      />
+
       {/* List Card */}
       <section className="rounded-2xl border border-slate-200 bg-white">
         {/* Toolbar */}
@@ -203,6 +311,19 @@ export default function DevicesScreenClient() {
               <Button label="Gerät verbinden" kind="primary" onClick={() => setShowConnect(true)} />
             </div>
           </div>
+
+          {notice ? (
+            <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+              {notice}
+            </div>
+          ) : null}
+
+          {err ? (
+            <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+              {err}
+              {traceId ? <div className="mt-1 text-xs text-rose-900/70">TraceId: {traceId}</div> : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="h-px w-full bg-slate-200" />
@@ -214,8 +335,6 @@ export default function DevicesScreenClient() {
           ) : !data ? (
             <div>
               <div className="text-sm font-semibold text-slate-900">Keine Daten.</div>
-              {err ? <div className="mt-2 text-sm text-rose-700">{err}</div> : null}
-              {traceId ? <div className="mt-1 text-xs text-slate-500">TraceId: {traceId}</div> : null}
             </div>
           ) : data.items.length === 0 ? (
             <div className="py-4 text-sm text-slate-600">Noch keine Geräte.</div>
@@ -225,9 +344,10 @@ export default function DevicesScreenClient() {
                 <tr>
                   <th className="py-2 text-left">Name</th>
                   <th className="py-2 text-left">Status</th>
-                  <th className="py-2 text-left">Plattform</th>
+                  <th className="py-2 text-left">Event</th>
                   <th className="py-2 text-right">Zuletzt gesehen</th>
-                  <th className="py-2 text-right">Updated</th>
+                  <th className="py-2 text-right">Erstellt</th>
+                  <th className="py-2 text-right">Aktionen</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -235,12 +355,18 @@ export default function DevicesScreenClient() {
                   <tr key={d.id} className="hover:bg-slate-50">
                     <td className="py-3 font-semibold text-slate-900">{d.name}</td>
                     <td className="py-3">{statusChip(d.status)}</td>
-                    <td className="py-3 text-slate-700">
-                      {d.platform ?? "—"}
-                      {d.appVersion ? <span className="text-slate-400"> · {d.appVersion}</span> : null}
-                    </td>
+                    <td className="py-3 text-slate-700">{d.activeEvent ? d.activeEvent.name : "—"}</td>
                     <td className="py-3 text-right text-slate-700">{formatDateTime(d.lastSeenAt)}</td>
-                    <td className="py-3 text-right text-slate-700">{formatDateTime(d.updatedAt)}</td>
+                    <td className="py-3 text-right text-slate-700">{formatDateTime(d.createdAt)}</td>
+                    <td className="py-3 text-right">
+                      <button
+                        type="button"
+                        className="inline-flex h-9 items-center justify-center rounded-xl border border-rose-200 bg-white px-3 text-sm font-semibold text-rose-700 hover:bg-rose-50 focus:outline-none focus:ring-2 focus:ring-rose-200"
+                        onClick={() => openDeleteConfirm(d)}
+                      >
+                        Löschen
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -321,7 +447,12 @@ export default function DevicesScreenClient() {
                       placeholder="Optionale Nachricht (z. B. für welches Gerät)"
                       className="h-24 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
                     />
-                    <Button label="E-Mail senden" kind="primary" onClick={sendEmail} disabled={busy !== null || !email.trim()} />
+                    <Button
+                      label="E-Mail senden"
+                      kind="primary"
+                      onClick={sendEmail}
+                      disabled={busy !== null || !email.trim()}
+                    />
                   </div>
                 </div>
               </div>
