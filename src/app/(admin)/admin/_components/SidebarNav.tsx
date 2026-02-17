@@ -40,7 +40,7 @@ const NAV: NavGroup[] = [
     items: [
       { href: "/admin/templates", label: "Vorlagen" },
       { href: "/admin/forms", label: "Formulare" },
-      { href: "/admin/branding", label: "Branding" },
+      { href: "/admin/settings/branding", label: "Branding" },
     ],
   },
   {
@@ -72,7 +72,10 @@ const NAV: NavGroup[] = [
     key: "billing",
     title: "Abrechnung",
     Icon: IconBilling,
-    items: [{ href: "/admin/billing", label: "Übersicht" }],
+    items: [
+      { href: "/admin/billing", label: "Übersicht" },
+      { href: "/admin/billing/accounting", label: "Billing / Accounting" },
+    ],
   },
 ];
 

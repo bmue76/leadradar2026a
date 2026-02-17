@@ -170,28 +170,38 @@ export async function PATCH(req: Request) {
       ...(body.accentColor !== undefined ? { accentColor: body.accentColor } : {}),
     };
 
-    const tenantUpdateData: Prisma.TenantUpdateInput = {
-      // Backward-Compat: Tenant.name bleibt konsistent
-      name: (body.displayName ?? body.legalName).trim(),
-
-      ...(normalizedCountry !== undefined ? { country: normalizedCountry } : {}),
-      ...(body.accentColor !== undefined ? { accentColor: body.accentColor } : {}),
-    };
-
-    const [profile, tenant] = await prisma.$transaction([
-      prisma.tenantProfile.upsert({
+    // IMPORTANT:
+    // tenant.name darf NICHT "aus Versehen" auf legalName zurückfallen, wenn displayName im Body fehlt.
+    // → Wir leiten tenant.name aus dem upserted Profile ab, ausser displayName wird explizit gesetzt.
+    const result = await prisma.$transaction(async (tx) => {
+      const profile = await tx.tenantProfile.upsert({
         where: { tenantId: ctx.tenantId },
         create: profileCreate,
         update: profileUpdate,
-      }),
-      prisma.tenant.update({
+      });
+
+      const nextTenantName =
+        body.displayName !== undefined
+          ? ((body.displayName ?? body.legalName).trim())
+          : ((profile.displayName ?? profile.legalName).trim());
+
+      const tenantUpdateData: Prisma.TenantUpdateInput = {
+        name: nextTenantName,
+
+        ...(normalizedCountry !== undefined ? { country: normalizedCountry } : {}),
+        ...(body.accentColor !== undefined ? { accentColor: body.accentColor } : {}),
+      };
+
+      const tenant = await tx.tenant.update({
         where: { id: ctx.tenantId },
         data: tenantUpdateData,
         select: { id: true, slug: true, name: true, country: true, accentColor: true },
-      }),
-    ]);
+      });
 
-    return jsonOk(req, { tenant, profile });
+      return { tenant, profile };
+    });
+
+    return jsonOk(req, { tenant: result.tenant, profile: result.profile });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     console.error(e);

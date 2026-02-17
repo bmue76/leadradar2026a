@@ -1,9 +1,5 @@
-import BrandingSettingsClient from "./BrandingSettingsClient";
+import BrandingClient from "./BrandingClient";
 
 export default function BrandingPage() {
-  return (
-    <div className="lr-page">
-      <BrandingSettingsClient />
-    </div>
-  );
+  return <BrandingClient />;
 }
