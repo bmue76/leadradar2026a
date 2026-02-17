@@ -93,11 +93,7 @@ export function BrandingProvider({ children }: { children: React.ReactNode }) {
     const cachedFresh = cachedAgeMs !== null ? cachedAgeMs < CACHE_TTL_MS : false;
 
     const sinceLastFetch = nowMs - (lastFetchAtMsRef.current || 0);
-    const shouldRevalidate =
-      force ||
-      !cached ||
-      !cachedFresh ||
-      sinceLastFetch > MIN_REVALIDATE_MS;
+    const shouldRevalidate = force || !cached || !cachedFresh || sinceLastFetch > MIN_REVALIDATE_MS;
 
     if (!shouldRevalidate) return;
 
@@ -128,9 +124,7 @@ export function BrandingProvider({ children }: { children: React.ReactNode }) {
     let logoDataUri: string | null = null;
     if (dto.branding.hasLogo && dto.branding.logoUrl) {
       const cachedLogoSameVersion =
-        !!cached?.logoDataUri &&
-        !!cached?.logoUpdatedAt &&
-        cached.logoUpdatedAt === nextLogoUpdatedAt;
+        !!cached?.logoDataUri && !!cached?.logoUpdatedAt && cached.logoUpdatedAt === nextLogoUpdatedAt;
 
       if (cachedLogoSameVersion) {
         logoDataUri = cached!.logoDataUri;
