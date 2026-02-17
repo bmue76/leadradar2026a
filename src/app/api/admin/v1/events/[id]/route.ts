@@ -42,8 +42,7 @@ export async function DELETE(req: NextRequest, ctxRoute: { params: Promise<{ id:
     if (res.status === "NOT_FOUND") return jsonError(req, 404, "NOT_FOUND", "Event not found.");
 
     if (res.status === "NOT_DELETABLE") {
-      const status = res.code === "EVENT_DELETE_GUARD_UNKNOWN" ? 409 : 409;
-      return jsonError(req, status, res.code, res.message, res.details);
+      return jsonError(req, 409, res.code, res.message, res.details);
     }
 
     return jsonOk(req, { deleted: true, id: res.id });
