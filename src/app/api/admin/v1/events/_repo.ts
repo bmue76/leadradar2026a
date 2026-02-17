@@ -8,11 +8,36 @@ import { z } from "zod";
 
 export const EventStatusSchema = z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]);
 
+const BoolFromQuery = z.preprocess((v) => {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "string") {
+    const s = v.toLowerCase();
+    if (s === "true") return true;
+    if (s === "false") return false;
+  }
+  return undefined;
+}, z.boolean());
+
+const LimitFromQuery = z.preprocess(
+  (v) => {
+    if (typeof v === "number") return v;
+    if (typeof v === "string") {
+      const n = Number.parseInt(v, 10);
+      return Number.isFinite(n) ? n : undefined;
+    }
+    return undefined;
+  },
+  z.number().int().min(1).max(500)
+);
+
 export const EventListQuerySchema = z.object({
   q: z.string().trim().min(1).optional(),
   status: z.enum(["ALL", "DRAFT", "ACTIVE", "ARCHIVED"]).default("ALL"),
   sort: z.enum(["updatedAt", "startsAt", "name"]).default("updatedAt"),
   dir: z.enum(["asc", "desc"]).default("desc"),
+
+  limit: LimitFromQuery.optional(),
+  includeCounts: BoolFromQuery.optional().default(false),
 });
 
 export const EventCreateBodySchema = z
@@ -59,7 +84,6 @@ function normalizeDateInput(v: string | null | undefined): Date | null {
   const s = v.trim();
   if (!s) return null;
 
-  // Accept YYYY-MM-DD or ISO; JS Date("YYYY-MM-DD") is UTC midnight.
   const d = new Date(s);
   if (Number.isNaN(d.getTime())) return null;
   return d;
@@ -81,6 +105,14 @@ export type EventListItem = {
   endsAt?: string;
   location?: string;
   updatedAt: string;
+
+  // optional counts
+  leadsCount?: number;
+  assignedFormsCount?: number;
+  boundDevicesCount?: number;
+
+  // convenience for UI
+  canDelete?: boolean;
 };
 
 export function mapEventListItem(e: {
@@ -121,6 +153,8 @@ export async function listEvents(prisma: PrismaClient, tenantId: string, q: Even
     ];
   }
 
+  const take = Math.min(q.limit ?? 500, 500);
+
   const rows = await prisma.event.findMany({
     where,
     orderBy: buildOrderBy(q.sort, q.dir),
@@ -133,10 +167,68 @@ export async function listEvents(prisma: PrismaClient, tenantId: string, q: Even
       location: true,
       updatedAt: true,
     },
-    take: 500,
+    take,
   });
 
-  return rows.map(mapEventListItem);
+  if (!q.includeCounts || rows.length === 0) {
+    return rows.map(mapEventListItem);
+  }
+
+  const ids = rows.map((r) => r.id);
+
+  const [leadCounts, formCounts, deviceCounts] = await Promise.all([
+    prisma.lead.groupBy({
+      by: ["eventId"],
+      where: { tenantId, isDeleted: false, eventId: { in: ids } },
+      _count: { _all: true },
+    }),
+    prisma.form.groupBy({
+      by: ["assignedEventId"],
+      where: { tenantId, assignedEventId: { in: ids } },
+      _count: { _all: true },
+    }),
+    prisma.mobileDevice.groupBy({
+      by: ["activeEventId"],
+      where: { tenantId, activeEventId: { in: ids } },
+      _count: { _all: true },
+    }),
+  ]);
+
+  const leadsMap = new Map<string, number>();
+  for (const r of leadCounts) {
+    const key = r.eventId;
+    if (typeof key === "string") leadsMap.set(key, r._count._all);
+  }
+
+  const formsMap = new Map<string, number>();
+  for (const r of formCounts) {
+    const key = r.assignedEventId;
+    if (typeof key === "string") formsMap.set(key, r._count._all);
+  }
+
+  const devicesMap = new Map<string, number>();
+  for (const r of deviceCounts) {
+    const key = r.activeEventId;
+    if (typeof key === "string") devicesMap.set(key, r._count._all);
+  }
+
+  return rows.map((row) => {
+    const base = mapEventListItem(row);
+
+    const leadsCount = leadsMap.get(row.id) ?? 0;
+    const assignedFormsCount = formsMap.get(row.id) ?? 0;
+    const boundDevicesCount = devicesMap.get(row.id) ?? 0;
+
+    const canDelete = base.status !== "ACTIVE" && leadsCount === 0 && assignedFormsCount === 0 && boundDevicesCount === 0;
+
+    return {
+      ...base,
+      leadsCount,
+      assignedFormsCount,
+      boundDevicesCount,
+      canDelete,
+    };
+  });
 }
 
 export async function createEvent(prisma: PrismaClient, tenantId: string, body: EventCreateBody): Promise<EventListItem> {
@@ -203,7 +295,64 @@ export async function updateEvent(
   return mapEventListItem(updated);
 }
 
+/**
+ * DELETE helper used by /events/[id]/route.ts
+ * - only allowed if NOT ACTIVE and no references:
+ *   - no leads (non-deleted) pointing to eventId
+ *   - no forms assignedEventId
+ *   - no devices activeEventId
+ */
+export type DeleteEventIfAllowedResult =
+  | { ok: true; id: string }
+  | {
+      ok: false;
+      code: "NOT_FOUND" | "NOT_DELETABLE";
+      message: string;
+      details?: {
+        leadsCount: number;
+        assignedFormsCount: number;
+        boundDevicesCount: number;
+        status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+      };
+    };
+
+export async function deleteEventIfAllowed(prisma: PrismaClient, tenantId: string, id: string): Promise<DeleteEventIfAllowedResult> {
+  const ev = await prisma.event.findFirst({
+    where: { id, tenantId },
+    select: { id: true, status: true },
+  });
+
+  if (!ev) {
+    return { ok: false, code: "NOT_FOUND", message: "Event nicht gefunden." };
+  }
+
+  const [leadsCount, assignedFormsCount, boundDevicesCount] = await Promise.all([
+    prisma.lead.count({ where: { tenantId, isDeleted: false, eventId: id } }),
+    prisma.form.count({ where: { tenantId, assignedEventId: id } }),
+    prisma.mobileDevice.count({ where: { tenantId, activeEventId: id } }),
+  ]);
+
+  const details = { leadsCount, assignedFormsCount, boundDevicesCount, status: ev.status };
+
+  if (ev.status === "ACTIVE") {
+    return { ok: false, code: "NOT_DELETABLE", message: "Aktive Events können nicht gelöscht werden.", details };
+  }
+
+  if (leadsCount > 0 || assignedFormsCount > 0 || boundDevicesCount > 0) {
+    return {
+      ok: false,
+      code: "NOT_DELETABLE",
+      message: "Event kann nicht gelöscht werden (bereits genutzt oder noch referenziert).",
+      details,
+    };
+  }
+
+  await prisma.event.delete({ where: { id } });
+  return { ok: true, id };
+}
+
 export type ActiveOverview = {
+  // Backward-compat: "primary" ACTIVE event = most recently updated/created
   activeEvent: null | {
     id: string;
     name: string;
@@ -213,6 +362,7 @@ export type ActiveOverview = {
     location?: string;
   };
 
+  // New: all ACTIVE events (Multi-ACTIVE)
   activeEvents: Array<{
     id: string;
     name: string;
@@ -222,6 +372,7 @@ export type ActiveOverview = {
     location?: string;
   }>;
 
+  // Aggregated across ALL ACTIVE events
   counts: {
     assignedActiveForms: number;
     boundDevices: number;
@@ -229,20 +380,6 @@ export type ActiveOverview = {
 
   actions: { href: string; label: string }[];
 };
-
-type CountDelegate = { count: (args: unknown) => Promise<number> };
-
-function getCountDelegate(prisma: unknown, candidates: string[]): CountDelegate | null {
-  const rec = prisma as unknown as Record<string, unknown>;
-  for (const key of candidates) {
-    const maybe = rec[key];
-    if (maybe && typeof maybe === "object" && "count" in (maybe as Record<string, unknown>)) {
-      const fn = (maybe as Record<string, unknown>)["count"];
-      if (typeof fn === "function") return maybe as CountDelegate;
-    }
-  }
-  return null;
-}
 
 export async function getActiveOverview(prisma: PrismaClient, tenantId: string): Promise<ActiveOverview> {
   const actives = await prisma.event.findMany({
@@ -279,15 +416,13 @@ export async function getActiveOverview(prisma: PrismaClient, tenantId: string):
 
   const activeIds = actives.map((a) => a.id);
 
-  const deviceDelegate = getCountDelegate(prisma, ["mobileDevice", "device"]);
-
   const [assignedActiveForms, boundDevices] = await Promise.all([
     prisma.form.count({
       where: { tenantId, status: "ACTIVE", assignedEventId: { in: activeIds } },
     }),
-    deviceDelegate
-      ? deviceDelegate.count({ where: { tenantId, activeEventId: { in: activeIds } } })
-      : Promise.resolve(0),
+    prisma.mobileDevice.count({
+      where: { tenantId, activeEventId: { in: activeIds } },
+    }),
   ]);
 
   return {
@@ -313,6 +448,7 @@ export async function activateEvent(
     if (target.status === "ARCHIVED") return "ARCHIVED";
     if (target.status === "ACTIVE") return "OK";
 
+    // Multi-ACTIVE: do NOT deactivate other ACTIVE events.
     await tx.event.update({
       where: { id },
       data: { status: "ACTIVE" },
@@ -330,6 +466,7 @@ export async function archiveEvent(
   const existing = await prisma.event.findFirst({ where: { id, tenantId }, select: { id: true } });
   if (!existing) return "NOT_FOUND";
 
+  // ops-safe: unbind devices pointing to this event
   await prisma.mobileDevice.updateMany({
     where: { tenantId, activeEventId: id },
     data: { activeEventId: null },
@@ -341,62 +478,4 @@ export async function archiveEvent(
   });
 
   return "OK";
-}
-
-/**
- * TP7.4: Delete Event if it was never used (“nicht im Betrieb”).
- * Enforced server-side:
- * - Event must not be ACTIVE
- * - no assigned forms referencing the event (Form.assignedEventId)
- * - no bound devices (MobileDevice.activeEventId)
- * - no leads referencing the event (Lead.eventId) — counts even soft-deleted to be strict
- */
-export type DeleteEventResult =
-  | { status: "DELETED"; id: string }
-  | { status: "NOT_FOUND" }
-  | {
-      status: "NOT_DELETABLE";
-      code: "EVENT_NOT_DELETABLE";
-      message: string;
-      details: {
-        reasons: string[];
-        counts: { forms: number; devices: number; leads: number };
-      };
-    };
-
-export async function deleteEventIfAllowed(prisma: PrismaClient, tenantId: string, id: string): Promise<DeleteEventResult> {
-  return await prisma.$transaction(async (tx) => {
-    const ev = await tx.event.findFirst({
-      where: { id, tenantId },
-      select: { id: true, status: true },
-    });
-
-    if (!ev) return { status: "NOT_FOUND" };
-
-    const reasons: string[] = [];
-    if (ev.status === "ACTIVE") reasons.push("EVENT_IS_ACTIVE");
-
-    const [formsCount, devicesCount, leadsCount] = await Promise.all([
-      tx.form.count({ where: { tenantId, assignedEventId: id } }),
-      tx.mobileDevice.count({ where: { tenantId, activeEventId: id } }),
-      tx.lead.count({ where: { tenantId, eventId: id } }),
-    ]);
-
-    if (formsCount > 0) reasons.push("HAS_ASSIGNED_FORMS");
-    if (devicesCount > 0) reasons.push("HAS_BOUND_DEVICES");
-    if (leadsCount > 0) reasons.push("HAS_LEADS");
-
-    if (reasons.length > 0) {
-      return {
-        status: "NOT_DELETABLE",
-        code: "EVENT_NOT_DELETABLE",
-        message: "Event kann nicht gelöscht werden (bereits genutzt oder noch referenziert).",
-        details: { reasons, counts: { forms: formsCount, devices: devicesCount, leads: leadsCount } },
-      };
-    }
-
-    await tx.event.delete({ where: { id } });
-
-    return { status: "DELETED", id };
-  });
 }

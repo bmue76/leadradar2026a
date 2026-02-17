@@ -39,9 +39,8 @@ export async function DELETE(req: NextRequest, ctxRoute: { params: Promise<{ id:
 
     const res = await deleteEventIfAllowed(prisma, ctx.tenantId, id);
 
-    if (res.status === "NOT_FOUND") return jsonError(req, 404, "NOT_FOUND", "Event not found.");
-
-    if (res.status === "NOT_DELETABLE") {
+    if (!res.ok) {
+      if (res.code === "NOT_FOUND") return jsonError(req, 404, "NOT_FOUND", "Event not found.");
       return jsonError(req, 409, res.code, res.message, res.details);
     }
 
