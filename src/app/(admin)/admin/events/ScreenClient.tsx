@@ -57,6 +57,10 @@ function classNames(...xs: Array<string | false | undefined | null>) {
   return xs.filter(Boolean).join(" ");
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
 function makeEmptyDraft(): DraftEvent {
   return { name: "", startsAt: "", endsAt: "", location: "" };
 }
@@ -86,8 +90,9 @@ function statusLabel(s: EventStatus): string {
   return "Entwurf";
 }
 
+// ✅ ACTIVE jetzt grün statt blau
 function statusChipClass(s: EventStatus): string {
-  if (s === "ACTIVE") return "border-blue-200 bg-blue-50 text-blue-700";
+  if (s === "ACTIVE") return "border-emerald-200 bg-emerald-50 text-emerald-800";
   if (s === "ARCHIVED") return "border-slate-200 bg-slate-50 text-slate-500";
   return "border-slate-200 bg-slate-50 text-slate-700";
 }
@@ -113,6 +118,21 @@ async function fetchJson<T>(input: string, init?: RequestInit): Promise<ApiResp<
   }
 }
 
+function readDeleteCounts(details: unknown): { forms?: number; devices?: number; leads?: number; reasons?: string[] } {
+  if (!isRecord(details)) return {};
+  const counts = isRecord(details.counts) ? (details.counts as Record<string, unknown>) : null;
+  const reasons = Array.isArray(details.reasons) ? (details.reasons as unknown[]) : null;
+
+  const forms = counts && typeof counts.forms === "number" ? counts.forms : undefined;
+  const devices = counts && typeof counts.devices === "number" ? counts.devices : undefined;
+  const leads = counts && typeof counts.leads === "number" ? counts.leads : undefined;
+
+  const reasonsStr =
+    reasons && reasons.every((x) => typeof x === "string") ? (reasons as string[]) : undefined;
+
+  return { forms, devices, leads, reasons: reasonsStr };
+}
+
 export default function ScreenClient() {
   const [status, setStatus] = useState<StatusFilter>("ALL");
   const [q, setQ] = useState<string>("");
@@ -130,7 +150,11 @@ export default function ScreenClient() {
   const [drawerOpen, setDrawerOpen] = useState<boolean>(false);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>("create");
   const [draft, setDraft] = useState<DraftEvent>(makeEmptyDraft());
-  const [saving, setSaving] = useState<boolean>(false);
+
+  // busy-state für Save / Activate / Archive / Delete
+  const [busy, setBusy] = useState<null | "save" | "activate" | "archive" | "delete">(null);
+  const isBusy = busy !== null;
+  const isSaving = busy === "save";
 
   const debounceRef = useRef<number | null>(null);
 
@@ -192,7 +216,6 @@ export default function ScreenClient() {
   }, [loadList]);
 
   useEffect(() => {
-    // lint-safe: avoid setState directly in effect body
     const t = window.setTimeout(() => {
       void loadOverview();
     }, 0);
@@ -219,9 +242,9 @@ export default function ScreenClient() {
   }, []);
 
   const closeDrawer = useCallback(() => {
-    if (saving) return;
+    if (isBusy) return;
     setDrawerOpen(false);
-  }, [saving]);
+  }, [isBusy]);
 
   const toPayload = useCallback((): EventUpsertPayload => {
     const name = draft.name.trim();
@@ -239,7 +262,7 @@ export default function ScreenClient() {
       return;
     }
 
-    setSaving(true);
+    setBusy("save");
 
     const payload = toPayload();
 
@@ -251,18 +274,18 @@ export default function ScreenClient() {
 
       if (!r.ok) {
         alert(`${r.error.message}\nTrace: ${r.traceId}`);
-        setSaving(false);
+        setBusy(null);
         return;
       }
 
       setDrawerOpen(false);
-      setSaving(false);
+      setBusy(null);
       await reloadAll();
       return;
     }
 
     if (!draft.id) {
-      setSaving(false);
+      setBusy(null);
       return;
     }
 
@@ -273,12 +296,12 @@ export default function ScreenClient() {
 
     if (!r.ok) {
       alert(`${r.error.message}\nTrace: ${r.traceId}`);
-      setSaving(false);
+      setBusy(null);
       return;
     }
 
     setDrawerOpen(false);
-    setSaving(false);
+    setBusy(null);
     await reloadAll();
   }, [draft, drawerMode, reloadAll, toPayload]);
 
@@ -287,11 +310,16 @@ export default function ScreenClient() {
       const ok = window.confirm("Dieses Event wird aktiviert.\n\nAndere aktive Events bleiben aktiv.\n\nFortfahren?");
       if (!ok) return;
 
+      setBusy("activate");
+
       const r = await fetchJson<{ ok: true }>(`/api/admin/v1/events/${id}/activate`, { method: "POST" });
       if (!r.ok) {
         alert(`${r.error.message}\nTrace: ${r.traceId}`);
+        setBusy(null);
         return;
       }
+
+      setBusy(null);
       await reloadAll();
     },
     [reloadAll]
@@ -302,11 +330,51 @@ export default function ScreenClient() {
       const ok = window.confirm("Archivierte Events können nicht mehr in der App verwendet werden.\n\nFortfahren?");
       if (!ok) return;
 
+      setBusy("archive");
+
       const r = await fetchJson<{ ok: true }>(`/api/admin/v1/events/${id}/archive`, { method: "POST" });
       if (!r.ok) {
         alert(`${r.error.message}\nTrace: ${r.traceId}`);
+        setBusy(null);
         return;
       }
+
+      setBusy(null);
+      await reloadAll();
+    },
+    [reloadAll]
+  );
+
+  const doDelete = useCallback(
+    async (id: string, name: string) => {
+      const ok = window.confirm(
+        `Event löschen?\n\n"${name}"\n\nNur möglich, wenn das Event nie genutzt wurde:\n- keine Leads\n- keine referenzierenden Formulare\n- keine gebundenen Geräte`
+      );
+      if (!ok) return;
+
+      setBusy("delete");
+
+      const r = await fetchJson<{ deleted: true; id: string }>(`/api/admin/v1/events/${id}`, { method: "DELETE" });
+
+      if (!r.ok) {
+        // Optional: schönere Meldung bei EVENT_NOT_DELETABLE
+        const info = readDeleteCounts(r.error.details);
+        if (r.error.code === "EVENT_NOT_DELETABLE") {
+          const parts: string[] = [];
+          if (typeof info.forms === "number") parts.push(`Formulare: ${info.forms}`);
+          if (typeof info.devices === "number") parts.push(`Geräte: ${info.devices}`);
+          if (typeof info.leads === "number") parts.push(`Leads: ${info.leads}`);
+          const suffix = parts.length ? `\n\nBelegt durch:\n${parts.join("\n")}` : "";
+          alert(`${r.error.message}${suffix}\n\nTrace: ${r.traceId}`);
+        } else {
+          alert(`${r.error.message}\nTrace: ${r.traceId}`);
+        }
+        setBusy(null);
+        return;
+      }
+
+      setDrawerOpen(false);
+      setBusy(null);
       await reloadAll();
     },
     [reloadAll]
@@ -389,7 +457,10 @@ export default function ScreenClient() {
               <div className="text-xs font-semibold text-slate-600">Formulare zugewiesen</div>
               <div className="mt-1 text-2xl font-semibold text-slate-900">{overview.counts.assignedActiveForms}</div>
               <div className="mt-3">
-                <Link href="/admin/forms" className="text-sm font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 hover:decoration-slate-400">
+                <Link
+                  href="/admin/forms"
+                  className="text-sm font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 hover:decoration-slate-400"
+                >
                   Formulare öffnen
                 </Link>
               </div>
@@ -399,7 +470,10 @@ export default function ScreenClient() {
               <div className="text-xs font-semibold text-slate-600">Geräte verbunden</div>
               <div className="mt-1 text-2xl font-semibold text-slate-900">{overview.counts.boundDevices}</div>
               <div className="mt-3">
-                <Link href="/admin/devices" className="text-sm font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 hover:decoration-slate-400">
+                <Link
+                  href="/admin/devices"
+                  className="text-sm font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 hover:decoration-slate-400"
+                >
                   Geräte öffnen
                 </Link>
               </div>
@@ -542,6 +616,7 @@ export default function ScreenClient() {
               {items.map((e) => {
                 const canActivate = e.status !== "ACTIVE" && e.status !== "ARCHIVED";
                 const canArchive = e.status !== "ARCHIVED";
+                const canDelete = e.status !== "ACTIVE";
 
                 return (
                   <div
@@ -572,6 +647,7 @@ export default function ScreenClient() {
 
                     <div className="col-span-1 text-right text-xs text-slate-500">{formatUpdated(e.updatedAt)}</div>
 
+                    {/* Hover Actions */}
                     <div className="col-span-12 mt-2 hidden items-center gap-2 group-hover:flex">
                       {canActivate ? (
                         <button
@@ -606,6 +682,19 @@ export default function ScreenClient() {
                       >
                         Bearbeiten
                       </button>
+
+                      {canDelete ? (
+                        <button
+                          className="h-9 rounded-xl border border-rose-200 bg-white px-3 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                          title="Löschen nur möglich, wenn Event nie genutzt wurde (keine Leads / Formulare / Geräte)."
+                          onClick={(ev) => {
+                            ev.stopPropagation();
+                            void doDelete(e.id, e.name);
+                          }}
+                        >
+                          Löschen
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 );
@@ -625,13 +714,12 @@ export default function ScreenClient() {
                 <div className="text-sm font-semibold text-slate-900">
                   {drawerMode === "create" ? "Neues Event" : "Event bearbeiten"}
                 </div>
-                <div className="mt-1 text-sm text-slate-600">
-                  Name, Zeitraum und Ort sind für die operative Zuordnung relevant.
-                </div>
+                <div className="mt-1 text-sm text-slate-600">Name, Zeitraum und Ort sind für die operative Zuordnung relevant.</div>
               </div>
               <button
                 className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 hover:bg-slate-50"
                 onClick={closeDrawer}
+                disabled={isBusy}
               >
                 Schliessen
               </button>
@@ -644,6 +732,7 @@ export default function ScreenClient() {
                 onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
                 placeholder="z. B. Swissbau 2026"
                 className="mt-1 h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-slate-300"
+                disabled={isBusy}
               />
 
               <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -654,6 +743,7 @@ export default function ScreenClient() {
                     value={draft.startsAt}
                     onChange={(e) => setDraft((d) => ({ ...d, startsAt: e.target.value }))}
                     className="mt-1 h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-slate-300"
+                    disabled={isBusy}
                   />
                 </div>
                 <div>
@@ -663,6 +753,7 @@ export default function ScreenClient() {
                     value={draft.endsAt}
                     onChange={(e) => setDraft((d) => ({ ...d, endsAt: e.target.value }))}
                     className="mt-1 h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-slate-300"
+                    disabled={isBusy}
                   />
                 </div>
               </div>
@@ -674,62 +765,93 @@ export default function ScreenClient() {
                   onChange={(e) => setDraft((d) => ({ ...d, location: e.target.value }))}
                   placeholder="z. B. Basel"
                   className="mt-1 h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-slate-300"
+                  disabled={isBusy}
                 />
               </div>
 
               {drawerMode === "edit" ? (
-                <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5">
-                  <div className="text-xs font-semibold text-slate-600">Status</div>
-                  <div className="mt-1 flex items-center gap-2">
-                    <span
-                      className={classNames(
-                        "inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold",
-                        statusChipClass(draft.status || "DRAFT")
+                <>
+                  <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5">
+                    <div className="text-xs font-semibold text-slate-600">Status</div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <span
+                        className={classNames(
+                          "inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold",
+                          statusChipClass(draft.status || "DRAFT")
+                        )}
+                      >
+                        {statusLabel(draft.status || "DRAFT")}
+                      </span>
+                      <span className="text-xs text-slate-500">
+                        Mehrere Events können aktiv sein. Geräte werden pro Gerät an ein Event gebunden (activeEventId).
+                      </span>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {draft.status !== "ACTIVE" && draft.status !== "ARCHIVED" && draft.id ? (
+                        <button
+                          className="h-9 rounded-xl bg-slate-900 px-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                          onClick={() => void doActivate(draft.id!)}
+                          disabled={isBusy}
+                        >
+                          Aktiv setzen
+                        </button>
+                      ) : null}
+
+                      {draft.status !== "ARCHIVED" && draft.id ? (
+                        <button
+                          className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
+                          onClick={() => void doArchive(draft.id!)}
+                          disabled={isBusy}
+                        >
+                          Archivieren
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {/* ✅ Delete im Drawer */}
+                  {draft.id ? (
+                    <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-5">
+                      <div className="text-xs font-semibold text-rose-900">Löschen</div>
+                      <div className="mt-1 text-xs text-rose-800">
+                        Nur möglich, wenn das Event nie genutzt wurde (keine Leads / keine referenzierenden Formulare / keine gebundenen Geräte).
+                      </div>
+
+                      {draft.status === "ACTIVE" ? (
+                        <div className="mt-3 text-xs text-rose-800">
+                          Aktive Events können nicht gelöscht werden. Bitte zuerst archivieren.
+                        </div>
+                      ) : (
+                        <div className="mt-3">
+                          <button
+                            className="h-9 rounded-xl border border-rose-200 bg-white px-3 text-sm font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                            onClick={() => void doDelete(draft.id!, draft.name)}
+                            disabled={isBusy}
+                          >
+                            Event löschen
+                          </button>
+                        </div>
                       )}
-                    >
-                      {statusLabel(draft.status || "DRAFT")}
-                    </span>
-                    <span className="text-xs text-slate-500">Mehrere Events können aktiv sein. Geräte werden pro Gerät an ein Event gebunden (activeEventId).</span>
-                  </div>
-
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {draft.status !== "ACTIVE" && draft.status !== "ARCHIVED" && draft.id ? (
-                      <button
-                        className="h-9 rounded-xl bg-slate-900 px-3 text-sm font-semibold text-white hover:bg-slate-800"
-                        onClick={() => void doActivate(draft.id!)}
-                        disabled={saving}
-                      >
-                        Aktiv setzen
-                      </button>
-                    ) : null}
-
-                    {draft.status !== "ARCHIVED" && draft.id ? (
-                      <button
-                        className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 hover:bg-slate-50"
-                        onClick={() => void doArchive(draft.id!)}
-                        disabled={saving}
-                      >
-                        Archivieren
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
+                    </div>
+                  ) : null}
+                </>
               ) : null}
 
               <div className="mt-6 flex items-center justify-end gap-2">
                 <button
-                  className="h-9 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                  className="h-9 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
                   onClick={closeDrawer}
-                  disabled={saving}
+                  disabled={isBusy}
                 >
                   Abbrechen
                 </button>
                 <button
-                  className="h-9 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800"
+                  className="h-9 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
                   onClick={() => void doSave()}
-                  disabled={saving}
+                  disabled={isBusy}
                 >
-                  {saving ? "Speichern…" : "Speichern"}
+                  {isSaving ? "Speichern…" : "Speichern"}
                 </button>
               </div>
             </div>
