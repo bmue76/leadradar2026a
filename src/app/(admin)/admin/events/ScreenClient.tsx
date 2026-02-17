@@ -66,16 +66,56 @@ function makeEmptyDraft(): DraftEvent {
   return { name: "", startsAt: "", endsAt: "", location: "" };
 }
 
-function formatRange(startsAt?: string, endsAt?: string): string {
-  if (startsAt && endsAt) return `${startsAt} – ${endsAt}`;
-  if (startsAt) return `ab ${startsAt}`;
-  if (endsAt) return `bis ${endsAt}`;
+// ---- Date helpers (dd.mm.yyyy) ----
+function parseToDate(value?: string | null): Date | null {
+  if (!value) return null;
+
+  // If API returns YYYY-MM-DD (date-only), parse as LOCAL date to avoid TZ shifting.
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (m) {
+    const y = Number(m[1]);
+    const mo = Number(m[2]) - 1;
+    const d = Number(m[3]);
+    const dt = new Date(y, mo, d);
+    if (Number.isNaN(dt.getTime())) return null;
+    return dt;
+  }
+
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt;
+}
+
+const dmyFmt = new Intl.DateTimeFormat("de-CH", { day: "2-digit", month: "2-digit", year: "numeric" });
+
+function fmtDMY(value?: string | null): string {
+  const dt = parseToDate(value);
+  if (!dt) return "—";
+  return dmyFmt.format(dt); // dd.mm.yyyy
+}
+
+function formatRangeDMY(startsAt?: string, endsAt?: string): string {
+  const a = startsAt ? fmtDMY(startsAt) : "";
+  const b = endsAt ? fmtDMY(endsAt) : "";
+  if (a && b) return `${a} – ${b}`;
+  if (a) return `ab ${a}`;
+  if (b) return `bis ${b}`;
   return "—";
+}
+
+function normalizeToDateInput(value?: string): string {
+  if (!value) return "";
+  // ISO datetime -> YYYY-MM-DD
+  if (value.includes("T")) return value.slice(0, 10);
+  // already date-only
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  return "";
 }
 
 function formatUpdated(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
+  // Updated bleibt inkl. Zeit (ist ok)
   return d.toLocaleString("de-CH", {
     year: "numeric",
     month: "2-digit",
@@ -143,6 +183,10 @@ export default function ScreenClient() {
 
   const [overview, setOverview] = useState<ActiveOverviewApi | null>(null);
   const [overviewLoading, setOverviewLoading] = useState<boolean>(true);
+
+  // ✅ separate active list (shows ALL active events, independent of filters)
+  const [activeItems, setActiveItems] = useState<EventListItem[]>([]);
+  const [activeLoading, setActiveLoading] = useState<boolean>(true);
 
   const [drawerOpen, setDrawerOpen] = useState<boolean>(false);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>("create");
@@ -255,9 +299,27 @@ export default function ScreenClient() {
     setOverviewLoading(false);
   }, []);
 
+  const loadActiveList = useCallback(async () => {
+    setActiveLoading(true);
+    const sp = new URLSearchParams();
+    sp.set("status", "ACTIVE");
+    sp.set("sort", "updatedAt");
+    sp.set("dir", "desc");
+    sp.set("limit", "50");
+
+    const r = await fetchJson<{ items: EventListItem[] }>(`/api/admin/v1/events?${sp.toString()}`, { method: "GET" });
+    if (!r.ok) {
+      setActiveItems([]);
+      setActiveLoading(false);
+      return;
+    }
+    setActiveItems(r.data.items);
+    setActiveLoading(false);
+  }, []);
+
   const reloadAll = useCallback(async () => {
-    await Promise.all([loadList(), loadOverview()]);
-  }, [loadList, loadOverview]);
+    await Promise.all([loadList(), loadOverview(), loadActiveList()]);
+  }, [loadList, loadOverview, loadActiveList]);
 
   useEffect(() => {
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
@@ -272,9 +334,10 @@ export default function ScreenClient() {
   useEffect(() => {
     const t = window.setTimeout(() => {
       void loadOverview();
+      void loadActiveList();
     }, 0);
     return () => window.clearTimeout(t);
-  }, [loadOverview]);
+  }, [loadOverview, loadActiveList]);
 
   const openCreate = useCallback(() => {
     setDrawerMode("create");
@@ -287,8 +350,8 @@ export default function ScreenClient() {
     setDraft({
       id: e.id,
       name: e.name,
-      startsAt: e.startsAt ?? "",
-      endsAt: e.endsAt ?? "",
+      startsAt: normalizeToDateInput(e.startsAt),
+      endsAt: normalizeToDateInput(e.endsAt),
       location: e.location ?? "",
       status: e.status,
     });
@@ -534,7 +597,7 @@ export default function ScreenClient() {
   }, []);
 
   const activeEventCard = useMemo(() => {
-    if (overviewLoading) {
+    if (overviewLoading || activeLoading) {
       return (
         <section className="rounded-2xl border border-slate-200 bg-white">
           <div className="p-5">
@@ -549,21 +612,37 @@ export default function ScreenClient() {
       );
     }
 
-    if (!overview || !overview.activeEvent) {
+    const counts = overview?.counts ?? { assignedActiveForms: 0, boundDevices: 0 };
+
+    // ✅ Prefer activeItems list (can be >1)
+    const list = activeItems.length
+      ? activeItems
+      : overview?.activeEvent
+        ? [
+            {
+              id: overview.activeEvent.id,
+              name: overview.activeEvent.name,
+              status: "ACTIVE" as const,
+              startsAt: overview.activeEvent.startsAt,
+              endsAt: overview.activeEvent.endsAt,
+              location: overview.activeEvent.location,
+              updatedAt: new Date().toISOString(),
+            },
+          ]
+        : [];
+
+    if (list.length === 0) {
       return (
         <section className="rounded-2xl border border-slate-200 bg-white">
           <div className="p-5">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="text-sm font-semibold text-slate-900">Aktives Event</div>
-                <div className="mt-1 text-sm text-slate-600">Kein aktives Event</div>
+                <div className="text-sm font-semibold text-slate-900">Aktive Events</div>
+                <div className="mt-1 text-sm text-slate-600">Keine aktiven Events</div>
                 <div className="mt-3 text-sm text-slate-600">Aktiviere ein Event, damit Formulare und Geräte korrekt zugeordnet sind.</div>
               </div>
 
-              <button
-                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-                onClick={openCreate}
-              >
+              <button className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800" onClick={openCreate}>
                 Event anlegen
               </button>
             </div>
@@ -572,29 +651,49 @@ export default function ScreenClient() {
       );
     }
 
-    const e = overview.activeEvent;
-
     return (
       <section className="rounded-2xl border border-slate-200 bg-white">
         <div className="p-5">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <div className="text-sm font-semibold text-slate-900">Aktives Event</div>
-              <div className="mt-1 text-base font-semibold text-slate-900">{e.name}</div>
+              <div className="text-sm font-semibold text-slate-900">Aktive Events</div>
               <div className="mt-1 text-sm text-slate-600">
-                {formatRange(e.startsAt, e.endsAt)}
-                {e.location ? ` · ${e.location}` : ""}
+                {list.length === 1 ? "1 aktives Event" : `${list.length} aktive Events`}
               </div>
             </div>
+
             <span className={classNames("inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold", statusChipClass("ACTIVE"))}>
-              Aktiv
+              Aktiv · {list.length}
             </span>
+          </div>
+
+          <div className="mt-3 space-y-2">
+            {list.map((e) => (
+              <button
+                key={e.id}
+                type="button"
+                onClick={() => openEdit(e)}
+                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-left hover:bg-slate-50"
+                title="Event bearbeiten"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm font-semibold text-slate-900">{e.name}</div>
+                  <span className={classNames("inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold", statusChipClass("ACTIVE"))}>
+                    Aktiv
+                  </span>
+                </div>
+                <div className="mt-1 text-sm text-slate-600">
+                  {formatRangeDMY(e.startsAt, e.endsAt)}
+                  {e.location ? ` · ${e.location}` : ""}
+                </div>
+              </button>
+            ))}
           </div>
 
           <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="rounded-2xl border border-slate-200 bg-white p-5">
               <div className="text-xs font-semibold text-slate-600">Formulare zugewiesen</div>
-              <div className="mt-1 text-2xl font-semibold text-slate-900">{overview.counts.assignedActiveForms}</div>
+              <div className="mt-1 text-2xl font-semibold text-slate-900">{counts.assignedActiveForms}</div>
               <div className="mt-3">
                 <Link href="/admin/forms" className="text-sm font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 hover:decoration-slate-400">
                   Formulare öffnen
@@ -604,7 +703,7 @@ export default function ScreenClient() {
 
             <div className="rounded-2xl border border-slate-200 bg-white p-5">
               <div className="text-xs font-semibold text-slate-600">Geräte verbunden</div>
-              <div className="mt-1 text-2xl font-semibold text-slate-900">{overview.counts.boundDevices}</div>
+              <div className="mt-1 text-2xl font-semibold text-slate-900">{counts.boundDevices}</div>
               <div className="mt-3">
                 <Link href="/admin/devices" className="text-sm font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 hover:decoration-slate-400">
                   Geräte öffnen
@@ -612,10 +711,14 @@ export default function ScreenClient() {
               </div>
             </div>
           </div>
+
+          <div className="mt-3 text-xs text-slate-500">
+            Hinweis: Es können mehrere Events aktiv sein. Die App arbeitet pro Gerät mit dem gebundenen Event (<span className="font-mono">activeEventId</span>).
+          </div>
         </div>
       </section>
     );
-  }, [overview, overviewLoading, openCreate]);
+  }, [overview, overviewLoading, activeItems, activeLoading, openCreate, openEdit]);
 
   return (
     <>
@@ -758,7 +861,8 @@ export default function ScreenClient() {
                       </span>
                     </div>
 
-                    <div className="col-span-3 text-slate-700">{formatRange(e.startsAt, e.endsAt)}</div>
+                    {/* ✅ Zeitraum dd.mm.yyyy */}
+                    <div className="col-span-3 text-slate-700">{formatRangeDMY(e.startsAt, e.endsAt)}</div>
                     <div className="col-span-2 truncate text-slate-700">{e.location ?? "—"}</div>
 
                     <div className="col-span-1 text-right text-xs text-slate-500">{formatUpdated(e.updatedAt)}</div>
@@ -965,11 +1069,7 @@ export default function ScreenClient() {
       ) : null}
 
       {/* Dialog (replaces window.alert/confirm) */}
-      <ConfirmDialog
-        {...dialog}
-        onCancel={() => closeDialog(false)}
-        onConfirm={() => closeDialog(true)}
-      />
+      <ConfirmDialog {...dialog} onCancel={() => closeDialog(false)} onConfirm={() => closeDialog(true)} />
     </>
   );
 }
