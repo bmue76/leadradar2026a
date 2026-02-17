@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ConfirmDialog, { DialogState } from "./_components/ConfirmDialog";
 
 type EventStatus = "DRAFT" | "ACTIVE" | "ARCHIVED";
 type StatusFilter = "ALL" | EventStatus;
@@ -90,7 +91,7 @@ function statusLabel(s: EventStatus): string {
   return "Entwurf";
 }
 
-// ✅ ACTIVE jetzt grün statt blau
+// ✅ ACTIVE grün
 function statusChipClass(s: EventStatus): string {
   if (s === "ACTIVE") return "border-emerald-200 bg-emerald-50 text-emerald-800";
   if (s === "ARCHIVED") return "border-slate-200 bg-slate-50 text-slate-500";
@@ -118,19 +119,15 @@ async function fetchJson<T>(input: string, init?: RequestInit): Promise<ApiResp<
   }
 }
 
-function readDeleteCounts(details: unknown): { forms?: number; devices?: number; leads?: number; reasons?: string[] } {
+function readDeleteCounts(details: unknown): { forms?: number; devices?: number; leads?: number } {
   if (!isRecord(details)) return {};
   const counts = isRecord(details.counts) ? (details.counts as Record<string, unknown>) : null;
-  const reasons = Array.isArray(details.reasons) ? (details.reasons as unknown[]) : null;
 
   const forms = counts && typeof counts.forms === "number" ? counts.forms : undefined;
   const devices = counts && typeof counts.devices === "number" ? counts.devices : undefined;
   const leads = counts && typeof counts.leads === "number" ? counts.leads : undefined;
 
-  const reasonsStr =
-    reasons && reasons.every((x) => typeof x === "string") ? (reasons as string[]) : undefined;
-
-  return { forms, devices, leads, reasons: reasonsStr };
+  return { forms, devices, leads };
 }
 
 export default function ScreenClient() {
@@ -157,6 +154,63 @@ export default function ScreenClient() {
   const isSaving = busy === "save";
 
   const debounceRef = useRef<number | null>(null);
+
+  // Dialog (Confirm/Alert)
+  const [dialog, setDialog] = useState<DialogState>({
+    open: false,
+    mode: "alert",
+    tone: "default",
+    title: "",
+    message: "",
+    confirmLabel: "OK",
+    cancelLabel: "Abbrechen",
+  });
+
+  const dialogPromiseRef = useRef<null | { mode: "confirm" | "alert"; resolve: (v: any) => void }>(null);
+
+  const closeDialog = useCallback((confirmed: boolean) => {
+    const pending = dialogPromiseRef.current;
+    dialogPromiseRef.current = null;
+    setDialog((d) => ({ ...d, open: false }));
+
+    if (!pending) return;
+
+    if (pending.mode === "confirm") pending.resolve(confirmed);
+    else pending.resolve(undefined);
+  }, []);
+
+  const showConfirm = useCallback(
+    (opts: Omit<DialogState, "open" | "mode"> & { tone?: "default" | "danger" }) => {
+      return new Promise<boolean>((resolve) => {
+        dialogPromiseRef.current = { mode: "confirm", resolve };
+        setDialog({
+          open: true,
+          mode: "confirm",
+          tone: opts.tone ?? "default",
+          title: opts.title,
+          message: opts.message,
+          confirmLabel: opts.confirmLabel ?? "Bestätigen",
+          cancelLabel: opts.cancelLabel ?? "Abbrechen",
+        });
+      });
+    },
+    []
+  );
+
+  const showAlert = useCallback((opts: Omit<DialogState, "open" | "mode">) => {
+    return new Promise<void>((resolve) => {
+      dialogPromiseRef.current = { mode: "alert", resolve };
+      setDialog({
+        open: true,
+        mode: "alert",
+        tone: opts.tone ?? "default",
+        title: opts.title,
+        message: opts.message,
+        confirmLabel: opts.confirmLabel ?? "OK",
+        cancelLabel: opts.cancelLabel ?? "Schliessen",
+      });
+    });
+  }, []);
 
   const queryString = useMemo(() => {
     const sp = new URLSearchParams();
@@ -258,12 +312,15 @@ export default function ScreenClient() {
   const doSave = useCallback(async () => {
     const name = draft.name.trim();
     if (!name) {
-      alert("Bitte einen Namen erfassen.");
+      await showAlert({
+        title: "Name fehlt",
+        message: "Bitte einen Namen erfassen.",
+        confirmLabel: "OK",
+      });
       return;
     }
 
     setBusy("save");
-
     const payload = toPayload();
 
     if (drawerMode === "create") {
@@ -273,7 +330,15 @@ export default function ScreenClient() {
       });
 
       if (!r.ok) {
-        alert(`${r.error.message}\nTrace: ${r.traceId}`);
+        await showAlert({
+          title: "Fehler",
+          message: (
+            <div className="space-y-2">
+              <div>{r.error.message}</div>
+              <div className="text-xs text-slate-500">Trace: {r.traceId}</div>
+            </div>
+          ),
+        });
         setBusy(null);
         return;
       }
@@ -295,7 +360,15 @@ export default function ScreenClient() {
     });
 
     if (!r.ok) {
-      alert(`${r.error.message}\nTrace: ${r.traceId}`);
+      await showAlert({
+        title: "Fehler",
+        message: (
+          <div className="space-y-2">
+            <div>{r.error.message}</div>
+            <div className="text-xs text-slate-500">Trace: {r.traceId}</div>
+          </div>
+        ),
+      });
       setBusy(null);
       return;
     }
@@ -303,18 +376,37 @@ export default function ScreenClient() {
     setDrawerOpen(false);
     setBusy(null);
     await reloadAll();
-  }, [draft, drawerMode, reloadAll, toPayload]);
+  }, [draft, drawerMode, reloadAll, showAlert, toPayload]);
 
   const doActivate = useCallback(
     async (id: string) => {
-      const ok = window.confirm("Dieses Event wird aktiviert.\n\nAndere aktive Events bleiben aktiv.\n\nFortfahren?");
+      const ok = await showConfirm({
+        title: "Event aktivieren",
+        message: (
+          <div className="space-y-2">
+            <div>Dieses Event wird aktiviert.</div>
+            <div className="text-xs text-slate-500">Andere aktive Events bleiben aktiv.</div>
+          </div>
+        ),
+        confirmLabel: "Aktivieren",
+        cancelLabel: "Abbrechen",
+        tone: "default",
+      });
       if (!ok) return;
 
       setBusy("activate");
 
       const r = await fetchJson<{ ok: true }>(`/api/admin/v1/events/${id}/activate`, { method: "POST" });
       if (!r.ok) {
-        alert(`${r.error.message}\nTrace: ${r.traceId}`);
+        await showAlert({
+          title: "Fehler",
+          message: (
+            <div className="space-y-2">
+              <div>{r.error.message}</div>
+              <div className="text-xs text-slate-500">Trace: {r.traceId}</div>
+            </div>
+          ),
+        });
         setBusy(null);
         return;
       }
@@ -322,19 +414,37 @@ export default function ScreenClient() {
       setBusy(null);
       await reloadAll();
     },
-    [reloadAll]
+    [reloadAll, showAlert, showConfirm]
   );
 
   const doArchive = useCallback(
     async (id: string) => {
-      const ok = window.confirm("Archivierte Events können nicht mehr in der App verwendet werden.\n\nFortfahren?");
+      const ok = await showConfirm({
+        title: "Event archivieren",
+        message: (
+          <div className="space-y-2">
+            <div>Archivierte Events können nicht mehr in der App verwendet werden.</div>
+          </div>
+        ),
+        confirmLabel: "Archivieren",
+        cancelLabel: "Abbrechen",
+        tone: "default",
+      });
       if (!ok) return;
 
       setBusy("archive");
 
       const r = await fetchJson<{ ok: true }>(`/api/admin/v1/events/${id}/archive`, { method: "POST" });
       if (!r.ok) {
-        alert(`${r.error.message}\nTrace: ${r.traceId}`);
+        await showAlert({
+          title: "Fehler",
+          message: (
+            <div className="space-y-2">
+              <div>{r.error.message}</div>
+              <div className="text-xs text-slate-500">Trace: {r.traceId}</div>
+            </div>
+          ),
+        });
         setBusy(null);
         return;
       }
@@ -342,14 +452,28 @@ export default function ScreenClient() {
       setBusy(null);
       await reloadAll();
     },
-    [reloadAll]
+    [reloadAll, showAlert, showConfirm]
   );
 
   const doDelete = useCallback(
     async (id: string, name: string) => {
-      const ok = window.confirm(
-        `Event löschen?\n\n"${name}"\n\nNur möglich, wenn das Event nie genutzt wurde:\n- keine Leads\n- keine referenzierenden Formulare\n- keine gebundenen Geräte`
-      );
+      const ok = await showConfirm({
+        title: "Event löschen",
+        tone: "danger",
+        message: (
+          <div className="space-y-2">
+            <div className="font-semibold text-slate-900">„{name}“</div>
+            <div>Nur möglich, wenn das Event nie genutzt wurde:</div>
+            <ul className="list-disc pl-5 text-sm text-slate-700">
+              <li>keine Leads</li>
+              <li>keine referenzierenden Formulare</li>
+              <li>keine gebundenen Geräte</li>
+            </ul>
+          </div>
+        ),
+        confirmLabel: "Löschen",
+        cancelLabel: "Abbrechen",
+      });
       if (!ok) return;
 
       setBusy("delete");
@@ -357,18 +481,40 @@ export default function ScreenClient() {
       const r = await fetchJson<{ deleted: true; id: string }>(`/api/admin/v1/events/${id}`, { method: "DELETE" });
 
       if (!r.ok) {
-        // Optional: schönere Meldung bei EVENT_NOT_DELETABLE
         const info = readDeleteCounts(r.error.details);
         if (r.error.code === "EVENT_NOT_DELETABLE") {
           const parts: string[] = [];
           if (typeof info.forms === "number") parts.push(`Formulare: ${info.forms}`);
           if (typeof info.devices === "number") parts.push(`Geräte: ${info.devices}`);
           if (typeof info.leads === "number") parts.push(`Leads: ${info.leads}`);
-          const suffix = parts.length ? `\n\nBelegt durch:\n${parts.join("\n")}` : "";
-          alert(`${r.error.message}${suffix}\n\nTrace: ${r.traceId}`);
+
+          await showAlert({
+            title: "Event kann nicht gelöscht werden",
+            message: (
+              <div className="space-y-2">
+                <div>{r.error.message}</div>
+                {parts.length ? (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                    <div className="text-xs font-semibold text-slate-600">Belegt durch</div>
+                    <div className="mt-1 whitespace-pre-line">{parts.join("\n")}</div>
+                  </div>
+                ) : null}
+                <div className="text-xs text-slate-500">Trace: {r.traceId}</div>
+              </div>
+            ),
+          });
         } else {
-          alert(`${r.error.message}\nTrace: ${r.traceId}`);
+          await showAlert({
+            title: "Fehler",
+            message: (
+              <div className="space-y-2">
+                <div>{r.error.message}</div>
+                <div className="text-xs text-slate-500">Trace: {r.traceId}</div>
+              </div>
+            ),
+          });
         }
+
         setBusy(null);
         return;
       }
@@ -377,7 +523,7 @@ export default function ScreenClient() {
       setBusy(null);
       await reloadAll();
     },
-    [reloadAll]
+    [reloadAll, showAlert, showConfirm]
   );
 
   const resetFilters = useCallback(() => {
@@ -411,9 +557,7 @@ export default function ScreenClient() {
               <div>
                 <div className="text-sm font-semibold text-slate-900">Aktives Event</div>
                 <div className="mt-1 text-sm text-slate-600">Kein aktives Event</div>
-                <div className="mt-3 text-sm text-slate-600">
-                  Aktiviere ein Event, damit Formulare und Geräte korrekt zugeordnet sind.
-                </div>
+                <div className="mt-3 text-sm text-slate-600">Aktiviere ein Event, damit Formulare und Geräte korrekt zugeordnet sind.</div>
               </div>
 
               <button
@@ -442,12 +586,7 @@ export default function ScreenClient() {
                 {e.location ? ` · ${e.location}` : ""}
               </div>
             </div>
-            <span
-              className={classNames(
-                "inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold",
-                statusChipClass("ACTIVE")
-              )}
-            >
+            <span className={classNames("inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold", statusChipClass("ACTIVE"))}>
               Aktiv
             </span>
           </div>
@@ -457,10 +596,7 @@ export default function ScreenClient() {
               <div className="text-xs font-semibold text-slate-600">Formulare zugewiesen</div>
               <div className="mt-1 text-2xl font-semibold text-slate-900">{overview.counts.assignedActiveForms}</div>
               <div className="mt-3">
-                <Link
-                  href="/admin/forms"
-                  className="text-sm font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 hover:decoration-slate-400"
-                >
+                <Link href="/admin/forms" className="text-sm font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 hover:decoration-slate-400">
                   Formulare öffnen
                 </Link>
               </div>
@@ -470,10 +606,7 @@ export default function ScreenClient() {
               <div className="text-xs font-semibold text-slate-600">Geräte verbunden</div>
               <div className="mt-1 text-2xl font-semibold text-slate-900">{overview.counts.boundDevices}</div>
               <div className="mt-3">
-                <Link
-                  href="/admin/devices"
-                  className="text-sm font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 hover:decoration-slate-400"
-                >
+                <Link href="/admin/devices" className="text-sm font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 hover:decoration-slate-400">
                   Geräte öffnen
                 </Link>
               </div>
@@ -522,18 +655,12 @@ export default function ScreenClient() {
               </button>
 
               {hasActiveFilters ? (
-                <button
-                  className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 hover:bg-slate-50"
-                  onClick={resetFilters}
-                >
+                <button className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 hover:bg-slate-50" onClick={resetFilters}>
                   Reset
                 </button>
               ) : null}
 
-              <button
-                className="h-9 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800"
-                onClick={openCreate}
-              >
+              <button className="h-9 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800" onClick={openCreate}>
                 Neues Event
               </button>
             </div>
@@ -593,10 +720,7 @@ export default function ScreenClient() {
               <div className="text-sm font-semibold text-slate-900">Fehler</div>
               <div className="mt-1 text-sm text-slate-700">{err}</div>
               {traceId ? <div className="mt-2 text-xs text-slate-500">Trace: {traceId}</div> : null}
-              <button
-                className="mt-3 h-9 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800"
-                onClick={() => void reloadAll()}
-              >
+              <button className="mt-3 h-9 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800" onClick={() => void reloadAll()}>
                 Erneut versuchen
               </button>
             </div>
@@ -604,10 +728,7 @@ export default function ScreenClient() {
             <div className="p-5">
               <div className="text-sm font-semibold text-slate-900">Keine Events</div>
               <div className="mt-1 text-sm text-slate-600">Lege dein erstes Event an. Danach kannst du es aktiv setzen.</div>
-              <button
-                className="mt-4 h-9 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800"
-                onClick={openCreate}
-              >
+              <button className="mt-4 h-9 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800" onClick={openCreate}>
                 Neues Event
               </button>
             </div>
@@ -632,12 +753,7 @@ export default function ScreenClient() {
                     <div className="col-span-4 font-semibold text-slate-900">{e.name}</div>
 
                     <div className="col-span-2">
-                      <span
-                        className={classNames(
-                          "inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold",
-                          statusChipClass(e.status)
-                        )}
-                      >
+                      <span className={classNames("inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold", statusChipClass(e.status))}>
                         {statusLabel(e.status)}
                       </span>
                     </div>
@@ -711,13 +827,11 @@ export default function ScreenClient() {
           <div className="absolute right-0 top-0 h-full w-full max-w-[520px] bg-white shadow-2xl">
             <div className="flex items-start justify-between border-b border-slate-200 p-5">
               <div>
-                <div className="text-sm font-semibold text-slate-900">
-                  {drawerMode === "create" ? "Neues Event" : "Event bearbeiten"}
-                </div>
+                <div className="text-sm font-semibold text-slate-900">{drawerMode === "create" ? "Neues Event" : "Event bearbeiten"}</div>
                 <div className="mt-1 text-sm text-slate-600">Name, Zeitraum und Ort sind für die operative Zuordnung relevant.</div>
               </div>
               <button
-                className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
                 onClick={closeDrawer}
                 disabled={isBusy}
               >
@@ -774,17 +888,10 @@ export default function ScreenClient() {
                   <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5">
                     <div className="text-xs font-semibold text-slate-600">Status</div>
                     <div className="mt-1 flex items-center gap-2">
-                      <span
-                        className={classNames(
-                          "inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold",
-                          statusChipClass(draft.status || "DRAFT")
-                        )}
-                      >
+                      <span className={classNames("inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold", statusChipClass(draft.status || "DRAFT"))}>
                         {statusLabel(draft.status || "DRAFT")}
                       </span>
-                      <span className="text-xs text-slate-500">
-                        Mehrere Events können aktiv sein. Geräte werden pro Gerät an ein Event gebunden (activeEventId).
-                      </span>
+                      <span className="text-xs text-slate-500">Mehrere Events können aktiv sein. Geräte werden pro Gerät an ein Event gebunden (activeEventId).</span>
                     </div>
 
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -810,7 +917,7 @@ export default function ScreenClient() {
                     </div>
                   </div>
 
-                  {/* ✅ Delete im Drawer */}
+                  {/* Delete im Drawer */}
                   {draft.id ? (
                     <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-5">
                       <div className="text-xs font-semibold text-rose-900">Löschen</div>
@@ -819,9 +926,7 @@ export default function ScreenClient() {
                       </div>
 
                       {draft.status === "ACTIVE" ? (
-                        <div className="mt-3 text-xs text-rose-800">
-                          Aktive Events können nicht gelöscht werden. Bitte zuerst archivieren.
-                        </div>
+                        <div className="mt-3 text-xs text-rose-800">Aktive Events können nicht gelöscht werden. Bitte zuerst archivieren.</div>
                       ) : (
                         <div className="mt-3">
                           <button
@@ -858,6 +963,13 @@ export default function ScreenClient() {
           </div>
         </div>
       ) : null}
+
+      {/* Dialog (replaces window.alert/confirm) */}
+      <ConfirmDialog
+        {...dialog}
+        onCancel={() => closeDialog(false)}
+        onConfirm={() => closeDialog(true)}
+      />
     </>
   );
 }
