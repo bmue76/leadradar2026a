@@ -45,8 +45,9 @@ const NAV: NavGroup[] = [
     ],
   },
   {
-    key: "betrieb",
-    title: "Betrieb",
+    // TP7.4: “Betrieb” → “Einsatz”
+    key: "einsatz",
+    title: "Einsatz",
     Icon: IconOperations,
     items: [
       { href: "/admin/events", label: "Events" },
@@ -81,7 +82,7 @@ const NAV: NavGroup[] = [
   },
 ];
 
-function isActivePath(pathname: string, item: NavItem) {
+function isMatch(pathname: string, item: NavItem) {
   const href = item.href;
 
   if (item.exact) return pathname === href;
@@ -89,19 +90,39 @@ function isActivePath(pathname: string, item: NavItem) {
   return pathname === href || pathname.startsWith(href + "/");
 }
 
-function findActiveGroupKey(pathname: string): string {
+/**
+ * Longest-match active item:
+ * - prevents multiple active items when one href is a prefix of another
+ * - keeps UX stable for nested routes (/admin/x/[id], etc.)
+ */
+function findActive(pathname: string): { groupKey: string; href: string } | null {
+  let best: { groupKey: string; href: string } | null = null;
+
   for (const group of NAV) {
     for (const item of group.items) {
-      if (isActivePath(pathname, item)) return group.key;
+      if (!isMatch(pathname, item)) continue;
+
+      if (!best) {
+        best = { groupKey: group.key, href: item.href };
+        continue;
+      }
+
+      if (item.href.length > best.href.length) {
+        best = { groupKey: group.key, href: item.href };
+      }
     }
   }
-  return "start";
+
+  return best;
 }
 
 export function SidebarNav() {
   const pathname = usePathname() || "/admin";
 
-  const activeGroupKey = useMemo(() => findActiveGroupKey(pathname), [pathname]);
+  const active = useMemo(() => findActive(pathname), [pathname]);
+  const activeGroupKey = active?.groupKey ?? "start";
+  const activeHref = active?.href ?? null;
+
   const [openKey, setOpenKey] = useState<string>(activeGroupKey);
 
   useEffect(() => {
@@ -122,6 +143,7 @@ export function SidebarNav() {
               className={[
                 "group flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-sm",
                 "hover:bg-slate-100",
+                "focus:outline-none focus:ring-2 focus:ring-slate-200",
                 isGroupActive ? "bg-white text-slate-900" : "text-slate-700",
               ].join(" ")}
               aria-expanded={isOpen}
@@ -158,7 +180,7 @@ export function SidebarNav() {
               <div className="relative ml-6 border-l border-slate-200 pl-5">
                 <div className="flex flex-col gap-1 py-1">
                   {group.items.map((item) => {
-                    const active = isActivePath(pathname, item);
+                    const activeItem = activeHref === item.href;
 
                     return (
                       <Link
@@ -166,16 +188,17 @@ export function SidebarNav() {
                         href={item.href}
                         className={[
                           "relative flex items-center rounded-lg px-3 py-1.5 text-sm",
-                          active
+                          "focus:outline-none focus:ring-2 focus:ring-slate-200",
+                          activeItem
                             ? "bg-[color:var(--lr-accent-soft)] text-slate-900"
                             : "text-slate-700 hover:bg-slate-100",
                         ].join(" ")}
-                        aria-current={active ? "page" : undefined}
+                        aria-current={activeItem ? "page" : undefined}
                       >
                         <span
                           className={[
                             "absolute -left-[13px] top-1/2 size-2 -translate-y-1/2 rounded-full",
-                            active ? "bg-[color:var(--lr-accent)]" : "bg-slate-300",
+                            activeItem ? "bg-[color:var(--lr-accent)]" : "bg-slate-300",
                           ].join(" ")}
                           aria-hidden="true"
                         />

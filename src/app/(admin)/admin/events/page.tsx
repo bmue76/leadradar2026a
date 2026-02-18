@@ -16,7 +16,7 @@ export default function Page() {
       <header className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">Events</h1>
         <p className="mt-1 text-sm text-slate-600">
-          Mehrere Events können aktiv sein. Die App arbeitet pro Gerät mit dem gebundenen Event (activeEventId).
+          Mehrere Events können aktiv sein. Geräte werden pro Gerät einem Event zugeordnet.
         </p>
       </header>
 

@@ -4,8 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 type EventStatus = "DRAFT" | "ACTIVE" | "ARCHIVED";
 type StatusFilter = "ALL" | EventStatus;
-
-type SortKey = "startsAt" | "updatedAt" | "name";
+type SortKey = "updatedAt" | "startsAt" | "name";
 type SortDir = "asc" | "desc";
 
 type ApiOk<T> = { ok: true; data: T; traceId: string };
@@ -16,10 +15,16 @@ type EventListItem = {
   id: string;
   name: string;
   status: EventStatus;
-  startsAt?: string | null;
-  endsAt?: string | null;
-  location?: string | null;
+  startsAt?: string;
+  endsAt?: string;
+  location?: string;
   updatedAt: string;
+
+  // optional counts (enabled via includeCounts=true)
+  leadsCount?: number;
+  assignedFormsCount?: number;
+  boundDevicesCount?: number;
+  canDelete?: boolean;
 };
 
 type EventUpsertPayload = {
@@ -38,10 +43,26 @@ type DraftEvent = {
   endsAt: string; // "" => null
   location: string; // "" => null
   status?: EventStatus;
+
+  leadsCount?: number;
+  assignedFormsCount?: number;
+  boundDevicesCount?: number;
+  canDelete?: boolean;
 };
 
 type ConfirmKind = "activate" | "archive" | "delete";
-type ConfirmState = { kind: ConfirmKind; id: string; name: string };
+
+type ConfirmState =
+  | null
+  | {
+      kind: ConfirmKind;
+      id: string;
+      name: string;
+      status: EventStatus;
+      leadsCount: number | null;
+      assignedFormsCount: number | null;
+      boundDevicesCount: number | null;
+    };
 
 function classNames(...xs: Array<string | false | undefined | null>) {
   return xs.filter(Boolean).join(" ");
@@ -51,28 +72,27 @@ function makeEmptyDraft(): DraftEvent {
   return { name: "", startsAt: "", endsAt: "", location: "" };
 }
 
-function fmtDateDdMmYyyy(value?: string | null): string {
-  if (!value) return "—";
-
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
-  if (m) return `${m[3]}.${m[2]}.${m[1]}`;
-
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-
-  return new Intl.DateTimeFormat("de-CH", { day: "2-digit", month: "2-digit", year: "numeric" }).format(d);
+function isoDayToCH(iso?: string): string {
+  if (!iso) return "—";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return iso;
+  return `${m[3]}.${m[2]}.${m[1]}`;
 }
 
-function formatRange(startsAt?: string | null, endsAt?: string | null): string {
-  if (startsAt && endsAt) return `${fmtDateDdMmYyyy(startsAt)} – ${fmtDateDdMmYyyy(endsAt)}`;
-  if (startsAt) return `ab ${fmtDateDdMmYyyy(startsAt)}`;
-  if (endsAt) return `bis ${fmtDateDdMmYyyy(endsAt)}`;
+function formatRange(startsAt?: string, endsAt?: string): string {
+  const s = startsAt ? isoDayToCH(startsAt) : null;
+  const e = endsAt ? isoDayToCH(endsAt) : null;
+
+  if (s && e) return `${s} – ${e}`;
+  if (s) return `ab ${s}`;
+  if (e) return `bis ${e}`;
   return "—";
 }
 
 function formatUpdated(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
+  // de-CH gives dd.mm.yyyy; keep time for "Updated"
   return d.toLocaleString("de-CH", {
     year: "numeric",
     month: "2-digit",
@@ -89,9 +109,22 @@ function statusLabel(s: EventStatus): string {
 }
 
 function statusChipClass(s: EventStatus): string {
-  if (s === "ACTIVE") return "border-emerald-200 bg-emerald-50 text-emerald-900";
+  if (s === "ACTIVE") return "border-emerald-200 bg-emerald-50 text-emerald-800";
   if (s === "ARCHIVED") return "border-slate-200 bg-slate-50 text-slate-500";
   return "border-slate-200 bg-slate-50 text-slate-700";
+}
+
+function getCountsSafe(e: Pick<EventListItem, "leadsCount" | "assignedFormsCount" | "boundDevicesCount">) {
+  const leads = typeof e.leadsCount === "number" ? e.leadsCount : null;
+  const forms = typeof e.assignedFormsCount === "number" ? e.assignedFormsCount : null;
+  const devices = typeof e.boundDevicesCount === "number" ? e.boundDevicesCount : null;
+  return { leads, forms, devices };
+}
+
+function computeCanDelete(status: EventStatus, leads: number | null, forms: number | null, devices: number | null): boolean {
+  if (status === "ACTIVE") return false;
+  if (leads === null || forms === null || devices === null) return false;
+  return leads === 0 && forms === 0 && devices === 0;
 }
 
 async function fetchJson<T>(input: string, init?: RequestInit): Promise<ApiResp<T>> {
@@ -115,26 +148,115 @@ async function fetchJson<T>(input: string, init?: RequestInit): Promise<ApiResp<
   }
 }
 
+function Toast({ message, tone, onClose }: { message: string; tone: "success" | "danger"; onClose: () => void }) {
+  return (
+    <div
+      className={classNames(
+        "mb-4 rounded-2xl border px-4 py-3 text-sm",
+        tone === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-rose-200 bg-rose-50 text-rose-800"
+      )}
+      role="status"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">{message}</div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-white/60"
+          aria-label="Schliessen"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmDialog({
+  open,
+  title,
+  message,
+  confirmLabel,
+  tone,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  title: string;
+  message: string;
+  confirmLabel: string;
+  tone: "primary" | "danger";
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/30"
+        aria-label="Schliessen"
+        onClick={() => {
+          if (!busy) onCancel();
+        }}
+      />
+      <div className="absolute inset-0 flex items-center justify-center p-4">
+        <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+          <div className="p-5">
+            <div className="text-base font-semibold text-slate-900">{title}</div>
+            <div className="mt-2 whitespace-pre-line text-sm text-slate-700">{message}</div>
+          </div>
+
+          <div className="flex items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 p-4">
+            <button
+              type="button"
+              className="h-9 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
+              onClick={onCancel}
+              disabled={busy}
+            >
+              Abbrechen
+            </button>
+            <button
+              type="button"
+              className={classNames(
+                "h-9 rounded-xl px-4 text-sm font-semibold text-white disabled:opacity-50",
+                tone === "danger" ? "bg-rose-600 hover:bg-rose-700" : "bg-slate-900 hover:bg-slate-800"
+              )}
+              onClick={onConfirm}
+              disabled={busy}
+            >
+              {busy ? "Bitte warten…" : confirmLabel}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ScreenClient() {
+  // Defaults per TP decision: Sort by Startdatum (not Updated)
   const [status, setStatus] = useState<StatusFilter>("ALL");
   const [q, setQ] = useState<string>("");
-
   const [sort, setSort] = useState<SortKey>("startsAt");
-  const [dir, setDir] = useState<SortDir>("asc");
+  const [dir, setDir] = useState<SortDir>("desc");
 
   const [items, setItems] = useState<EventListItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [err, setErr] = useState<string | null>(null);
   const [traceId, setTraceId] = useState<string | null>(null);
 
-  const [notice, setNotice] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ tone: "success" | "danger"; message: string } | null>(null);
 
   const [drawerOpen, setDrawerOpen] = useState<boolean>(false);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>("create");
   const [draft, setDraft] = useState<DraftEvent>(makeEmptyDraft());
   const [saving, setSaving] = useState<boolean>(false);
 
-  const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmState>(null);
   const [confirmBusy, setConfirmBusy] = useState<boolean>(false);
 
   const debounceRef = useRef<number | null>(null);
@@ -145,17 +267,14 @@ export default function ScreenClient() {
     sp.set("status", status);
     sp.set("sort", sort);
     sp.set("dir", dir);
+    sp.set("limit", "200");
+    sp.set("includeCounts", "true");
     return sp.toString();
   }, [q, status, sort, dir]);
 
   const hasActiveFilters = useMemo(() => {
-    return status !== "ALL" || !!q.trim() || sort !== "startsAt" || dir !== "asc";
+    return status !== "ALL" || !!q.trim() || sort !== "startsAt" || dir !== "desc";
   }, [status, q, sort, dir]);
-
-  function pushNotice(msg: string) {
-    setNotice(msg);
-    window.setTimeout(() => setNotice(null), 2500);
-  }
 
   const loadList = useCallback(async () => {
     setLoading(true);
@@ -204,14 +323,18 @@ export default function ScreenClient() {
       endsAt: e.endsAt ?? "",
       location: e.location ?? "",
       status: e.status,
+      leadsCount: e.leadsCount,
+      assignedFormsCount: e.assignedFormsCount,
+      boundDevicesCount: e.boundDevicesCount,
+      canDelete: e.canDelete,
     });
     setDrawerOpen(true);
   }, []);
 
   const closeDrawer = useCallback(() => {
-    if (saving || confirmBusy) return;
+    if (saving) return;
     setDrawerOpen(false);
-  }, [saving, confirmBusy]);
+  }, [saving]);
 
   const toPayload = useCallback((): EventUpsertPayload => {
     const name = draft.name.trim();
@@ -222,18 +345,19 @@ export default function ScreenClient() {
     return { name, startsAt, endsAt, location };
   }, [draft]);
 
+  const pushToast = useCallback((tone: "success" | "danger", message: string) => {
+    setToast({ tone, message });
+    window.setTimeout(() => setToast(null), 3000);
+  }, []);
+
   const doSave = useCallback(async () => {
     const name = draft.name.trim();
     if (!name) {
-      setErr("Bitte einen Namen erfassen.");
-      setTraceId(null);
+      pushToast("danger", "Bitte einen Namen erfassen.");
       return;
     }
 
     setSaving(true);
-    setErr(null);
-    setTraceId(null);
-
     const payload = toPayload();
 
     if (drawerMode === "create") {
@@ -243,16 +367,15 @@ export default function ScreenClient() {
       });
 
       if (!r.ok) {
-        setErr(r.error.message);
-        setTraceId(r.traceId);
+        pushToast("danger", `${r.error.message}${r.traceId ? ` · Trace: ${r.traceId}` : ""}`);
         setSaving(false);
         return;
       }
 
       setDrawerOpen(false);
       setSaving(false);
-      pushNotice("Event erstellt.");
       await reloadAll();
+      pushToast("success", "Event erstellt.");
       return;
     }
 
@@ -267,20 +390,19 @@ export default function ScreenClient() {
     });
 
     if (!r.ok) {
-      setErr(r.error.message);
-      setTraceId(r.traceId);
+      pushToast("danger", `${r.error.message}${r.traceId ? ` · Trace: ${r.traceId}` : ""}`);
       setSaving(false);
       return;
     }
 
     setDrawerOpen(false);
     setSaving(false);
-    pushNotice("Event gespeichert.");
     await reloadAll();
-  }, [draft, drawerMode, reloadAll, toPayload]);
+    pushToast("success", "Event gespeichert.");
+  }, [draft, drawerMode, pushToast, reloadAll, toPayload]);
 
-  const openConfirm = useCallback((kind: ConfirmKind, id: string, name: string) => {
-    setConfirm({ kind, id, name });
+  const requestConfirm = useCallback((c: ConfirmState) => {
+    setConfirm(c);
   }, []);
 
   const closeConfirm = useCallback(() => {
@@ -288,100 +410,178 @@ export default function ScreenClient() {
     setConfirm(null);
   }, [confirmBusy]);
 
-  const runConfirm = useCallback(async () => {
+  const runConfirmedAction = useCallback(async () => {
     if (!confirm) return;
 
     setConfirmBusy(true);
     setErr(null);
     setTraceId(null);
 
-    if (confirm.kind === "activate") {
-      const r = await fetchJson<{ ok: true }>(`/api/admin/v1/events/${confirm.id}/activate`, { method: "POST" });
-      if (!r.ok) {
-        setErr(r.error.message);
-        setTraceId(r.traceId);
+    try {
+      if (confirm.kind === "activate") {
+        const r = await fetchJson<{ ok: true }>(`/api/admin/v1/events/${confirm.id}/activate`, { method: "POST" });
+        if (!r.ok) {
+          pushToast("danger", `${r.error.message}${r.traceId ? ` · Trace: ${r.traceId}` : ""}`);
+          setConfirmBusy(false);
+          return;
+        }
+        await reloadAll();
+        pushToast("success", "Event aktiviert.");
+        setConfirm(null);
         setConfirmBusy(false);
         return;
       }
-      setConfirm(null);
-      setConfirmBusy(false);
-      pushNotice("Event aktiviert.");
-      await reloadAll();
-      return;
-    }
 
-    if (confirm.kind === "archive") {
-      const r = await fetchJson<{ ok: true }>(`/api/admin/v1/events/${confirm.id}/archive`, { method: "POST" });
-      if (!r.ok) {
-        setErr(r.error.message);
-        setTraceId(r.traceId);
+      if (confirm.kind === "archive") {
+        const r = await fetchJson<{ ok: true }>(`/api/admin/v1/events/${confirm.id}/archive`, { method: "POST" });
+        if (!r.ok) {
+          pushToast("danger", `${r.error.message}${r.traceId ? ` · Trace: ${r.traceId}` : ""}`);
+          setConfirmBusy(false);
+          return;
+        }
+        await reloadAll();
+        pushToast("success", "Event archiviert.");
+        setConfirm(null);
         setConfirmBusy(false);
         return;
       }
+
+      // delete
+      const r = await fetchJson<{ ok: true }>(`/api/admin/v1/events/${confirm.id}`, { method: "DELETE" });
+      if (!r.ok) {
+        pushToast("danger", `${r.error.message}${r.traceId ? ` · Trace: ${r.traceId}` : ""}`);
+        setConfirmBusy(false);
+        return;
+      }
+
+      setDrawerOpen(false);
+      await reloadAll();
+      pushToast("success", "Event gelöscht.");
       setConfirm(null);
       setConfirmBusy(false);
-      pushNotice("Event archiviert.");
-      await reloadAll();
-      return;
-    }
-
-    const r = await fetchJson<{ ok: true }>(`/api/admin/v1/events/${confirm.id}`, { method: "DELETE" });
-    if (!r.ok) {
-      setErr(r.error.message);
-      setTraceId(r.traceId);
+    } catch {
+      pushToast("danger", "Netzwerkfehler.");
       setConfirmBusy(false);
-      return;
     }
+  }, [confirm, pushToast, reloadAll]);
 
-    if (drawerOpen && draft.id === confirm.id) setDrawerOpen(false);
+  const doActivate = useCallback(
+    (e: EventListItem) => {
+      requestConfirm({
+        kind: "activate",
+        id: e.id,
+        name: e.name,
+        status: e.status,
+        ...(() => {
+          const c = getCountsSafe(e);
+          return { leadsCount: c.leads, assignedFormsCount: c.forms, boundDevicesCount: c.devices };
+        })(),
+      });
+    },
+    [requestConfirm]
+  );
 
-    setConfirm(null);
-    setConfirmBusy(false);
-    pushNotice("Event gelöscht.");
-    await reloadAll();
-  }, [confirm, draft.id, drawerOpen, reloadAll]); // <- confirmBusy entfernt
+  const doArchive = useCallback(
+    (e: EventListItem) => {
+      requestConfirm({
+        kind: "archive",
+        id: e.id,
+        name: e.name,
+        status: e.status,
+        ...(() => {
+          const c = getCountsSafe(e);
+          return { leadsCount: c.leads, assignedFormsCount: c.forms, boundDevicesCount: c.devices };
+        })(),
+      });
+    },
+    [requestConfirm]
+  );
+
+  const doDelete = useCallback(
+    (e: EventListItem) => {
+      const c = getCountsSafe(e);
+      const deletable = computeCanDelete(e.status, c.leads, c.forms, c.devices);
+
+      requestConfirm({
+        kind: "delete",
+        id: e.id,
+        name: e.name,
+        status: e.status,
+        leadsCount: c.leads,
+        assignedFormsCount: c.forms,
+        boundDevicesCount: c.devices,
+      });
+
+      // If not deletable, keep UX strict: user can still see dialog text but confirm will be disabled (handled below).
+      // We encode that via counts/status and derive in dialog render.
+      void deletable;
+    },
+    [requestConfirm]
+  );
 
   const resetFilters = useCallback(() => {
     setStatus("ALL");
     setQ("");
     setSort("startsAt");
-    setDir("asc");
+    setDir("desc");
   }, []);
 
-  const confirmCopy = useMemo(() => {
+  const confirmUi = useMemo(() => {
     if (!confirm) return null;
 
     if (confirm.kind === "activate") {
       return {
-        title: "Event aktivieren?",
-        body: "Dieses Event wird aktiv gesetzt. Mehrere Events können aktiv sein.",
+        title: "Event aktivieren",
+        tone: "primary" as const,
         confirmLabel: "Aktivieren",
-        confirmClass: "bg-slate-900 text-white hover:bg-slate-800",
+        message: `„${confirm.name}“ wird aktiv gesetzt.\n\nMehrere Events können aktiv sein.`,
+        canConfirm: true,
       };
     }
 
     if (confirm.kind === "archive") {
       return {
-        title: "Event archivieren?",
-        body: "Archivierte Events können in der App nicht mehr verwendet werden.",
+        title: "Event archivieren",
+        tone: "primary" as const,
         confirmLabel: "Archivieren",
-        confirmClass: "border border-slate-200 bg-white text-slate-900 hover:bg-slate-50",
+        message: `„${confirm.name}“ wird archiviert.\n\nArchivierte Events können in der App nicht mehr verwendet werden.`,
+        canConfirm: true,
       };
     }
 
+    const leads = confirm.leadsCount;
+    const forms = confirm.assignedFormsCount;
+    const devices = confirm.boundDevicesCount;
+
+    const deletable = computeCanDelete(confirm.status, leads, forms, devices);
+
+    const countsLine =
+      leads === null || forms === null || devices === null
+        ? "Nutzungsdaten werden geladen…"
+        : `Leads: ${leads} · Formulare: ${forms} · Geräte: ${devices}`;
+
+    const reason =
+      confirm.status === "ACTIVE"
+        ? "Aktive Events können nicht gelöscht werden."
+        : !deletable
+          ? "Löschen ist nur möglich, wenn das Event nie genutzt wurde."
+          : null;
+
     return {
-      title: "Event löschen?",
-      body:
-        `„${confirm.name}“ wird gelöscht.\n\n` +
-        "Nur möglich, wenn das Event nie genutzt wurde (keine Leads / keine referenzierenden Formulare / keine gebundenen Geräte).",
+      title: "Event löschen",
+      tone: "danger" as const,
       confirmLabel: "Löschen",
-      confirmClass: "bg-rose-600 text-white hover:bg-rose-700",
+      message: `„${confirm.name}“ wirklich löschen?\n\n${countsLine}${reason ? `\n\n${reason}` : ""}`,
+      canConfirm: deletable,
     };
   }, [confirm]);
 
   return (
     <>
+      {toast ? <Toast tone={toast.tone} message={toast.message} onClose={() => setToast(null)} /> : null}
+
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        {/* Toolbar */}
         <div className="p-5">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="flex flex-wrap items-center gap-2">
@@ -392,11 +592,10 @@ export default function ScreenClient() {
                   <button
                     key={s}
                     className={classNames(
-                      "h-9 rounded-full px-3 text-sm font-semibold",
+                      "h-9 rounded-full px-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-slate-200",
                       isOn ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                     )}
                     onClick={() => setStatus(s)}
-                    disabled={loading}
                   >
                     {label}
                   </button>
@@ -406,27 +605,25 @@ export default function ScreenClient() {
 
             <div className="flex items-center gap-2">
               <button
-                className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
                 onClick={() => void reloadAll()}
                 aria-label="Refresh"
                 title="Refresh"
-                disabled={loading}
               >
                 ↻
               </button>
 
               {hasActiveFilters ? (
                 <button
-                  className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                  className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
                   onClick={resetFilters}
-                  disabled={loading}
                 >
                   Reset
                 </button>
               ) : null}
 
               <button
-                className="h-9 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800"
+                className="h-9 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-200"
                 onClick={openCreate}
               >
                 Neues Event
@@ -439,14 +636,14 @@ export default function ScreenClient() {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Suche (Name/Ort)…"
-              className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-slate-300 md:w-[320px]"
+              className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-slate-300 focus:ring-2 focus:ring-slate-200 md:w-[320px]"
             />
 
             <div className="flex items-center gap-2">
               <select
                 value={sort}
                 onChange={(e) => setSort(e.target.value as SortKey)}
-                className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-slate-300"
+                className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-slate-300 focus:ring-2 focus:ring-slate-200"
               >
                 <option value="startsAt">Sort: Startdatum</option>
                 <option value="updatedAt">Sort: Updated</option>
@@ -456,31 +653,18 @@ export default function ScreenClient() {
               <select
                 value={dir}
                 onChange={(e) => setDir(e.target.value as SortDir)}
-                className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-slate-300"
+                className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-slate-300 focus:ring-2 focus:ring-slate-200"
               >
-                <option value="asc">↑ asc</option>
                 <option value="desc">↓ desc</option>
+                <option value="asc">↑ asc</option>
               </select>
             </div>
           </div>
-
-          {notice ? (
-            <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-              {notice}
-            </div>
-          ) : null}
-
-          {err ? (
-            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
-              <div className="font-semibold">Fehler</div>
-              <div className="mt-1">{err}</div>
-              {traceId ? <div className="mt-2 text-xs text-rose-700/80">Trace: {traceId}</div> : null}
-            </div>
-          ) : null}
         </div>
 
         <div className="h-px w-full bg-slate-200" />
 
+        {/* Table */}
         <div className="bg-white">
           <div className="grid grid-cols-12 gap-3 bg-slate-50 px-5 py-3 text-xs font-semibold text-slate-600">
             <div className="col-span-4">Name</div>
@@ -496,12 +680,24 @@ export default function ScreenClient() {
               <div className="mt-2 h-10 rounded-xl bg-slate-100" />
               <div className="mt-2 h-10 rounded-xl bg-slate-100" />
             </div>
+          ) : err ? (
+            <div className="p-5">
+              <div className="text-sm font-semibold text-slate-900">Fehler</div>
+              <div className="mt-1 text-sm text-slate-700">{err}</div>
+              {traceId ? <div className="mt-2 text-xs text-slate-500">Trace: {traceId}</div> : null}
+              <button
+                className="mt-3 h-9 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                onClick={() => void reloadAll()}
+              >
+                Erneut versuchen
+              </button>
+            </div>
           ) : items.length === 0 ? (
             <div className="p-5">
               <div className="text-sm font-semibold text-slate-900">Keine Events</div>
-              <div className="mt-1 text-sm text-slate-600">Lege dein erstes Event an.</div>
+              <div className="mt-1 text-sm text-slate-600">Lege dein erstes Event an. Danach kannst du es aktiv setzen.</div>
               <button
-                className="mt-4 h-9 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800"
+                className="mt-4 h-9 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-200"
                 onClick={openCreate}
               >
                 Neues Event
@@ -510,9 +706,10 @@ export default function ScreenClient() {
           ) : (
             <div>
               {items.map((e) => {
-                const canActivate = e.status === "DRAFT";
+                const canActivate = e.status !== "ACTIVE" && e.status !== "ARCHIVED";
                 const canArchive = e.status !== "ARCHIVED";
-                const canDelete = e.status !== "ACTIVE";
+                const counts = getCountsSafe(e);
+                const deletable = typeof e.canDelete === "boolean" ? e.canDelete : computeCanDelete(e.status, counts.leads, counts.forms, counts.devices);
 
                 return (
                   <div
@@ -538,17 +735,19 @@ export default function ScreenClient() {
                       </span>
                     </div>
 
-                    <div className="col-span-3 text-slate-700">{formatRange(e.startsAt ?? null, e.endsAt ?? null)}</div>
+                    <div className="col-span-3 text-slate-700">{formatRange(e.startsAt, e.endsAt)}</div>
                     <div className="col-span-2 truncate text-slate-700">{e.location ?? "—"}</div>
+
                     <div className="col-span-1 text-right text-xs text-slate-500">{formatUpdated(e.updatedAt)}</div>
 
+                    {/* Hover Actions */}
                     <div className="col-span-12 mt-2 hidden items-center gap-2 group-hover:flex">
                       {canActivate ? (
                         <button
-                          className="h-9 rounded-xl bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-800"
+                          className="h-9 rounded-xl bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-200"
                           onClick={(ev) => {
                             ev.stopPropagation();
-                            openConfirm("activate", e.id, e.name);
+                            doActivate(e);
                           }}
                         >
                           Aktivieren
@@ -557,10 +756,10 @@ export default function ScreenClient() {
 
                       {canArchive ? (
                         <button
-                          className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-900 hover:bg-slate-50"
+                          className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
                           onClick={(ev) => {
                             ev.stopPropagation();
-                            openConfirm("archive", e.id, e.name);
+                            doArchive(e);
                           }}
                         >
                           Archivieren
@@ -568,7 +767,7 @@ export default function ScreenClient() {
                       ) : null}
 
                       <button
-                        className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-900 hover:bg-slate-50"
+                        className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
                         onClick={(ev) => {
                           ev.stopPropagation();
                           openEdit(e);
@@ -577,18 +776,34 @@ export default function ScreenClient() {
                         Bearbeiten
                       </button>
 
-                      {canDelete ? (
+                      <div className="ml-auto flex items-center gap-2 text-xs text-slate-500">
+                        <span className="rounded-full border border-slate-200 bg-white px-2 py-1">
+                          Leads: {counts.leads ?? "—"}
+                        </span>
+                        <span className="rounded-full border border-slate-200 bg-white px-2 py-1">
+                          Formulare: {counts.forms ?? "—"}
+                        </span>
+                        <span className="rounded-full border border-slate-200 bg-white px-2 py-1">
+                          Geräte: {counts.devices ?? "—"}
+                        </span>
+
                         <button
-                          className="h-9 rounded-xl border border-rose-200 bg-white px-3 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                          className={classNames(
+                            "h-9 rounded-xl px-3 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-slate-200",
+                            deletable
+                              ? "border border-rose-200 bg-white text-rose-700 hover:bg-rose-50"
+                              : "cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400"
+                          )}
                           onClick={(ev) => {
                             ev.stopPropagation();
-                            openConfirm("delete", e.id, e.name);
+                            doDelete(e);
                           }}
-                          title="Löscht das Event (nur wenn nie genutzt)."
+                          disabled={!deletable}
+                          title={deletable ? "Event löschen" : "Löschen nur möglich, wenn das Event nie genutzt wurde."}
                         >
                           Löschen
                         </button>
-                      ) : null}
+                      </div>
                     </div>
                   </div>
                 );
@@ -598,6 +813,7 @@ export default function ScreenClient() {
         </div>
       </section>
 
+      {/* Drawer */}
       {drawerOpen ? (
         <div className="fixed inset-0 z-50">
           <div className="absolute inset-0 bg-black/30" onClick={closeDrawer} />
@@ -607,10 +823,10 @@ export default function ScreenClient() {
                 <div className="text-sm font-semibold text-slate-900">
                   {drawerMode === "create" ? "Neues Event" : "Event bearbeiten"}
                 </div>
-                <div className="mt-1 text-sm text-slate-600">Name, Zeitraum und Ort sind für die operative Zuordnung relevant.</div>
+                <div className="mt-1 text-sm text-slate-600">Name, Zeitraum und Ort sind für die Zuordnung relevant.</div>
               </div>
               <button
-                className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
                 onClick={closeDrawer}
               >
                 Schliessen
@@ -623,7 +839,7 @@ export default function ScreenClient() {
                 value={draft.name}
                 onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
                 placeholder="z. B. Swissbau 2026"
-                className="mt-1 h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-slate-300"
+                className="mt-1 h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-slate-300 focus:ring-2 focus:ring-slate-200"
               />
 
               <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -633,7 +849,7 @@ export default function ScreenClient() {
                     type="date"
                     value={draft.startsAt}
                     onChange={(e) => setDraft((d) => ({ ...d, startsAt: e.target.value }))}
-                    className="mt-1 h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-slate-300"
+                    className="mt-1 h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-slate-300 focus:ring-2 focus:ring-slate-200"
                   />
                 </div>
                 <div>
@@ -642,7 +858,7 @@ export default function ScreenClient() {
                     type="date"
                     value={draft.endsAt}
                     onChange={(e) => setDraft((d) => ({ ...d, endsAt: e.target.value }))}
-                    className="mt-1 h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-slate-300"
+                    className="mt-1 h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-slate-300 focus:ring-2 focus:ring-slate-200"
                   />
                 </div>
               </div>
@@ -653,7 +869,7 @@ export default function ScreenClient() {
                   value={draft.location}
                   onChange={(e) => setDraft((d) => ({ ...d, location: e.target.value }))}
                   placeholder="z. B. Basel"
-                  className="mt-1 h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-slate-300"
+                  className="mt-1 h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-slate-300 focus:ring-2 focus:ring-slate-200"
                 />
               </div>
 
@@ -676,8 +892,23 @@ export default function ScreenClient() {
                     <div className="mt-3 flex flex-wrap gap-2">
                       {draft.status !== "ACTIVE" && draft.status !== "ARCHIVED" && draft.id ? (
                         <button
-                          className="h-9 rounded-xl bg-slate-900 px-3 text-sm font-semibold text-white hover:bg-slate-800"
-                          onClick={() => openConfirm("activate", draft.id!, draft.name)}
+                          className="h-9 rounded-xl bg-slate-900 px-3 text-sm font-semibold text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-200 disabled:opacity-50"
+                          onClick={() => {
+                            const e: EventListItem = {
+                              id: draft.id!,
+                              name: draft.name,
+                              status: draft.status || "DRAFT",
+                              startsAt: draft.startsAt || undefined,
+                              endsAt: draft.endsAt || undefined,
+                              location: draft.location || undefined,
+                              updatedAt: new Date().toISOString(),
+                              leadsCount: draft.leadsCount,
+                              assignedFormsCount: draft.assignedFormsCount,
+                              boundDevicesCount: draft.boundDevicesCount,
+                              canDelete: draft.canDelete,
+                            };
+                            doActivate(e);
+                          }}
                           disabled={saving}
                         >
                           Aktiv setzen
@@ -686,8 +917,23 @@ export default function ScreenClient() {
 
                       {draft.status !== "ARCHIVED" && draft.id ? (
                         <button
-                          className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 hover:bg-slate-50"
-                          onClick={() => openConfirm("archive", draft.id!, draft.name)}
+                          className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200 disabled:opacity-50"
+                          onClick={() => {
+                            const e: EventListItem = {
+                              id: draft.id!,
+                              name: draft.name,
+                              status: draft.status || "DRAFT",
+                              startsAt: draft.startsAt || undefined,
+                              endsAt: draft.endsAt || undefined,
+                              location: draft.location || undefined,
+                              updatedAt: new Date().toISOString(),
+                              leadsCount: draft.leadsCount,
+                              assignedFormsCount: draft.assignedFormsCount,
+                              boundDevicesCount: draft.boundDevicesCount,
+                              canDelete: draft.canDelete,
+                            };
+                            doArchive(e);
+                          }}
                           disabled={saving}
                         >
                           Archivieren
@@ -696,34 +942,80 @@ export default function ScreenClient() {
                     </div>
                   </div>
 
-                  {draft.id && draft.status !== "ACTIVE" ? (
-                    <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-5">
-                      <div className="text-xs font-semibold text-rose-800">Danger Zone</div>
-                      <div className="mt-1 text-sm text-rose-800/90">
-                        Löschen ist nur möglich, wenn das Event nie genutzt wurde (keine Leads / keine referenzierenden Formulare / keine gebundenen Geräte).
+                  {/* Delete */}
+                  <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold text-slate-600">Löschen</div>
+                        <div className="mt-1 text-sm text-slate-700">
+                          Nur möglich, wenn das Event nie genutzt wurde.
+                        </div>
+                        <div className="mt-2 text-xs text-slate-500">
+                          Leads: {typeof draft.leadsCount === "number" ? draft.leadsCount : "—"} · Formulare:{" "}
+                          {typeof draft.assignedFormsCount === "number" ? draft.assignedFormsCount : "—"} · Geräte:{" "}
+                          {typeof draft.boundDevicesCount === "number" ? draft.boundDevicesCount : "—"}
+                        </div>
                       </div>
-                      <button
-                        className="mt-3 h-9 rounded-xl bg-rose-600 px-3 text-sm font-semibold text-white hover:bg-rose-700"
-                        onClick={() => openConfirm("delete", draft.id!, draft.name)}
-                        disabled={saving}
-                      >
-                        Event löschen
-                      </button>
+
+                      {draft.id ? (
+                        (() => {
+                          const leads = typeof draft.leadsCount === "number" ? draft.leadsCount : null;
+                          const forms = typeof draft.assignedFormsCount === "number" ? draft.assignedFormsCount : null;
+                          const devices = typeof draft.boundDevicesCount === "number" ? draft.boundDevicesCount : null;
+                          const statusNow = draft.status || "DRAFT";
+                          const deletable = computeCanDelete(statusNow, leads, forms, devices);
+
+                          return (
+                            <button
+                              className={classNames(
+                                "h-9 rounded-xl px-4 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-slate-200 disabled:opacity-50",
+                                deletable ? "bg-rose-600 text-white hover:bg-rose-700" : "bg-slate-100 text-slate-400"
+                              )}
+                              onClick={() => {
+                                const e: EventListItem = {
+                                  id: draft.id!,
+                                  name: draft.name,
+                                  status: statusNow,
+                                  startsAt: draft.startsAt || undefined,
+                                  endsAt: draft.endsAt || undefined,
+                                  location: draft.location || undefined,
+                                  updatedAt: new Date().toISOString(),
+                                  leadsCount: draft.leadsCount,
+                                  assignedFormsCount: draft.assignedFormsCount,
+                                  boundDevicesCount: draft.boundDevicesCount,
+                                  canDelete: draft.canDelete,
+                                };
+                                doDelete(e);
+                              }}
+                              disabled={!deletable || saving}
+                              title={
+                                deletable
+                                  ? "Event löschen"
+                                  : statusNow === "ACTIVE"
+                                    ? "Aktive Events können nicht gelöscht werden."
+                                    : "Löschen nur möglich, wenn das Event nie genutzt wurde."
+                              }
+                            >
+                              Löschen
+                            </button>
+                          );
+                        })()
+                      ) : null}
                     </div>
-                  ) : null}
+                  </div>
                 </>
               ) : null}
 
               <div className="mt-6 flex items-center justify-end gap-2">
                 <button
-                  className="h-9 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                  className="h-9 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200 disabled:opacity-50"
                   onClick={closeDrawer}
                   disabled={saving}
                 >
                   Abbrechen
                 </button>
                 <button
-                  className="h-9 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800"
+                  className="h-9 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-200 disabled:opacity-50"
                   onClick={() => void doSave()}
                   disabled={saving}
                 >
@@ -735,34 +1027,19 @@ export default function ScreenClient() {
         </div>
       ) : null}
 
-      {confirm && confirmCopy ? (
-        <div className="fixed inset-0 z-[60]">
-          <div className="absolute inset-0 bg-black/35" onClick={closeConfirm} />
-          <div className="absolute left-1/2 top-1/2 w-[92vw] max-w-[520px] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-slate-200 bg-white shadow-2xl">
-            <div className="p-5">
-              <div className="text-base font-semibold text-slate-900">{confirmCopy.title}</div>
-              <div className="mt-2 whitespace-pre-line text-sm text-slate-700">{confirmCopy.body}</div>
-
-              <div className="mt-5 flex items-center justify-end gap-2">
-                <button
-                  className="h-9 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
-                  onClick={closeConfirm}
-                  disabled={confirmBusy}
-                >
-                  Abbrechen
-                </button>
-                <button
-                  className={classNames("h-9 rounded-xl px-4 text-sm font-semibold disabled:opacity-50", confirmCopy.confirmClass)}
-                  onClick={() => void runConfirm()}
-                  disabled={confirmBusy}
-                >
-                  {confirmBusy ? "Bitte warten…" : confirmCopy.confirmLabel}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <ConfirmDialog
+        open={!!confirmUi}
+        title={confirmUi?.title ?? ""}
+        message={confirmUi?.message ?? ""}
+        confirmLabel={confirmUi?.confirmLabel ?? ""}
+        tone={confirmUi?.tone ?? "primary"}
+        busy={confirmBusy}
+        onCancel={closeConfirm}
+        onConfirm={() => {
+          if (!confirmUi?.canConfirm) return;
+          void runConfirmedAction();
+        }}
+      />
     </>
   );
 }
