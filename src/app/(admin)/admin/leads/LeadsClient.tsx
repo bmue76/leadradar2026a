@@ -115,12 +115,7 @@ type OcrResp = {
 type UiError = { message: string; code?: string; traceId?: string };
 
 type SortOpt = "CREATED_DESC" | "CREATED_ASC" | "NAME_ASC" | "NAME_DESC";
-type EventScope = "ALL" | "ACTIVE";
 
-/**
- * Helper accessors to avoid TS "never" narrowing quirks in unreachable branches.
- * (never is assignable to UiError|null, but property access would fail.)
- */
 function errMessage(err: UiError | null): string {
   return err?.message ?? "";
 }
@@ -357,19 +352,10 @@ function StatusPills({
   );
 }
 
-function parseFilenameFromContentDisposition(h: string | null): string | null {
-  if (!h) return null;
-  const m = h.match(/filename="([^"]+)"/i);
-  if (m?.[1]) return m[1];
-  return null;
-}
-
 export default function LeadsClient() {
   const router = useRouter();
 
   const [activeEvent, setActiveEvent] = useState<ActiveEventApi["item"]>(null);
-
-  const [eventScope, setEventScope] = useState<EventScope>("ALL");
 
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<"ALL" | "NEW" | "REVIEWED">("ALL");
@@ -418,10 +404,6 @@ export default function LeadsClient() {
   const [emailError, setEmailError] = useState<UiError | null>(null);
   const emailInitRef = useRef(false);
 
-  // ✅ PDF download (TP7.5.1)
-  const [pdfBusy, setPdfBusy] = useState(false);
-  const [pdfError, setPdfError] = useState<UiError | null>(null);
-
   const autoInitRef = useRef(false);
 
   const { sort, dir } = useMemo(() => {
@@ -432,8 +414,8 @@ export default function LeadsClient() {
   }, [sortOpt]);
 
   const isDirtyFilters = useMemo(
-    () => q.trim() !== "" || status !== "ALL" || sortOpt !== "CREATED_DESC" || eventScope !== "ALL",
-    [q, status, sortOpt, eventScope]
+    () => q.trim() !== "" || status !== "ALL" || sortOpt !== "CREATED_DESC",
+    [q, status, sortOpt]
   );
 
   const countLabel = useMemo(() => {
@@ -448,17 +430,13 @@ export default function LeadsClient() {
       const sp = new URLSearchParams();
       if (q.trim()) sp.set("q", q.trim());
       sp.set("status", status);
-
-      // ✅ Default ist ALL (keine künstliche Leere, auch wenn kein aktives Event existiert)
-      if (eventScope === "ACTIVE") sp.set("event", "ACTIVE");
-
       sp.set("sort", sort);
       sp.set("dir", dir);
       sp.set("take", "50");
       if (cursor) sp.set("cursor", cursor);
       return `/api/admin/v1/leads?${sp.toString()}`;
     },
-    [q, status, sort, dir, eventScope]
+    [q, status, sort, dir]
   );
 
   const loadActiveEvent = useCallback(async () => {
@@ -548,13 +526,12 @@ export default function LeadsClient() {
   useEffect(() => {
     const t = setTimeout(() => void loadList(), 220);
     return () => clearTimeout(t);
-  }, [q, status, sortOpt, eventScope, loadList]);
+  }, [q, status, sortOpt, loadList]);
 
   const resetFilters = useCallback(() => {
     setQ("");
     setStatus("ALL");
     setSortOpt("CREATED_DESC");
-    setEventScope("ALL");
   }, []);
 
   const goToExportsPrefilled = useCallback(() => {
@@ -563,17 +540,15 @@ export default function LeadsClient() {
     setExportNavBusy(true);
 
     const sp = new URLSearchParams();
-    sp.set("scope", eventScope === "ACTIVE" ? "ACTIVE_EVENT" : "ALL");
+    sp.set("scope", "ALL");
     sp.set("leadStatus", status);
 
     const qq = q.trim();
     if (qq) sp.set("q", qq);
 
     router.push(`/admin/exports?${sp.toString()}`);
-
-    // Safety: in case navigation is blocked/slow, release after a short grace window.
     window.setTimeout(() => setExportNavBusy(false), 1200);
-  }, [exportNavBusy, router, status, q, eventScope]);
+  }, [exportNavBusy, router, status, q]);
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -597,21 +572,15 @@ export default function LeadsClient() {
     });
   }, [items]);
 
-  const openDrawer = useCallback(
-    (id: string) => {
-      emailInitRef.current = false;
-      setEmailResult(null);
-      setEmailError(null);
-      setEmailSending(false);
+  const openDrawer = useCallback((id: string) => {
+    emailInitRef.current = false;
+    setEmailResult(null);
+    setEmailError(null);
+    setEmailSending(false);
 
-      setPdfError(null);
-      setPdfBusy(false);
-
-      setSelectedId(id);
-      setDrawerOpen(true);
-    },
-    [emailInitRef]
-  );
+    setSelectedId(id);
+    setDrawerOpen(true);
+  }, []);
 
   const closeDrawer = useCallback(() => {
     setDrawerOpen(false);
@@ -635,10 +604,6 @@ export default function LeadsClient() {
     setEmailSending(false);
     setEmailResult(null);
     setEmailError(null);
-
-    // pdf reset
-    setPdfBusy(false);
-    setPdfError(null);
   }, []);
 
   const loadDetail = useCallback(async (id: string) => {
@@ -679,7 +644,6 @@ export default function LeadsClient() {
       setDraftMobile(d.contact?.mobile ?? "");
       setDraftNotes(d.adminNotes ?? "");
 
-      // Email defaults (only once per lead-open)
       if (!emailInitRef.current) {
         const nm = d.contact?.name ?? "";
         const co = d.contact?.company ?? "";
@@ -934,168 +898,80 @@ export default function LeadsClient() {
     }
   }, [detail, emailSending, emailTo, emailSubject, emailMessage, emailIncludeValues]);
 
-  const downloadLeadPdf = useCallback(async () => {
-    if (!detail || pdfBusy) return;
-
-    setPdfBusy(true);
-    setPdfError(null);
-
-    try {
-      const contactNameFromDraft =
-        (draftFirst || draftLast) ? `${draftFirst} ${draftLast}`.trim() : (detail.contact?.name ?? null);
-
-      const payload = {
-        leadId: detail.id,
-        createdAt: detail.createdAt,
-        capturedAt: detail.capturedAt,
-        reviewStatus: detail.reviewStatus,
-        reviewedAt: detail.reviewedAt,
-        adminNotes: draftNotes || null,
-        sourceDeviceName: detail.sourceDeviceName ?? null,
-        event: detail.event ?? null,
-        form: detail.form ?? null,
-        contact: {
-          firstName: draftFirst || null,
-          lastName: draftLast || null,
-          name: contactNameFromDraft,
-          company: draftCompany || null,
-          email: draftEmail || null,
-          phone: draftPhone || null,
-          mobile: draftMobile || null,
-        },
-        values: emailIncludeValues ? (detail.values ?? null) : null,
-        meta: detail.meta ?? null,
-      };
-
-      const res = await fetch("/api/admin/v1/pdf/lead", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        // try JSON error
-        try {
-          const json = (await res.json()) as ApiErr<unknown>;
-          setPdfError({
-            message: json?.error?.message || "Konnte PDF nicht erstellen.",
-            code: json?.error?.code,
-            traceId: (json as any)?.traceId,
-          });
-        } catch {
-          setPdfError({ message: "Konnte PDF nicht erstellen." });
-        }
-        setPdfBusy(false);
-        return;
-      }
-
-      const blob = await res.blob();
-      const filename =
-        parseFilenameFromContentDisposition(res.headers.get("content-disposition")) ||
-        `LeadRadar-Lead-${detail.id}.pdf`;
-
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.setTimeout(() => window.URL.revokeObjectURL(url), 4000);
-
-      setPdfBusy(false);
-    } catch {
-      setPdfError({ message: "Konnte PDF nicht erstellen. Bitte erneut versuchen." });
-      setPdfBusy(false);
-    }
-  }, [
-    detail,
-    pdfBusy,
-    draftFirst,
-    draftLast,
-    draftCompany,
-    draftEmail,
-    draftPhone,
-    draftMobile,
-    draftNotes,
-    emailIncludeValues,
-  ]);
-
   return (
-    <>
-      {/* ✅ Screen starts with ONE canonical Card */}
-      <section className="rounded-2xl border border-slate-200 bg-white">
-        {/* Toolbar area */}
-        <div className="p-5">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
-              <StatusPills value={status} onChange={setStatus} />
-
-              <Select value={eventScope} onChange={(v) => setEventScope(v as EventScope)} ariaLabel="Event Filter">
-                <option value="ALL">Alle Events</option>
-                <option value="ACTIVE">Nur aktives Event</option>
-              </Select>
-
-              <Input value={q} onChange={setQ} placeholder="Suche (Name, Firma, E-Mail, Telefon)" />
-
-              <Select value={sortOpt} onChange={(v) => setSortOpt(v as SortOpt)} ariaLabel="Sortierung">
-                <option value="CREATED_DESC">Neueste zuerst</option>
-                <option value="CREATED_ASC">Älteste zuerst</option>
-                <option value="NAME_ASC">Name A–Z</option>
-                <option value="NAME_DESC">Name Z–A</option>
-              </Select>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="text-sm text-slate-600">{countLabel}</div>
-
-              {selectedCount > 0 ? (
-                <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700">
-                  {selectedCount} ausgewählt
-                </div>
-              ) : null}
-
-              <div className="flex flex-col items-end gap-1">
-                <Button
-                  label={exportNavBusy ? "Exportiere…" : "Exportieren"}
-                  kind="secondary"
-                  onClick={goToExportsPrefilled}
-                  disabled={exportNavBusy}
-                  title="Exportiert aktuell gefilterte Leads."
-                />
-                <div className="text-[11px] text-slate-500">Exportiert aktuell gefilterte Leads</div>
-              </div>
-
-              {isDirtyFilters ? <Button label="Reset" kind="ghost" onClick={resetFilters} /> : null}
-
-              <IconButton title="Neu laden" onClick={() => void refreshAll()} />
+    <div className="space-y-4">
+      {/* Active Event Card (Info-only, nicht als Filter erzwungen) */}
+      <section className="rounded-2xl border border-slate-200 bg-white p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">Aktives Event (Mobile Erfassung)</div>
+            <div className="mt-1 text-sm text-slate-600">
+              {activeEvent?.name ? (
+                <>
+                  <span className="font-medium text-slate-900">{activeEvent.name}</span>{" "}
+                  <span className="text-slate-500">(für Capture / Standardkontext)</span>
+                </>
+              ) : (
+                <span className="text-slate-500">Kein aktives Event.</span>
+              )}
             </div>
           </div>
 
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-            <div>
-              Aktives Event:{" "}
-              {activeEvent?.name ? (
-                <span className="font-medium text-slate-700">{activeEvent.name}</span>
-              ) : (
-                <span className="text-slate-500">Kein aktives Event</span>
-              )}
-              {eventScope === "ACTIVE" && !activeEvent ? (
-                <span className="ml-2 rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-900">
-                  Filter = aktiv, aber kein aktives Event
-                </span>
-              ) : null}
-            </div>
-
-            <Link href="/admin/events" className="text-slate-700 underline-offset-4 hover:underline">
+          <div className="flex items-center gap-2">
+            <Link
+              href="/admin/events"
+              className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
+            >
               Events öffnen
             </Link>
+            <IconButton title="Aktualisieren" onClick={() => void refreshAll()} />
           </div>
         </div>
+      </section>
 
-        <div className="h-px w-full bg-slate-200" />
+      {/* Toolbar */}
+      <section className="rounded-2xl border border-slate-200 bg-white p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+            <StatusPills value={status} onChange={setStatus} />
+            <Input value={q} onChange={setQ} placeholder="Suche (Name, Firma, E-Mail, Telefon)" />
+            <Select value={sortOpt} onChange={(v) => setSortOpt(v as SortOpt)} ariaLabel="Sortierung">
+              <option value="CREATED_DESC">Neueste zuerst</option>
+              <option value="CREATED_ASC">Älteste zuerst</option>
+              <option value="NAME_ASC">Name A–Z</option>
+              <option value="NAME_DESC">Name Z–A</option>
+            </Select>
+          </div>
 
-        {/* Table */}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="text-sm text-slate-600">{countLabel}</div>
+
+            {selectedCount > 0 ? (
+              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700">
+                {selectedCount} ausgewählt
+              </div>
+            ) : null}
+
+            <div className="flex flex-col items-end gap-1">
+              <Button
+                label={exportNavBusy ? "Exportiere…" : "Exportieren"}
+                kind="secondary"
+                onClick={goToExportsPrefilled}
+                disabled={exportNavBusy}
+                title="Exportiert aktuell gefilterte Leads."
+              />
+              <div className="text-[11px] text-slate-500">Exportiert aktuell gefilterte Leads</div>
+            </div>
+
+            {isDirtyFilters ? <Button label="Reset" kind="ghost" onClick={resetFilters} /> : null}
+
+            <IconButton title="Neu laden" onClick={() => void loadList()} />
+          </div>
+        </div>
+      </section>
+
+      {/* List */}
+      <section className="rounded-2xl border border-slate-200 bg-white">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
@@ -1110,9 +986,7 @@ export default function LeadsClient() {
                 </th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Kontakt</th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">E-Mail / Telefon</th>
-                <th className="hidden px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600 md:table-cell">
-                  Event
-                </th>
+                <th className="hidden px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600 md:table-cell">Event</th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Status</th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Erfasst am</th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Info</th>
@@ -1184,11 +1058,7 @@ export default function LeadsClient() {
                       </td>
 
                       <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(
-                            it.reviewStatus
-                          )}`}
-                        >
+                        <span className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(it.reviewStatus)}`}>
                           {statusLabel(it.reviewStatus)}
                         </span>
                       </td>
@@ -1219,12 +1089,7 @@ export default function LeadsClient() {
 
         {nextCursor ? (
           <div className="flex items-center justify-center p-4">
-            <Button
-              label={loadingMore ? "Lade…" : "Mehr laden"}
-              kind="secondary"
-              onClick={() => void loadMore()}
-              disabled={loadingMore}
-            />
+            <Button label={loadingMore ? "Lade…" : "Mehr laden"} kind="secondary" onClick={() => void loadMore()} disabled={loadingMore} />
           </div>
         ) : null}
       </section>
@@ -1241,9 +1106,7 @@ export default function LeadsClient() {
               <div className="mt-2 text-xs text-rose-700">Support-Code: {errTraceId(drawerErr)}</div>
             ) : null}
             <div className="mt-3">
-              {selectedId ? (
-                <Button label="Erneut versuchen" kind="secondary" onClick={() => void loadDetail(selectedId)} />
-              ) : null}
+              {selectedId ? <Button label="Erneut versuchen" kind="secondary" onClick={() => void loadDetail(selectedId)} /> : null}
             </div>
           </div>
         ) : !detail ? (
@@ -1255,14 +1118,7 @@ export default function LeadsClient() {
                 Erfasst: <span className="font-medium text-slate-700">{fmtDateTime(detail.createdAt)}</span>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  label={pdfBusy ? "PDF…" : "PDF"}
-                  kind="secondary"
-                  onClick={() => void downloadLeadPdf()}
-                  disabled={pdfBusy}
-                  title="PDF-Rapport herunterladen"
-                />
+              <div className="flex items-center gap-2">
                 <Button
                   label={detail.reviewStatus === "REVIEWED" ? "Als neu markieren" : "Als bearbeitet markieren"}
                   kind={detail.reviewStatus === "REVIEWED" ? "secondary" : "primary"}
@@ -1276,16 +1132,6 @@ export default function LeadsClient() {
                 />
               </div>
             </div>
-
-            {pdfError ? (
-              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3">
-                <div className="text-sm font-medium text-rose-900">PDF Fehler</div>
-                <div className="mt-1 text-sm text-rose-800">{pdfError.message}</div>
-                {pdfError.traceId ? (
-                  <div className="mt-2 text-xs text-rose-700">Support-Code: {pdfError.traceId}</div>
-                ) : null}
-              </div>
-            ) : null}
 
             <Card title="Kontakt">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -1302,8 +1148,7 @@ export default function LeadsClient() {
               </div>
 
               <div className="mt-3 text-xs text-slate-500">
-                Kontakt-Quelle: <span className="font-medium text-slate-700">{detail.contact?.source ?? "—"}</span> ·
-                aktualisiert:{" "}
+                Kontakt-Quelle: <span className="font-medium text-slate-700">{detail.contact?.source ?? "—"}</span> · aktualisiert:{" "}
                 <span className="font-medium text-slate-700">{fmtDateTime(detail.contact?.updatedAt ?? null)}</span>
               </div>
             </Card>
@@ -1353,9 +1198,7 @@ export default function LeadsClient() {
                   <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3">
                     <div className="text-sm font-medium text-rose-900">E-Mail Fehler</div>
                     <div className="mt-1 text-sm text-rose-800">{emailError.message}</div>
-                    {emailError.traceId ? (
-                      <div className="mt-2 text-xs text-rose-700">Support-Code: {emailError.traceId}</div>
-                    ) : null}
+                    {emailError.traceId ? <div className="mt-2 text-xs text-rose-700">Support-Code: {emailError.traceId}</div> : null}
                   </div>
                 ) : null}
 
@@ -1387,11 +1230,7 @@ export default function LeadsClient() {
                 </div>
                 <div>
                   <span className="text-slate-500">Status:</span>{" "}
-                  <span
-                    className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(
-                      detail.reviewStatus
-                    )}`}
-                  >
+                  <span className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(detail.reviewStatus)}`}>
                     {statusLabel(detail.reviewStatus)}
                   </span>
                 </div>
@@ -1430,12 +1269,7 @@ export default function LeadsClient() {
                       Download
                     </a>
 
-                    <Button
-                      label={ocrLoading ? "OCR lade…" : "OCR laden"}
-                      kind="secondary"
-                      onClick={() => void loadOcr()}
-                      disabled={ocrLoading}
-                    />
+                    <Button label={ocrLoading ? "OCR lade…" : "OCR laden"} kind="secondary" onClick={() => void loadOcr()} disabled={ocrLoading} />
                     <Button
                       label={ocrApplying ? "Wende an…" : "OCR anwenden"}
                       kind="secondary"
@@ -1449,9 +1283,7 @@ export default function LeadsClient() {
                     <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3">
                       <div className="text-sm font-medium text-rose-900">OCR Fehler</div>
                       <div className="mt-1 text-sm text-rose-800">{ocrError.message}</div>
-                      {ocrError.traceId ? (
-                        <div className="mt-2 text-xs text-rose-700">Support-Code: {ocrError.traceId}</div>
-                      ) : null}
+                      {ocrError.traceId ? <div className="mt-2 text-xs text-rose-700">Support-Code: {ocrError.traceId}</div> : null}
                     </div>
                   ) : null}
 
@@ -1464,8 +1296,7 @@ export default function LeadsClient() {
                         {typeof ocrData.ocr.confidence === "number" ? (
                           <>
                             {" "}
-                            · Confidence:{" "}
-                            <span className="font-medium">{Math.round(ocrData.ocr.confidence * 100)}%</span>
+                            · Confidence: <span className="font-medium">{Math.round(ocrData.ocr.confidence * 100)}%</span>
                           </>
                         ) : null}
                       </div>
@@ -1481,14 +1312,12 @@ export default function LeadsClient() {
               <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
                 <div className="text-sm font-medium text-rose-900">Fehler</div>
                 <div className="mt-1 text-sm text-rose-800">{errMessage(drawerErr)}</div>
-                {errTraceId(drawerErr) ? (
-                  <div className="mt-2 text-xs text-rose-700">Support-Code: {errTraceId(drawerErr)}</div>
-                ) : null}
+                {errTraceId(drawerErr) ? <div className="mt-2 text-xs text-rose-700">Support-Code: {errTraceId(drawerErr)}</div> : null}
               </div>
             ) : null}
           </div>
         )}
       </DrawerShell>
-    </>
+    </div>
   );
 }

@@ -15,7 +15,7 @@ export default function Page() {
       <header className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">Leads</h1>
         <p className="mt-1 text-sm text-slate-600">
-          Alle erfassten Leads. Filtern, exportieren oder pro Lead per E-Mail weiterleiten / als PDF rapportieren.
+          Nachbearbeitung der erfassten Leads. Standardmässig werden alle Leads angezeigt; optional kannst du auf das aktive Event filtern.
         </p>
       </header>
 
