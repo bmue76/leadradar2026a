@@ -1,9 +1,9 @@
+// src/app/(admin)/admin/leads/LeadsClient.tsx
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { PageShell } from "../_ui/Page";
 
 type ApiOk<T> = { ok: true; data: T; traceId: string };
 type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
@@ -115,6 +115,7 @@ type OcrResp = {
 type UiError = { message: string; code?: string; traceId?: string };
 
 type SortOpt = "CREATED_DESC" | "CREATED_ASC" | "NAME_ASC" | "NAME_DESC";
+type EventScope = "ALL" | "ACTIVE";
 
 /**
  * Helper accessors to avoid TS "never" narrowing quirks in unreachable branches.
@@ -173,6 +174,28 @@ function Button({
     <button type="button" className={cls} onClick={onClick} disabled={disabled} title={title}>
       {label}
     </button>
+  );
+}
+
+function LinkButton({
+  label,
+  href,
+  title,
+}: {
+  label: string;
+  href: string;
+  title?: string;
+}) {
+  return (
+    <a
+      className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      title={title}
+    >
+      {label}
+    </a>
   );
 }
 
@@ -364,6 +387,7 @@ export default function LeadsClient() {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<"ALL" | "NEW" | "REVIEWED">("ALL");
   const [sortOpt, setSortOpt] = useState<SortOpt>("CREATED_DESC");
+  const [eventScope, setEventScope] = useState<EventScope>("ALL"); // ✅ default: ALL leads (auch archivierte Events)
 
   const [loadingList, setLoadingList] = useState(true);
   const [listError, setListError] = useState<UiError | null>(null);
@@ -398,6 +422,20 @@ export default function LeadsClient() {
 
   const [exportNavBusy, setExportNavBusy] = useState(false);
 
+  // ✅ Lead Delete (TP7.5.1)
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<UiError | null>(null);
+
+  // ✅ E-Mail forwarding (TP7.5 MVP)
+  const [emailTo, setEmailTo] = useState("");
+  const [emailSubject, setEmailSubject] = useState("");
+  const [emailMessage, setEmailMessage] = useState("");
+  const [emailIncludeValues, setEmailIncludeValues] = useState(true);
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailResult, setEmailResult] = useState<{ delivered: boolean; mode: "smtp" | "log" } | null>(null);
+  const [emailError, setEmailError] = useState<UiError | null>(null);
+  const emailInitRef = useRef(false);
+
   const autoInitRef = useRef(false);
 
   const { sort, dir } = useMemo(() => {
@@ -408,8 +446,8 @@ export default function LeadsClient() {
   }, [sortOpt]);
 
   const isDirtyFilters = useMemo(
-    () => q.trim() !== "" || status !== "ALL" || sortOpt !== "CREATED_DESC",
-    [q, status, sortOpt]
+    () => q.trim() !== "" || status !== "ALL" || sortOpt !== "CREATED_DESC" || eventScope !== "ALL",
+    [q, status, sortOpt, eventScope]
   );
 
   const countLabel = useMemo(() => {
@@ -424,14 +462,14 @@ export default function LeadsClient() {
       const sp = new URLSearchParams();
       if (q.trim()) sp.set("q", q.trim());
       sp.set("status", status);
-      sp.set("event", "ACTIVE");
+      if (eventScope === "ACTIVE") sp.set("event", "ACTIVE"); // ✅ optional filter
       sp.set("sort", sort);
       sp.set("dir", dir);
       sp.set("take", "50");
       if (cursor) sp.set("cursor", cursor);
       return `/api/admin/v1/leads?${sp.toString()}`;
     },
-    [q, status, sort, dir]
+    [q, status, sort, dir, eventScope]
   );
 
   const loadActiveEvent = useCallback(async () => {
@@ -521,12 +559,13 @@ export default function LeadsClient() {
   useEffect(() => {
     const t = setTimeout(() => void loadList(), 220);
     return () => clearTimeout(t);
-  }, [q, status, sortOpt, loadList]);
+  }, [q, status, sortOpt, eventScope, loadList]);
 
   const resetFilters = useCallback(() => {
     setQ("");
     setStatus("ALL");
     setSortOpt("CREATED_DESC");
+    setEventScope("ALL");
   }, []);
 
   const goToExportsPrefilled = useCallback(() => {
@@ -535,17 +574,17 @@ export default function LeadsClient() {
     setExportNavBusy(true);
 
     const sp = new URLSearchParams();
-    sp.set("scope", "ACTIVE_EVENT");
     sp.set("leadStatus", status);
 
     const qq = q.trim();
     if (qq) sp.set("q", qq);
 
+    sp.set("eventScope", eventScope); // ✅ Exports kann später sauber auswerten (ALL/ACTIVE)
+
     router.push(`/admin/exports?${sp.toString()}`);
 
-    // Safety: in case navigation is blocked/slow, release after a short grace window.
     window.setTimeout(() => setExportNavBusy(false), 1200);
-  }, [exportNavBusy, router, status, q]);
+  }, [exportNavBusy, router, status, q, eventScope]);
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -570,6 +609,14 @@ export default function LeadsClient() {
   }, [items]);
 
   const openDrawer = useCallback((id: string) => {
+    emailInitRef.current = false;
+    setEmailResult(null);
+    setEmailError(null);
+    setEmailSending(false);
+
+    setDeleteBusy(false);
+    setDeleteError(null);
+
     setSelectedId(id);
     setDrawerOpen(true);
   }, []);
@@ -586,6 +633,19 @@ export default function LeadsClient() {
     setOcrError(null);
     setOcrLoading(false);
     setOcrApplying(false);
+
+    setDeleteBusy(false);
+    setDeleteError(null);
+
+    // email reset
+    emailInitRef.current = false;
+    setEmailTo("");
+    setEmailSubject("");
+    setEmailMessage("");
+    setEmailIncludeValues(true);
+    setEmailSending(false);
+    setEmailResult(null);
+    setEmailError(null);
   }, []);
 
   const loadDetail = useCallback(async (id: string) => {
@@ -625,6 +685,16 @@ export default function LeadsClient() {
       setDraftPhone(d.contact?.phoneRaw ?? "");
       setDraftMobile(d.contact?.mobile ?? "");
       setDraftNotes(d.adminNotes ?? "");
+
+      // Email defaults (only once per lead-open)
+      if (!emailInitRef.current) {
+        const nm = d.contact?.name ?? "";
+        const co = d.contact?.company ?? "";
+        const subjBase = nm && co ? `${nm} / ${co}` : nm || co || "Lead";
+        setEmailSubject(`LeadRadar Lead: ${subjBase}`);
+        setEmailMessage("");
+        emailInitRef.current = true;
+      }
 
       setLoadingDetail(false);
     } catch {
@@ -821,8 +891,103 @@ export default function LeadsClient() {
     }
   }, [detail, ocrData, ocrApplying, loadDetail, loadList]);
 
+  const sendLeadEmail = useCallback(async () => {
+    if (!detail || emailSending) return;
+
+    const to = emailTo.trim();
+    if (!to) {
+      setEmailError({ message: "Bitte Empfänger-E-Mail angeben." });
+      return;
+    }
+
+    setEmailSending(true);
+    setEmailError(null);
+    setEmailResult(null);
+
+    try {
+      const res = await fetch(`/api/admin/v1/leads/${detail.id}/email`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          to,
+          subject: emailSubject.trim() || undefined,
+          message: emailMessage.trim() || undefined,
+          includeValues: emailIncludeValues,
+        }),
+      });
+
+      const json = (await res.json()) as ApiResp<{ delivered: boolean; mode: "smtp" | "log" }>;
+      if (!json || typeof json !== "object") {
+        setEmailError({ message: "Ungültige Serverantwort." });
+        setEmailSending(false);
+        return;
+      }
+
+      if (!json.ok) {
+        setEmailError({
+          message: json.error?.message || "Konnte E-Mail nicht senden.",
+          code: json.error?.code,
+          traceId: json.traceId,
+        });
+        setEmailSending(false);
+        return;
+      }
+
+      setEmailResult(json.data);
+      setEmailSending(false);
+    } catch {
+      setEmailError({ message: "Konnte E-Mail nicht senden. Bitte erneut versuchen." });
+      setEmailSending(false);
+    }
+  }, [detail, emailSending, emailTo, emailSubject, emailMessage, emailIncludeValues]);
+
+  const deleteLead = useCallback(async () => {
+    if (!detail || deleteBusy) return;
+
+    const ok = window.confirm(
+      "Lead wirklich löschen?\n\nDieser Vorgang entfernt den Lead (inkl. Anhänge/OCR, sofern serverseitig gekoppelt) dauerhaft."
+    );
+    if (!ok) return;
+
+    setDeleteBusy(true);
+    setDeleteError(null);
+
+    try {
+      const res = await fetch(`/api/admin/v1/leads/${detail.id}/delete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason: "ADMIN_DELETE" }),
+      });
+
+      const json = (await res.json()) as ApiResp<{ deleted: boolean }>;
+      if (!json || typeof json !== "object") {
+        setDeleteError({ message: "Ungültige Serverantwort." });
+        setDeleteBusy(false);
+        return;
+      }
+
+      if (!json.ok) {
+        setDeleteError({
+          message: json.error?.message || "Konnte Lead nicht löschen.",
+          code: json.error?.code,
+          traceId: json.traceId,
+        });
+        setDeleteBusy(false);
+        return;
+      }
+
+      // UX: Drawer zu + Liste neu laden
+      closeDrawer();
+      await loadList();
+      setDeleteBusy(false);
+    } catch {
+      setDeleteError({ message: "Konnte Lead nicht löschen. Bitte erneut versuchen." });
+      setDeleteBusy(false);
+    }
+  }, [detail, deleteBusy, closeDrawer, loadList]);
+
   return (
-    <PageShell className="space-y-4">
+    <div className="space-y-4">
       {/* Active Event Card */}
       <section className="rounded-2xl border border-slate-200 bg-white p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -832,10 +997,10 @@ export default function LeadsClient() {
               {activeEvent?.name ? (
                 <>
                   <span className="font-medium text-slate-900">{activeEvent.name}</span>{" "}
-                  <span className="text-slate-500">(Standardfilter)</span>
+                  <span className="text-slate-500">(optional als Filter)</span>
                 </>
               ) : (
-                <span className="text-slate-500">Kein aktives Event.</span>
+                <span className="text-slate-500">Kein aktives Event definiert.</span>
               )}
             </div>
           </div>
@@ -851,7 +1016,10 @@ export default function LeadsClient() {
           </div>
         </div>
 
-        <div className="mt-2 text-xs text-slate-500">Hinweis: Wenn kein aktives Event existiert, bleibt die Liste leer (GoLive-safe).</div>
+        <div className="mt-2 text-xs text-slate-500">
+          Standard: Alle Leads werden angezeigt (auch aus archivierten Events). Optional kannst du oben „Nur aktives Event“
+          wählen.
+        </div>
       </section>
 
       {/* Toolbar */}
@@ -859,7 +1027,14 @@ export default function LeadsClient() {
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
             <StatusPills value={status} onChange={setStatus} />
+
+            <Select value={eventScope} onChange={(v) => setEventScope(v as EventScope)} ariaLabel="Event Filter">
+              <option value="ALL">Alle Events</option>
+              <option value="ACTIVE">Nur aktives Event</option>
+            </Select>
+
             <Input value={q} onChange={setQ} placeholder="Suche (Name, Firma, E-Mail, Telefon)" />
+
             <Select value={sortOpt} onChange={(v) => setSortOpt(v as SortOpt)} ariaLabel="Sortierung">
               <option value="CREATED_DESC">Neueste zuerst</option>
               <option value="CREATED_ASC">Älteste zuerst</option>
@@ -931,7 +1106,9 @@ export default function LeadsClient() {
                     <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
                       <div className="text-sm font-medium text-rose-900">Fehler</div>
                       <div className="mt-1 text-sm text-rose-800">{listError.message}</div>
-                      {listError.traceId ? <div className="mt-2 text-xs text-rose-700">Support-Code: {listError.traceId}</div> : null}
+                      {listError.traceId ? (
+                        <div className="mt-2 text-xs text-rose-700">Support-Code: {listError.traceId}</div>
+                      ) : null}
                       <div className="mt-3">
                         <Button label="Erneut versuchen" kind="secondary" onClick={() => void loadList()} />
                       </div>
@@ -966,7 +1143,9 @@ export default function LeadsClient() {
                       <td className="px-4 py-3">
                         <div className="text-sm font-medium text-slate-900">{it.contactName ?? "—"}</div>
                         <div className="text-xs text-slate-600">{it.company ?? "—"}</div>
-                        {it.sourceDeviceName ? <div className="mt-1 text-[11px] text-slate-500">Quelle: {it.sourceDeviceName}</div> : null}
+                        {it.sourceDeviceName ? (
+                          <div className="mt-1 text-[11px] text-slate-500">Quelle: {it.sourceDeviceName}</div>
+                        ) : null}
                       </td>
 
                       <td className="px-4 py-3">
@@ -979,7 +1158,11 @@ export default function LeadsClient() {
                       </td>
 
                       <td className="px-4 py-3">
-                        <span className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(it.reviewStatus)}`}>
+                        <span
+                          className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(
+                            it.reviewStatus
+                          )}`}
+                        >
                           {statusLabel(it.reviewStatus)}
                         </span>
                       </td>
@@ -1010,7 +1193,12 @@ export default function LeadsClient() {
 
         {nextCursor ? (
           <div className="flex items-center justify-center p-4">
-            <Button label={loadingMore ? "Lade…" : "Mehr laden"} kind="secondary" onClick={() => void loadMore()} disabled={loadingMore} />
+            <Button
+              label={loadingMore ? "Lade…" : "Mehr laden"}
+              kind="secondary"
+              onClick={() => void loadMore()}
+              disabled={loadingMore}
+            />
           </div>
         ) : null}
       </section>
@@ -1023,9 +1211,13 @@ export default function LeadsClient() {
           <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
             <div className="text-sm font-medium text-rose-900">Fehler</div>
             <div className="mt-1 text-sm text-rose-800">{errMessage(drawerErr)}</div>
-            {errTraceId(drawerErr) ? <div className="mt-2 text-xs text-rose-700">Support-Code: {errTraceId(drawerErr)}</div> : null}
+            {errTraceId(drawerErr) ? (
+              <div className="mt-2 text-xs text-rose-700">Support-Code: {errTraceId(drawerErr)}</div>
+            ) : null}
             <div className="mt-3">
-              {selectedId ? <Button label="Erneut versuchen" kind="secondary" onClick={() => void loadDetail(selectedId)} /> : null}
+              {selectedId ? (
+                <Button label="Erneut versuchen" kind="secondary" onClick={() => void loadDetail(selectedId)} />
+              ) : null}
             </div>
           </div>
         ) : !detail ? (
@@ -1037,20 +1229,44 @@ export default function LeadsClient() {
                 Erfasst: <span className="font-medium text-slate-700">{fmtDateTime(detail.createdAt)}</span>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <LinkButton
+                  label="PDF"
+                  href={`/api/admin/v1/leads/${detail.id}/pdf?disposition=attachment`}
+                  title="PDF-Rapport herunterladen"
+                />
+
                 <Button
                   label={detail.reviewStatus === "REVIEWED" ? "Als neu markieren" : "Als bearbeitet markieren"}
                   kind={detail.reviewStatus === "REVIEWED" ? "secondary" : "primary"}
                   onClick={() => void toggleReviewed()}
                 />
+
                 <Button
                   label={saving ? "Speichere…" : "Speichern"}
                   kind="secondary"
                   disabled={!isDirtyDetail || saving}
                   onClick={() => void saveDetail()}
                 />
+
+                <Button
+                  label={deleteBusy ? "Lösche…" : "Löschen"}
+                  kind="danger"
+                  onClick={() => void deleteLead()}
+                  disabled={deleteBusy}
+                />
               </div>
             </div>
+
+            {deleteError ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                <div className="text-sm font-medium text-rose-900">Löschen fehlgeschlagen</div>
+                <div className="mt-1 text-sm text-rose-800">{deleteError.message}</div>
+                {deleteError.traceId ? (
+                  <div className="mt-2 text-xs text-rose-700">Support-Code: {deleteError.traceId}</div>
+                ) : null}
+              </div>
+            ) : null}
 
             <Card title="Kontakt">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -1080,6 +1296,59 @@ export default function LeadsClient() {
                 placeholder="z.B. Danke, will Offerte; Nachfassen am Dienstag…"
               />
               <div className="mt-2 text-xs text-slate-500">Nur intern (nicht in der App sichtbar).</div>
+            </Card>
+
+            <Card title="Per E-Mail weiterleiten">
+              <div className="space-y-3">
+                <Field label="Empfänger E-Mail" value={emailTo} onChange={setEmailTo} placeholder="z.B. verkauf@firma.ch" />
+                <Field label="Betreff" value={emailSubject} onChange={setEmailSubject} placeholder="Betreff" />
+
+                <TextArea
+                  label="Nachricht (optional)"
+                  value={emailMessage}
+                  onChange={setEmailMessage}
+                  placeholder="Optionaler Text für den Empfänger…"
+                />
+
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={emailIncludeValues}
+                    onChange={(e) => setEmailIncludeValues(e.target.checked)}
+                  />
+                  Lead-Felder (values) im E-Mail mitsenden
+                </label>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    label={emailSending ? "Sende…" : "E-Mail senden"}
+                    kind="secondary"
+                    onClick={() => void sendLeadEmail()}
+                    disabled={emailSending}
+                  />
+                  <div className="text-xs text-slate-500">
+                    DEV: ohne SMTP wird die E-Mail im Server-Log ausgegeben.
+                  </div>
+                </div>
+
+                {emailError ? (
+                  <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3">
+                    <div className="text-sm font-medium text-rose-900">E-Mail Fehler</div>
+                    <div className="mt-1 text-sm text-rose-800">{emailError.message}</div>
+                    {emailError.traceId ? <div className="mt-2 text-xs text-rose-700">Support-Code: {emailError.traceId}</div> : null}
+                  </div>
+                ) : null}
+
+                {emailResult ? (
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
+                    <div className="text-sm font-medium text-emerald-900">E-Mail versendet</div>
+                    <div className="mt-1 text-sm text-emerald-800">
+                      Status: {emailResult.delivered ? "OK" : "Unklar"} · Modus:{" "}
+                      <span className="font-medium">{emailResult.mode}</span>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             </Card>
 
             <Card title="Quelle / Meta">
@@ -1186,6 +1455,6 @@ export default function LeadsClient() {
           </div>
         )}
       </DrawerShell>
-    </PageShell>
+    </div>
   );
 }
