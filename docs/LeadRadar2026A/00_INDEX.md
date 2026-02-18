@@ -61,3 +61,7 @@ TP 6.6 — Mobile Branding Provider + Cleanup (nur eine Source of Truth) + Admin
 - teilprojekt-7.x-admin-events-leads-exports-cleanup.md — Admin Events/Leads/Exports Cleanup (DONE)
 
 - teilprojekt-7.3-branding-billing-accounting.md — TP7.3 Branding/Billing Split
+
+- **TP 7.4 — Betrieb: Events & Geräte — UX Upgrade**  
+  Doku: `docs/LeadRadar2026A/teilprojekt-7.4-ops-events-devices-ux-upgrade.md`  
+  Schlussrapport: `docs/LeadRadar2026A/tp7.4-schlussrapport-ops-events-devices-ux.md`
