@@ -1,3 +1,4 @@
+// src/app/(admin)/admin/leads/LeadsClient.tsx
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -173,20 +174,6 @@ function Button({
     <button type="button" className={cls} onClick={onClick} disabled={disabled} title={title}>
       {label}
     </button>
-  );
-}
-
-function LinkButton({ label, href, title }: { label: string; href: string; title?: string }) {
-  return (
-    <a
-      className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      title={title}
-    >
-      {label}
-    </a>
   );
 }
 
@@ -370,15 +357,23 @@ function StatusPills({
   );
 }
 
-export default function ScreenClient() {
+function parseFilenameFromContentDisposition(h: string | null): string | null {
+  if (!h) return null;
+  const m = h.match(/filename="([^"]+)"/i);
+  if (m?.[1]) return m[1];
+  return null;
+}
+
+export default function LeadsClient() {
   const router = useRouter();
 
   const [activeEvent, setActiveEvent] = useState<ActiveEventApi["item"]>(null);
 
+  const [eventScope, setEventScope] = useState<EventScope>("ALL");
+
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<"ALL" | "NEW" | "REVIEWED">("ALL");
   const [sortOpt, setSortOpt] = useState<SortOpt>("CREATED_DESC");
-  const [eventScope, setEventScope] = useState<EventScope>("ALL"); // default: ALL leads
 
   const [loadingList, setLoadingList] = useState(true);
   const [listError, setListError] = useState<UiError | null>(null);
@@ -413,10 +408,7 @@ export default function ScreenClient() {
 
   const [exportNavBusy, setExportNavBusy] = useState(false);
 
-  const [deleteBusy, setDeleteBusy] = useState(false);
-  const [deleteError, setDeleteError] = useState<UiError | null>(null);
-
-  // E-Mail forwarding
+  // ✅ E-Mail forwarding (TP7.5 MVP)
   const [emailTo, setEmailTo] = useState("");
   const [emailSubject, setEmailSubject] = useState("");
   const [emailMessage, setEmailMessage] = useState("");
@@ -425,6 +417,10 @@ export default function ScreenClient() {
   const [emailResult, setEmailResult] = useState<{ delivered: boolean; mode: "smtp" | "log" } | null>(null);
   const [emailError, setEmailError] = useState<UiError | null>(null);
   const emailInitRef = useRef(false);
+
+  // ✅ PDF download (TP7.5.1)
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfError, setPdfError] = useState<UiError | null>(null);
 
   const autoInitRef = useRef(false);
 
@@ -452,7 +448,10 @@ export default function ScreenClient() {
       const sp = new URLSearchParams();
       if (q.trim()) sp.set("q", q.trim());
       sp.set("status", status);
+
+      // ✅ Default ist ALL (keine künstliche Leere, auch wenn kein aktives Event existiert)
       if (eventScope === "ACTIVE") sp.set("event", "ACTIVE");
+
       sp.set("sort", sort);
       sp.set("dir", dir);
       sp.set("take", "50");
@@ -564,14 +563,15 @@ export default function ScreenClient() {
     setExportNavBusy(true);
 
     const sp = new URLSearchParams();
+    sp.set("scope", eventScope === "ACTIVE" ? "ACTIVE_EVENT" : "ALL");
     sp.set("leadStatus", status);
 
     const qq = q.trim();
     if (qq) sp.set("q", qq);
 
-    sp.set("eventScope", eventScope);
-
     router.push(`/admin/exports?${sp.toString()}`);
+
+    // Safety: in case navigation is blocked/slow, release after a short grace window.
     window.setTimeout(() => setExportNavBusy(false), 1200);
   }, [exportNavBusy, router, status, q, eventScope]);
 
@@ -597,18 +597,21 @@ export default function ScreenClient() {
     });
   }, [items]);
 
-  const openDrawer = useCallback((id: string) => {
-    emailInitRef.current = false;
-    setEmailResult(null);
-    setEmailError(null);
-    setEmailSending(false);
+  const openDrawer = useCallback(
+    (id: string) => {
+      emailInitRef.current = false;
+      setEmailResult(null);
+      setEmailError(null);
+      setEmailSending(false);
 
-    setDeleteBusy(false);
-    setDeleteError(null);
+      setPdfError(null);
+      setPdfBusy(false);
 
-    setSelectedId(id);
-    setDrawerOpen(true);
-  }, []);
+      setSelectedId(id);
+      setDrawerOpen(true);
+    },
+    [emailInitRef]
+  );
 
   const closeDrawer = useCallback(() => {
     setDrawerOpen(false);
@@ -623,9 +626,6 @@ export default function ScreenClient() {
     setOcrLoading(false);
     setOcrApplying(false);
 
-    setDeleteBusy(false);
-    setDeleteError(null);
-
     // email reset
     emailInitRef.current = false;
     setEmailTo("");
@@ -635,6 +635,10 @@ export default function ScreenClient() {
     setEmailSending(false);
     setEmailResult(null);
     setEmailError(null);
+
+    // pdf reset
+    setPdfBusy(false);
+    setPdfError(null);
   }, []);
 
   const loadDetail = useCallback(async (id: string) => {
@@ -675,6 +679,7 @@ export default function ScreenClient() {
       setDraftMobile(d.contact?.mobile ?? "");
       setDraftNotes(d.adminNotes ?? "");
 
+      // Email defaults (only once per lead-open)
       if (!emailInitRef.current) {
         const nm = d.contact?.name ?? "";
         const co = d.contact?.company ?? "";
@@ -929,89 +934,98 @@ export default function ScreenClient() {
     }
   }, [detail, emailSending, emailTo, emailSubject, emailMessage, emailIncludeValues]);
 
-  const deleteLead = useCallback(async () => {
-    if (!detail || deleteBusy) return;
+  const downloadLeadPdf = useCallback(async () => {
+    if (!detail || pdfBusy) return;
 
-    const ok = window.confirm(
-      "Lead wirklich löschen?\n\nDieser Vorgang entfernt den Lead dauerhaft."
-    );
-    if (!ok) return;
-
-    setDeleteBusy(true);
-    setDeleteError(null);
+    setPdfBusy(true);
+    setPdfError(null);
 
     try {
-      const res = await fetch(`/api/admin/v1/leads/${detail.id}/delete`, {
+      const contactNameFromDraft =
+        (draftFirst || draftLast) ? `${draftFirst} ${draftLast}`.trim() : (detail.contact?.name ?? null);
+
+      const payload = {
+        leadId: detail.id,
+        createdAt: detail.createdAt,
+        capturedAt: detail.capturedAt,
+        reviewStatus: detail.reviewStatus,
+        reviewedAt: detail.reviewedAt,
+        adminNotes: draftNotes || null,
+        sourceDeviceName: detail.sourceDeviceName ?? null,
+        event: detail.event ?? null,
+        form: detail.form ?? null,
+        contact: {
+          firstName: draftFirst || null,
+          lastName: draftLast || null,
+          name: contactNameFromDraft,
+          company: draftCompany || null,
+          email: draftEmail || null,
+          phone: draftPhone || null,
+          mobile: draftMobile || null,
+        },
+        values: emailIncludeValues ? (detail.values ?? null) : null,
+        meta: detail.meta ?? null,
+      };
+
+      const res = await fetch("/api/admin/v1/pdf/lead", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ reason: "ADMIN_DELETE" }),
+        body: JSON.stringify(payload),
       });
 
-      const json = (await res.json()) as ApiResp<{ deleted: boolean }>;
-      if (!json || typeof json !== "object") {
-        setDeleteError({ message: "Ungültige Serverantwort." });
-        setDeleteBusy(false);
+      if (!res.ok) {
+        // try JSON error
+        try {
+          const json = (await res.json()) as ApiErr<unknown>;
+          setPdfError({
+            message: json?.error?.message || "Konnte PDF nicht erstellen.",
+            code: json?.error?.code,
+            traceId: (json as any)?.traceId,
+          });
+        } catch {
+          setPdfError({ message: "Konnte PDF nicht erstellen." });
+        }
+        setPdfBusy(false);
         return;
       }
 
-      if (!json.ok) {
-        setDeleteError({
-          message: json.error?.message || "Konnte Lead nicht löschen.",
-          code: json.error?.code,
-          traceId: json.traceId,
-        });
-        setDeleteBusy(false);
-        return;
-      }
+      const blob = await res.blob();
+      const filename =
+        parseFilenameFromContentDisposition(res.headers.get("content-disposition")) ||
+        `LeadRadar-Lead-${detail.id}.pdf`;
 
-      closeDrawer();
-      await loadList();
-      setDeleteBusy(false);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => window.URL.revokeObjectURL(url), 4000);
+
+      setPdfBusy(false);
     } catch {
-      setDeleteError({ message: "Konnte Lead nicht löschen. Bitte erneut versuchen." });
-      setDeleteBusy(false);
+      setPdfError({ message: "Konnte PDF nicht erstellen. Bitte erneut versuchen." });
+      setPdfBusy(false);
     }
-  }, [detail, deleteBusy, closeDrawer, loadList]);
+  }, [
+    detail,
+    pdfBusy,
+    draftFirst,
+    draftLast,
+    draftCompany,
+    draftEmail,
+    draftPhone,
+    draftMobile,
+    draftNotes,
+    emailIncludeValues,
+  ]);
 
   return (
     <>
-      {/* ✅ First element is a Card (no outer padding wrapper) */}
+      {/* ✅ Screen starts with ONE canonical Card */}
       <section className="rounded-2xl border border-slate-200 bg-white">
-        {/* Top / Active Event strip */}
-        <div className="p-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <div className="text-sm font-semibold text-slate-900">Aktives Event</div>
-              <div className="mt-1 text-sm text-slate-600">
-                {activeEvent?.name ? (
-                  <>
-                    <span className="font-medium text-slate-900">{activeEvent.name}</span>{" "}
-                    <span className="text-slate-500">(optional als Filter)</span>
-                  </>
-                ) : (
-                  <span className="text-slate-500">Kein aktives Event definiert.</span>
-                )}
-              </div>
-              <div className="mt-2 text-xs text-slate-500">
-                Standard: Alle Leads werden angezeigt (auch aus archivierten Events). Optional kannst du „Nur aktives Event“ wählen.
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Link
-                href="/admin/events"
-                className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
-              >
-                Events öffnen
-              </Link>
-              <IconButton title="Aktualisieren" onClick={() => void refreshAll()} />
-            </div>
-          </div>
-        </div>
-
-        <div className="h-px w-full bg-slate-200" />
-
-        {/* Toolbar */}
+        {/* Toolbar area */}
         <div className="p-5">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
@@ -1054,19 +1068,39 @@ export default function ScreenClient() {
 
               {isDirtyFilters ? <Button label="Reset" kind="ghost" onClick={resetFilters} /> : null}
 
-              <IconButton title="Neu laden" onClick={() => void loadList()} />
+              <IconButton title="Neu laden" onClick={() => void refreshAll()} />
             </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+            <div>
+              Aktives Event:{" "}
+              {activeEvent?.name ? (
+                <span className="font-medium text-slate-700">{activeEvent.name}</span>
+              ) : (
+                <span className="text-slate-500">Kein aktives Event</span>
+              )}
+              {eventScope === "ACTIVE" && !activeEvent ? (
+                <span className="ml-2 rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-900">
+                  Filter = aktiv, aber kein aktives Event
+                </span>
+              ) : null}
+            </div>
+
+            <Link href="/admin/events" className="text-slate-700 underline-offset-4 hover:underline">
+              Events öffnen
+            </Link>
           </div>
         </div>
 
         <div className="h-px w-full bg-slate-200" />
 
-        {/* Table (no extra outer border) */}
+        {/* Table */}
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
               <tr className="border-b border-slate-200 bg-white">
-                <th className="w-10 pl-5 pr-3 py-3">
+                <th className="w-10 px-4 py-3">
                   <input
                     type="checkbox"
                     aria-label="Alle auswählen"
@@ -1074,25 +1108,27 @@ export default function ScreenClient() {
                     onChange={() => toggleSelectAllOnPage()}
                   />
                 </th>
-                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Kontakt</th>
-                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">E-Mail / Telefon</th>
-                <th className="hidden px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600 md:table-cell">Event</th>
-                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Status</th>
-                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Erfasst am</th>
-                <th className="px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Info</th>
+                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Kontakt</th>
+                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">E-Mail / Telefon</th>
+                <th className="hidden px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600 md:table-cell">
+                  Event
+                </th>
+                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Status</th>
+                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Erfasst am</th>
+                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Info</th>
               </tr>
             </thead>
 
             <tbody>
               {loadingList ? (
                 <tr>
-                  <td colSpan={7} className="px-5 py-6 text-sm text-slate-600">
+                  <td colSpan={7} className="px-4 py-6 text-sm text-slate-600">
                     Lade…
                   </td>
                 </tr>
               ) : listError ? (
                 <tr>
-                  <td colSpan={7} className="px-5 py-6">
+                  <td colSpan={7} className="px-4 py-6">
                     <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
                       <div className="text-sm font-medium text-rose-900">Fehler</div>
                       <div className="mt-1 text-sm text-rose-800">{listError.message}</div>
@@ -1107,7 +1143,7 @@ export default function ScreenClient() {
                 </tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-5 py-8 text-sm text-slate-600">
+                  <td colSpan={7} className="px-4 py-8 text-sm text-slate-600">
                     Keine Leads gefunden.
                   </td>
                 </tr>
@@ -1121,7 +1157,7 @@ export default function ScreenClient() {
                       className="cursor-pointer border-b border-slate-100 hover:bg-slate-50"
                       onClick={() => openDrawer(it.id)}
                     >
-                      <td className="pl-5 pr-3 py-3" onClick={(e) => e.stopPropagation()}>
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
                           aria-label="Lead auswählen"
@@ -1130,7 +1166,7 @@ export default function ScreenClient() {
                         />
                       </td>
 
-                      <td className="px-5 py-3">
+                      <td className="px-4 py-3">
                         <div className="text-sm font-medium text-slate-900">{it.contactName ?? "—"}</div>
                         <div className="text-xs text-slate-600">{it.company ?? "—"}</div>
                         {it.sourceDeviceName ? (
@@ -1138,24 +1174,28 @@ export default function ScreenClient() {
                         ) : null}
                       </td>
 
-                      <td className="px-5 py-3">
+                      <td className="px-4 py-3">
                         <div className="text-sm text-slate-900">{it.email ?? "—"}</div>
                         <div className="text-xs text-slate-600">{it.phone ?? "—"}</div>
                       </td>
 
-                      <td className="hidden px-5 py-3 md:table-cell">
+                      <td className="hidden px-4 py-3 md:table-cell">
                         <div className="text-sm text-slate-900">{it.event?.name ?? "—"}</div>
                       </td>
 
-                      <td className="px-5 py-3">
-                        <span className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(it.reviewStatus)}`}>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(
+                            it.reviewStatus
+                          )}`}
+                        >
                           {statusLabel(it.reviewStatus)}
                         </span>
                       </td>
 
-                      <td className="px-5 py-3 text-sm text-slate-700">{fmtDateTime(it.createdAt)}</td>
+                      <td className="px-4 py-3 text-sm text-slate-700">{fmtDateTime(it.createdAt)}</td>
 
-                      <td className="px-5 py-3">
+                      <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
                           {it.hasCardAttachment ? (
                             <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700">
@@ -1178,17 +1218,14 @@ export default function ScreenClient() {
         </div>
 
         {nextCursor ? (
-          <>
-            <div className="h-px w-full bg-slate-200" />
-            <div className="flex items-center justify-center p-5">
-              <Button
-                label={loadingMore ? "Lade…" : "Mehr laden"}
-                kind="secondary"
-                onClick={() => void loadMore()}
-                disabled={loadingMore}
-              />
-            </div>
-          </>
+          <div className="flex items-center justify-center p-4">
+            <Button
+              label={loadingMore ? "Lade…" : "Mehr laden"}
+              kind="secondary"
+              onClick={() => void loadMore()}
+              disabled={loadingMore}
+            />
+          </div>
         ) : null}
       </section>
 
@@ -1204,7 +1241,9 @@ export default function ScreenClient() {
               <div className="mt-2 text-xs text-rose-700">Support-Code: {errTraceId(drawerErr)}</div>
             ) : null}
             <div className="mt-3">
-              {selectedId ? <Button label="Erneut versuchen" kind="secondary" onClick={() => void loadDetail(selectedId)} /> : null}
+              {selectedId ? (
+                <Button label="Erneut versuchen" kind="secondary" onClick={() => void loadDetail(selectedId)} />
+              ) : null}
             </div>
           </div>
         ) : !detail ? (
@@ -1217,39 +1256,34 @@ export default function ScreenClient() {
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                <LinkButton
-                  label="PDF"
-                  href={`/api/admin/v1/leads/${detail.id}/pdf?disposition=attachment`}
+                <Button
+                  label={pdfBusy ? "PDF…" : "PDF"}
+                  kind="secondary"
+                  onClick={() => void downloadLeadPdf()}
+                  disabled={pdfBusy}
                   title="PDF-Rapport herunterladen"
                 />
-
                 <Button
                   label={detail.reviewStatus === "REVIEWED" ? "Als neu markieren" : "Als bearbeitet markieren"}
                   kind={detail.reviewStatus === "REVIEWED" ? "secondary" : "primary"}
                   onClick={() => void toggleReviewed()}
                 />
-
                 <Button
                   label={saving ? "Speichere…" : "Speichern"}
                   kind="secondary"
                   disabled={!isDirtyDetail || saving}
                   onClick={() => void saveDetail()}
                 />
-
-                <Button
-                  label={deleteBusy ? "Lösche…" : "Löschen"}
-                  kind="danger"
-                  onClick={() => void deleteLead()}
-                  disabled={deleteBusy}
-                />
               </div>
             </div>
 
-            {deleteError ? (
-              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
-                <div className="text-sm font-medium text-rose-900">Löschen fehlgeschlagen</div>
-                <div className="mt-1 text-sm text-rose-800">{deleteError.message}</div>
-                {deleteError.traceId ? <div className="mt-2 text-xs text-rose-700">Support-Code: {deleteError.traceId}</div> : null}
+            {pdfError ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3">
+                <div className="text-sm font-medium text-rose-900">PDF Fehler</div>
+                <div className="mt-1 text-sm text-rose-800">{pdfError.message}</div>
+                {pdfError.traceId ? (
+                  <div className="mt-2 text-xs text-rose-700">Support-Code: {pdfError.traceId}</div>
+                ) : null}
               </div>
             ) : null}
 
@@ -1268,7 +1302,8 @@ export default function ScreenClient() {
               </div>
 
               <div className="mt-3 text-xs text-slate-500">
-                Kontakt-Quelle: <span className="font-medium text-slate-700">{detail.contact?.source ?? "—"}</span> · aktualisiert:{" "}
+                Kontakt-Quelle: <span className="font-medium text-slate-700">{detail.contact?.source ?? "—"}</span> ·
+                aktualisiert:{" "}
                 <span className="font-medium text-slate-700">{fmtDateTime(detail.contact?.updatedAt ?? null)}</span>
               </div>
             </Card>
@@ -1318,7 +1353,9 @@ export default function ScreenClient() {
                   <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3">
                     <div className="text-sm font-medium text-rose-900">E-Mail Fehler</div>
                     <div className="mt-1 text-sm text-rose-800">{emailError.message}</div>
-                    {emailError.traceId ? <div className="mt-2 text-xs text-rose-700">Support-Code: {emailError.traceId}</div> : null}
+                    {emailError.traceId ? (
+                      <div className="mt-2 text-xs text-rose-700">Support-Code: {emailError.traceId}</div>
+                    ) : null}
                   </div>
                 ) : null}
 
@@ -1350,7 +1387,11 @@ export default function ScreenClient() {
                 </div>
                 <div>
                   <span className="text-slate-500">Status:</span>{" "}
-                  <span className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(detail.reviewStatus)}`}>
+                  <span
+                    className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(
+                      detail.reviewStatus
+                    )}`}
+                  >
                     {statusLabel(detail.reviewStatus)}
                   </span>
                 </div>
@@ -1389,7 +1430,12 @@ export default function ScreenClient() {
                       Download
                     </a>
 
-                    <Button label={ocrLoading ? "OCR lade…" : "OCR laden"} kind="secondary" onClick={() => void loadOcr()} disabled={ocrLoading} />
+                    <Button
+                      label={ocrLoading ? "OCR lade…" : "OCR laden"}
+                      kind="secondary"
+                      onClick={() => void loadOcr()}
+                      disabled={ocrLoading}
+                    />
                     <Button
                       label={ocrApplying ? "Wende an…" : "OCR anwenden"}
                       kind="secondary"
@@ -1403,7 +1449,9 @@ export default function ScreenClient() {
                     <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3">
                       <div className="text-sm font-medium text-rose-900">OCR Fehler</div>
                       <div className="mt-1 text-sm text-rose-800">{ocrError.message}</div>
-                      {ocrError.traceId ? <div className="mt-2 text-xs text-rose-700">Support-Code: {ocrError.traceId}</div> : null}
+                      {ocrError.traceId ? (
+                        <div className="mt-2 text-xs text-rose-700">Support-Code: {ocrError.traceId}</div>
+                      ) : null}
                     </div>
                   ) : null}
 
@@ -1416,7 +1464,8 @@ export default function ScreenClient() {
                         {typeof ocrData.ocr.confidence === "number" ? (
                           <>
                             {" "}
-                            · Confidence: <span className="font-medium">{Math.round(ocrData.ocr.confidence * 100)}%</span>
+                            · Confidence:{" "}
+                            <span className="font-medium">{Math.round(ocrData.ocr.confidence * 100)}%</span>
                           </>
                         ) : null}
                       </div>
@@ -1432,7 +1481,9 @@ export default function ScreenClient() {
               <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
                 <div className="text-sm font-medium text-rose-900">Fehler</div>
                 <div className="mt-1 text-sm text-rose-800">{errMessage(drawerErr)}</div>
-                {errTraceId(drawerErr) ? <div className="mt-2 text-xs text-rose-700">Support-Code: {errTraceId(drawerErr)}</div> : null}
+                {errTraceId(drawerErr) ? (
+                  <div className="mt-2 text-xs text-rose-700">Support-Code: {errTraceId(drawerErr)}</div>
+                ) : null}
               </div>
             ) : null}
           </div>

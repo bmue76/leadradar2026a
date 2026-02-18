@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import LeadsClient from "./LeadsClient";
+import ScreenClient from "./ScreenClient";
 
 function LoadingCard() {
   return (
@@ -9,18 +9,18 @@ function LoadingCard() {
   );
 }
 
-export default function AdminLeadsPage() {
+export default function Page() {
   return (
-    <div className="p-6">
+    <div className="mx-auto w-full max-w-5xl px-6 py-6">
       <header className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">Leads</h1>
         <p className="mt-1 text-sm text-slate-600">
-          Alle Leads zentral verwalten, exportieren, per E-Mail weiterleiten oder als PDF-Rapport teilen.
+          Alle erfassten Leads. Filtern, exportieren oder pro Lead per E-Mail weiterleiten / als PDF rapportieren.
         </p>
       </header>
 
       <Suspense fallback={<LoadingCard />}>
-        <LeadsClient />
+        <ScreenClient />
       </Suspense>
     </div>
   );
