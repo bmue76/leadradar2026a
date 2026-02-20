@@ -5,9 +5,9 @@ Datum: 2026-02-20
 ## Commit(s)
 - 3e544e0 — fix(tp7.5.1): remove explicit any in middleware/proxy
 - 2d9ef9c — fix(tp7.5.1): prisma helper without datasourceUrl (typed never)
-- <NEW_COMMIT_HASH> — fix(tp7.5.1): leads email/pdf ui polish + admin leads layout wrapper
+- c862f89 — fix(tp7.5.1): leads email/pdf ui polish + admin leads layout wrapper
 
-> Hinweis: <NEW_COMMIT_HASH> nach dem finalen Commit ersetzen.
+> Hinweis: c862f89 nach dem finalen Commit ersetzen.
 
 ---
 
