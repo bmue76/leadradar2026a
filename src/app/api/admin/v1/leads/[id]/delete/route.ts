@@ -1,75 +1,53 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
-import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function jsonOk<T>(data: T, status = 200) {
-  return NextResponse.json({ ok: true, data, traceId: crypto.randomUUID() }, { status });
+function newTraceId(): string {
+  return crypto.randomUUID();
 }
 
-function jsonError(status: number, code: string, message: string, details?: unknown) {
-  return NextResponse.json(
-    { ok: false, error: { code, message, ...(details ? { details } : {}) }, traceId: crypto.randomUUID() },
+function jsonOk(data: unknown, traceId: string) {
+  const res = NextResponse.json({ ok: true, data, traceId }, { status: 200 });
+  res.headers.set("x-trace-id", traceId);
+  return res;
+}
+
+function jsonError(status: number, code: string, message: string, traceId: string) {
+  const res = NextResponse.json(
+    { ok: false, error: { code, message, details: { traceId } }, traceId },
     { status }
   );
+  res.headers.set("x-trace-id", traceId);
+  return res;
 }
 
-const BodySchema = z
-  .object({
-    reason: z.string().trim().min(1).max(200).optional(),
-  })
-  .optional();
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const traceId = newTraceId();
+  const { id } = await ctx.params;
 
-async function handle(req: NextRequest, ctx: { params: { id: string } }) {
-  const userId = req.headers.get("x-user-id") || req.headers.get("x-admin-user-id");
-  const tenantId = req.headers.get("x-tenant-id");
-  if (!userId) return jsonError(401, "UNAUTHORIZED", "Missing x-user-id.");
-  if (!tenantId) return jsonError(401, "UNAUTHORIZED", "Missing x-tenant-id.");
+  const leadId = (id ?? "").trim();
+  if (!leadId) return jsonError(400, "BAD_REQUEST", "Missing id param.", traceId);
 
-  const leadId = ctx.params.id;
-  if (!leadId) return jsonError(400, "BAD_REQUEST", "Missing lead id.");
+  const userId = (req.headers.get("x-user-id") || req.headers.get("x-admin-user-id") || "").trim();
+  if (!userId) return jsonError(401, "UNAUTHORIZED", "Missing x-user-id.", traceId);
 
-  // Optional body (reason)
-  let reason: string | undefined;
-  const raw: unknown = await req.json().catch(() => undefined);
-  if (raw !== undefined) {
-    const parsed = BodySchema.safeParse(raw);
-    if (!parsed.success) {
-      return jsonError(400, "BAD_REQUEST", "Invalid JSON body.", parsed.error.flatten());
-    }
-    reason = parsed.data?.reason;
-  }
+  const tenantId = (req.headers.get("x-tenant-id") || "").trim();
+  if (!tenantId) return jsonError(401, "UNAUTHORIZED", "Missing x-tenant-id.", traceId);
 
-  const lead = await prisma.lead.findFirst({
-    where: { id: leadId, tenantId },
-    select: { id: true, isDeleted: true },
+  // IMPORTANT: dynamic import => no Prisma module evaluation during build collection
+  const { getPrisma } = await import("@/server/db/prisma");
+  const prisma = getPrisma();
+
+  // Leak-safe: tenant scoped updateMany (if 0 -> 404)
+  const result = await prisma.lead.updateMany({
+    where: { id: leadId, tenantId, isDeleted: false },
+    data: { isDeleted: true },
   });
 
-  if (!lead) return jsonError(404, "NOT_FOUND", "Lead not found.");
-
-  if (lead.isDeleted) {
-    return jsonOk({ id: lead.id, deleted: true, alreadyDeleted: true });
+  if (result.count === 0) {
+    return jsonError(404, "NOT_FOUND", "Not found.", traceId);
   }
 
-  await prisma.lead.update({
-    where: { id: lead.id },
-    data: {
-      isDeleted: true,
-      deletedAt: new Date(),
-      deletedReason: reason ?? "ADMIN_DELETE",
-    },
-  });
-
-  return jsonOk({ id: lead.id, deleted: true });
-}
-
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
-  return handle(req, ctx);
-}
-
-// Bonus: erlaubt auch DELETE (falls du später REST-cleaner werden willst)
-export async function DELETE(req: NextRequest, ctx: { params: { id: string } }) {
-  return handle(req, ctx);
+  return jsonOk({ id: leadId }, traceId);
 }
