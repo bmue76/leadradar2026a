@@ -1,55 +1,77 @@
 # Teilprojekt 7.5.1 – Middleware matcher / Header-Injection Fix (POST)
 
-Status: DONE (nach Merge/Push)  
-Datum: 2026-02-19
+**Status:** DONE ✅  
+**Datum:** 2026-02-20  
+**Commit(s):** COMMIT_HASH
 
 ## Ziel
-Admin/UI + Admin/API Routen sollen unabhängig von HTTP-Methoden stabil Tenant/User-Kontext erhalten.
-Insbesondere POST (z. B. /api/admin/v1/leads/:id/email) darf nicht mehr wegen fehlender Headers mit 401 abbrechen.
+Middleware muss für Admin UI + Admin API stabil laufen (auch POST) und Tenant/User Header zuverlässig setzen:
+- `x-tenant-slug`
+- `x-tenant-id`
+- `x-user-id` / `x-admin-user-id`
 
 ## Ausgangslage / Bug
-- GET funktionierte (z. B. GET /api/admin/v1/leads/1 => 200)
-- POST brach mit 401 ab, u. a.:
-  - Missing x-user-id
-  - Missing x-tenant-id
-  - Tenant context required (x-tenant-slug header)
+- `GET /api/admin/v1/leads/1` funktionierte (200).
+- `POST /api/admin/v1/leads/1/email` brach mit 401:
+  - `Tenant context required (x-tenant-slug header).`
+- Debug-Route unter `/_debug/...` war 404 (Next private folders).
 
-Ursache: Middleware war zwar vorhanden, aber
-- matcher war unnötig breit (/api/:path*) und dadurch unklar “was wirklich relevant ist”
-- Header-Injection setzte nicht alle benötigten Header (x-tenant-slug, x-admin-user-id fehlten)
-- Token-Claim-Keys waren zu eng (z. B. nur uid/sub), wodurch trotz gültigem Token keine Header gesetzt wurden
+## Root Cause
+1) Middleware injizierte zwar `x-user-id` / `x-tenant-id`, aber **kein `x-tenant-slug`**.
+2) Zusätzlich war für schnelle Tests ein Debug-Endpunkt nötig; Ordner mit führendem `_` werden von Next als “private folder” behandelt und nicht geroutet.
 
 ## Umsetzung (Highlights)
-- Middleware matcher präzisiert auf:
-  - /admin/:path*
-  - /api/admin/:path*
-- Header-Injection gehärtet:
-  - Setzt/passt durch: x-user-id, x-admin-user-id (Alias), x-tenant-id, x-tenant-slug, x-user-role
-  - Claim-Keys liberalisiert (uid/sub/userId/id, tenantId/tid, tenantSlug/tslug/slug)
-  - Method-agnostic: greift für GET/POST/PATCH/DELETE gleich
-- DEV Debug Endpoint (optional):
-  - /api/admin/v1/_debug/ctx (GET+POST)
-  - PROD: 404
-  - DEV: zeigt, welche Headers im Route Handler ankommen
+- Matcher bleibt **breit** (`/api/:path*`), aber die Logik greift nur auf:
+  - `/admin/*` (UI Guard)
+  - `/api/admin/*` (Header Injection)
+- Header-Hardening:
+  - passthrough/override vorhandener Header
+  - Token Claims → `x-user-id`, `x-tenant-id`, `x-user-role`, optional `x-tenant-slug`
+  - `x-tenant-slug` Resolve Chain:
+    1) Request header (`x-tenant-slug`)
+    2) Token claim (`tenantSlug/tslug`)
+    3) Cookie-Cache `lr_admin_tenant_ctx` (`<tenantId>|<tenantSlug>`)
+    4) Session Resolve via `/api/admin/v1/tenants/current` (Recursion-Guard `x-mw-internal`)
+    5) DEV fallback via ENV / localhost default
+- DEV Debug Response Headers (für Network/curl):
+  - `x-debug-mw-hit`, `x-debug-mw-tenantSlugSource`, `x-debug-mw-userIdSource`, etc.
+- DEV Debug Endpoint:
+  - `/api/admin/v1/debug/ctx` (PROD: 404)
 
-## Tests / Proof (reproduzierbar)
-1) Browser (eingeloggt im Admin):
-   - DevTools Console:
-     - await fetch("/api/admin/v1/_debug/ctx", { method: "POST" }).then(r => r.json())
-   - Erwartung: data.headers.x-user-id / x-tenant-id / (falls vorhanden) x-tenant-slug != null
+## Dateien/Änderungen
+- `middleware.ts`
+- `src/app/api/admin/v1/debug/ctx/route.ts`
+- `docs/teilprojekt-7.5.1-middleware-matcher-header-injection-fix.md`
 
-2) UI Smoke:
-   - Admin UI → Lead Drawer → “E-Mail senden”
-   - Erwartung: kein 401 mehr
+## Akzeptanzkriterien – Check
+- [x] Middleware läuft auf Admin-API **unabhängig von Method** (POST inklusive)
+- [x] `x-tenant-slug` wird zuverlässig gesetzt
+- [x] DEV Debug Endpoint vorhanden, PROD: 404
+- [x] Smoke Test reproduzierbar dokumentiert
 
-3) Regression:
-   - GET /api/admin/v1/leads/1/pdf weiterhin OK
+## Tests/Proof (reproduzierbar)
+### 1) Debug (POST)
+```bash
+curl -i -X POST "http://localhost:3000/api/admin/v1/debug/ctx"
 
-## Geänderte / neue Dateien
-- middleware.ts (matcher + injection hardened)
-- src/app/api/admin/v1/_debug/ctx/route.ts (DEV-only)
-- docs/teilprojekt-7.5.1-middleware-matcher-header-injection-fix.md
+Erwartung:
 
-## Offene Punkte / Risiken
-- Falls tenantSlug im Token nicht vorhanden ist, bleibt x-tenant-slug ggf. leer (Debug-Endpoint zeigt das sofort).
-  -> In dem Fall: Token-Erzeugung (Login/Register) um tenantSlug ergänzen ODER Admin-Endpoints tenantId-first machen.
+x-debug-mw-hit: 1
+
+JSON data.headers.x-tenant-slug gesetzt
+
+2) Regression (PDF)
+
+GET /api/admin/v1/leads/1/pdf?... weiterhin 200
+
+3) Feature Fix
+
+Admin UI → Lead Drawer → “E-Mail senden” → POST /api/admin/v1/leads/1/email = 200
+
+Offene Punkte / Risiken
+
+P1: In PROD sollte x-tenant-slug primär aus Session/Tenant-Resolve kommen (DEV fallbacks sind nur DEV/localhost).
+
+Next Step
+
+TP 7.5.2: (falls nötig) TenantSlug in Token Claims persistieren oder AdminFetch konsequent x-tenant-slug mitsenden (Defense in Depth).
