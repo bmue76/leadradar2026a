@@ -7,12 +7,13 @@ type Status = "NEW" | "REVIEWED";
 type StatsOverview = {
   range: "7d" | "14d" | "30d" | "90d";
   timezone: string;
+  events: Array<{ id: string; name: string; status: string }>;
   activeEvent: { id: string; name: string } | null;
+  selectedEventId: string | null;
   kpis: {
     leadsTotal: number;
     leadsToday: number;
     leadsWeek: number;
-    leadsActiveEvent: number | null;
     reviewedCount: number;
     newCount: number;
     ocrCount?: number;
@@ -21,11 +22,14 @@ type StatsOverview = {
   series: {
     leadsByDay: Array<{ day: string; count: number }>;
     leadsByHourToday: Array<{ hour: number; count: number }>;
+    leadsByHourRange: Array<{ hour: number; count: number; avgPerDay: number }>;
     leadsByStatus: Array<{ status: Status; count: number }>;
   };
   tops: {
-    events: Array<{ id: string; name: string; count: number }>;
     forms: Array<{ id: string; name: string; count: number }>;
+    interests: Array<{ label: string; count: number }>;
+    devicesToday: Array<{ label: string; count: number }>;
+    devicesTotal: Array<{ label: string; count: number }>;
   };
 };
 
@@ -41,87 +45,13 @@ function formatPct(n: number): string {
   return new Intl.NumberFormat("de-CH", { style: "percent", maximumFractionDigits: 0 }).format(n);
 }
 
-function rangeDays(range: StatsOverview["range"]): number {
-  return Number(range.replace("d", "")) || 30;
-}
-
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
 }
 
-function Sparkline(props: { values: number[]; className?: string }) {
-  const w = 240;
-  const h = 44;
-  const pad = 4;
-
-  const max = Math.max(1, ...props.values);
-  const min = Math.min(0, ...props.values);
-  const span = Math.max(1, max - min);
-
-  const pts = props.values.map((v, i) => {
-    const x = pad + (i / Math.max(1, props.values.length - 1)) * (w - pad * 2);
-    const y = pad + (1 - (v - min) / span) * (h - pad * 2);
-    return { x, y };
-  });
-
-  const d = pts
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`)
-    .join(" ");
-
-  // Soft area fill under line (still Apple-clean)
-  const area = `${d} L ${(w - pad).toFixed(2)} ${(h - pad).toFixed(2)} L ${pad.toFixed(2)} ${(h - pad).toFixed(2)} Z`;
-
-  return (
-    <svg
-      width={w}
-      height={h}
-      viewBox={`0 0 ${w} ${h}`}
-      className={props.className ?? ""}
-      aria-hidden="true"
-    >
-      <path d={area} className="fill-primary/10" />
-      <path d={d} className="stroke-primary" strokeWidth="2" fill="none" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function HourHeat(props: { hours: Array<{ hour: number; count: number }>; tz: string }) {
-  const max = Math.max(1, ...props.hours.map((h) => h.count));
-  return (
-    <div className="mt-3">
-      <div className="flex items-end gap-1">
-        {props.hours.map((h) => {
-          const height = Math.round((h.count / max) * 42);
-          const on = h.count > 0;
-          return (
-            <div key={h.hour} className="flex flex-col items-center gap-1">
-              <div
-                className={[
-                  "w-[7px] rounded-full",
-                  on ? "bg-primary" : "bg-muted",
-                ].join(" ")}
-                style={{ height: `${clamp(height, 3, 42)}px` }}
-                title={`${String(h.hour).padStart(2, "0")}:00 — ${h.count}`}
-              />
-            </div>
-          );
-        })}
-      </div>
-      <div className="mt-2 flex justify-between text-[11px] text-muted-foreground">
-        <span>00</span>
-        <span>06</span>
-        <span>12</span>
-        <span>18</span>
-        <span>24</span>
-      </div>
-      <div className="mt-2 text-[11px] text-muted-foreground">Traffic heute (TZ {props.tz})</div>
-    </div>
-  );
-}
-
 function Metric(props: { label: string; value: string; hint?: string; accent?: boolean }) {
   return (
-    <div className="py-2">
+    <div className="py-1">
       <div className="text-[11px] font-medium tracking-wide text-muted-foreground">{props.label}</div>
       <div className={["mt-1 text-2xl font-semibold tracking-tight tabular-nums", props.accent ? "text-primary" : ""].join(" ")}>
         {props.value}
@@ -158,37 +88,97 @@ function Segmented<T extends string>(props: {
   );
 }
 
-function MinimalList(props: { title: string; rows: Array<{ name: string; count: number }>; empty: string }) {
+function TinyBarList(props: { rows: Array<{ label: string; count: number }>; empty: string }) {
+  if (!props.rows.length) {
+    return <div className="mt-3 text-sm text-muted-foreground">{props.empty}</div>;
+  }
+  const max = Math.max(1, ...props.rows.map((r) => r.count));
   return (
-    <div className="mt-8">
-      <div className="flex items-baseline justify-between">
-        <h3 className="text-sm font-semibold">{props.title}</h3>
-        <div className="text-[11px] text-muted-foreground">Top 5</div>
-      </div>
-      {!props.rows.length ? (
-        <div className="mt-3 text-sm text-muted-foreground">{props.empty}</div>
-      ) : (
-        <div className="mt-3 space-y-2">
-          {props.rows.map((r) => (
-            <div
-              key={r.name}
-              className="flex items-center justify-between rounded-lg px-2 py-2 hover:bg-muted/30"
-            >
-              <div className="min-w-0">
-                <div className="truncate text-sm">{r.name}</div>
+    <div className="mt-3 space-y-2">
+      {props.rows.map((r) => {
+        const w = Math.round((r.count / max) * 100);
+        return (
+          <div key={r.label} className="group flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-muted/30">
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm">{r.label}</div>
+              <div className="mt-1 h-1.5 w-full rounded-full bg-muted/40">
+                <div className="h-1.5 rounded-full bg-primary" style={{ width: `${clamp(w, 2, 100)}%` }} />
               </div>
-              <div className="tabular-nums text-sm text-muted-foreground">{formatInt(r.count)}</div>
             </div>
-          ))}
-        </div>
-      )}
+            <div className="tabular-nums text-sm text-muted-foreground">{formatInt(r.count)}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TrafficChart(props: {
+  today: Array<{ hour: number; count: number }>;
+  rangeAvg: Array<{ hour: number; avgPerDay: number; count: number }>;
+  tz: string;
+}) {
+  // Apple-clean: 24 columns, background shows range avg/day, foreground shows today (accent).
+  const maxBg = Math.max(1, ...props.rangeAvg.map((h) => h.avgPerDay));
+  const maxFg = Math.max(1, ...props.today.map((h) => h.count));
+  const max = Math.max(maxBg, maxFg);
+
+  return (
+    <div className="mt-4">
+      <div className="flex items-end gap-1">
+        {props.rangeAvg.map((h) => {
+          const t = props.today[h.hour]?.count ?? 0;
+          const bgH = Math.round((h.avgPerDay / max) * 44);
+          const fgH = Math.round((t / max) * 44);
+
+          return (
+            <div key={h.hour} className="flex flex-col items-center gap-1">
+              <div
+                className="w-[8px] rounded-full bg-muted/50"
+                style={{ height: `${clamp(bgH, 3, 44)}px` }}
+                title={`${String(h.hour).padStart(2, "0")}:00 · Ø/Tag ${h.avgPerDay.toFixed(1)} · Range total ${h.count}`}
+              >
+                <div
+                  className="w-[8px] rounded-full bg-primary"
+                  style={{ height: `${clamp(fgH, 0, 44)}px`, marginTop: `${clamp(bgH - fgH, 0, 44)}px` }}
+                  title={`${String(h.hour).padStart(2, "0")}:00 · Heute ${t} · Ø/Tag ${h.avgPerDay.toFixed(1)}`}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-2 flex justify-between text-[11px] text-muted-foreground">
+        <span>00</span>
+        <span>06</span>
+        <span>12</span>
+        <span>18</span>
+        <span>24</span>
+      </div>
+
+      <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
+        <div>Leads pro Stunde (Heute + Ø/Tag im Zeitraum)</div>
+        <div>TZ {props.tz}</div>
+      </div>
+
+      <div className="mt-2 flex items-center gap-3 text-[11px] text-muted-foreground">
+        <span className="inline-flex items-center gap-2">
+          <span className="h-2 w-2 rounded-full bg-primary" />
+          Heute
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span className="h-2 w-2 rounded-full bg-muted/60" />
+          Ø/Tag (Range)
+        </span>
+      </div>
     </div>
   );
 }
 
 export default function StatsClient() {
   const [range, setRange] = useState<StatsOverview["range"]>("30d");
-  const [scope, setScope] = useState<"ACTIVE" | "ALL">("ACTIVE");
+  const [eventSel, setEventSel] = useState<string>("ACTIVE"); // "ACTIVE" | "<eventId>"
   const [refreshKey, setRefreshKey] = useState<number>(0);
 
   const [data, setData] = useState<StatsOverview | null>(null);
@@ -199,7 +189,7 @@ export default function StatsClient() {
     let cancelled = false;
 
     const url = `/api/admin/v1/stats/overview?range=${encodeURIComponent(range)}&event=${encodeURIComponent(
-      scope
+      eventSel
     )}&tz=${encodeURIComponent("Europe/Zurich")}`;
 
     (async () => {
@@ -229,33 +219,36 @@ export default function StatsClient() {
     return () => {
       cancelled = true;
     };
-  }, [range, scope, refreshKey]);
+  }, [range, eventSel, refreshKey]);
 
   const derived = useMemo(() => {
     if (!data) return null;
-    const days = rangeDays(data.range);
-    const total = data.kpis.leadsTotal;
-    const reviewed = data.kpis.reviewedCount;
-    const reviewRate = total > 0 ? reviewed / total : 0;
 
-    const series = data.series.leadsByDay.map((x) => x.count);
-    const hourSeries = data.series.leadsByHourToday;
+    const hourToday = data.series.leadsByHourToday;
+    const hourRange = data.series.leadsByHourRange;
 
-    const peak = hourSeries.reduce<{ hour: number | null; count: number }>(
+    const peak = hourToday.reduce<{ hour: number | null; count: number }>(
       (acc, h) => (h.count > acc.count ? { hour: h.hour, count: h.count } : acc),
       { hour: null, count: 0 }
     );
 
-    const avgPerDay = total / Math.max(1, days);
+    const forms = data.tops.forms.map((f) => ({ label: f.name, count: f.count }));
+    const interests = data.tops.interests.map((x) => ({ label: x.label, count: x.count }));
+    const devToday = data.tops.devicesToday.map((x) => ({ label: x.label, count: x.count }));
+    const devTotal = data.tops.devicesTotal.map((x) => ({ label: x.label, count: x.count }));
+
+    const reviewRate = data.kpis.leadsTotal > 0 ? data.kpis.reviewedCount / data.kpis.leadsTotal : 0;
 
     return {
-      days,
-      reviewRate,
-      avgPerDay,
       peakHour: peak.hour,
       peakCount: peak.count,
-      spark: series,
-      hours: hourSeries,
+      reviewRate,
+      forms,
+      interests,
+      devToday,
+      devTotal,
+      hourToday,
+      hourRange,
     };
   }, [data]);
 
@@ -307,36 +300,40 @@ export default function StatsClient() {
 
   return (
     <div className="mt-8">
-      {/* Controls */}
+      {/* Controls: Event dropdown + Range pills + Refresh */}
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="text-[11px] text-muted-foreground">
-          {scope === "ACTIVE" ? (
-            data.activeEvent ? (
-              <>
-                Aktives Event: <span className="font-medium text-foreground">{data.activeEvent.name}</span>
-              </>
-            ) : (
-              <>Kein aktives Event</>
-            )
+          {data.activeEvent ? (
+            <>
+              Event: <span className="font-medium text-foreground">{data.activeEvent.name}</span>
+            </>
           ) : (
-            <>Alle Events</>
+            <>Event: <span className="font-medium text-foreground">—</span></>
           )}
           <span className="mx-2">·</span>
           TZ <span className="font-medium text-foreground">{data.timezone}</span>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Segmented
-            value={scope}
-            options={[
-              { value: "ACTIVE", label: "Aktives Event" },
-              { value: "ALL", label: "Alle" },
-            ]}
-            onChange={(v) => {
-              setLoading(true);
-              setScope(v);
-            }}
-          />
+          <div className="rounded-full bg-muted/40 px-3 py-2">
+            <select
+              value={eventSel}
+              onChange={(e) => {
+                setLoading(true);
+                setEventSel(e.target.value);
+              }}
+              className="bg-transparent text-sm outline-none"
+              aria-label="Event auswählen"
+            >
+              <option value="ACTIVE">Aktives Event</option>
+              {data.events.map((ev) => (
+                <option key={ev.id} value={ev.id}>
+                  {ev.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <Segmented
             value={range}
             options={[
@@ -350,11 +347,12 @@ export default function StatsClient() {
               setRange(v);
             }}
           />
+
           <button
             type="button"
             onClick={() => {
               setLoading(true);
-              setRefreshKey((k) => k + 1);
+              setRefreshKey((x) => x + 1);
             }}
             className="rounded-full px-3 py-2 text-sm text-foreground hover:bg-muted/40"
           >
@@ -363,32 +361,24 @@ export default function StatsClient() {
         </div>
       </div>
 
-      {/* Hero: Total + Spark + Today Heat */}
-      <div className="mt-8 grid gap-10 md:grid-cols-[1.2fr_0.8fr]">
+      {/* Hero KPI row */}
+      <div className="mt-10 grid gap-10 md:grid-cols-[1.2fr_0.8fr]">
         <div>
           <div className="text-[11px] font-medium tracking-wide text-muted-foreground">
-            Leads (Zeitraum {data.range})
+            Total (Zeitraum {data.range})
           </div>
           <div className="mt-2 flex items-end gap-3">
             <div className="text-5xl font-semibold tracking-tight tabular-nums">{formatInt(k.leadsTotal)}</div>
             <div className="pb-1 text-sm text-muted-foreground">
-              Ø {formatInt(Math.round(derived.avgPerDay))}/Tag
+              Review <span className="text-primary font-medium">{formatPct(derived.reviewRate)}</span>
             </div>
           </div>
 
-          <div className="mt-4">
-            <Sparkline values={derived.spark} className="max-w-full" />
-          </div>
-
-          {/* KPI strip (typographic) */}
-          <div className="mt-6 grid grid-cols-2 gap-x-10 gap-y-6 md:grid-cols-4">
-            <Metric label="Heute" value={formatInt(k.leadsToday)} accent />
+          {/* KPI strip */}
+          <div className="mt-8 grid grid-cols-2 gap-x-10 gap-y-6 md:grid-cols-4">
+            <Metric label="Leads heute" value={formatInt(k.leadsToday)} accent />
             <Metric label="Diese Woche" value={formatInt(k.leadsWeek)} />
-            <Metric
-              label="Review Rate"
-              value={formatPct(derived.reviewRate)}
-              hint={`${formatInt(k.reviewedCount)} reviewed · ${formatInt(k.newCount)} offen`}
-            />
+            <Metric label="Top Formulare" value={formatInt(derived.forms.reduce((a, x) => a + x.count, 0))} hint="Top 5 im Zeitraum" />
             <Metric
               label="OCR"
               value={typeof k.ocrRate === "number" ? formatPct(k.ocrRate) : "—"}
@@ -396,42 +386,45 @@ export default function StatsClient() {
             />
           </div>
 
-          {/* Insights (useful, not decorative) */}
-          <div className="mt-8">
-            <div className="text-sm font-semibold">Insights</div>
-            <div className="mt-3 grid gap-2 md:grid-cols-3">
-              <div className="rounded-lg bg-muted/30 px-3 py-2 text-sm">
-                Peak Hour{" "}
-                <span className="font-medium text-primary">
-                  {derived.peakHour === null ? "—" : `${String(derived.peakHour).padStart(2, "0")}:00`}
-                </span>
-                <span className="text-muted-foreground"> · {formatInt(derived.peakCount)} Leads</span>
-              </div>
-              <div className="rounded-lg bg-muted/30 px-3 py-2 text-sm">
-                Offene Leads{" "}
-                <span className="font-medium text-primary">{formatInt(k.newCount)}</span>
-                <span className="text-muted-foreground"> · als Nächstes reviewen</span>
-              </div>
-              <div className="rounded-lg bg-muted/30 px-3 py-2 text-sm">
-                Event Scope{" "}
-                <span className="font-medium text-primary">{scope}</span>
-                <span className="text-muted-foreground">
-                  {k.leadsActiveEvent === null ? " · —" : ` · ${formatInt(k.leadsActiveEvent)}`
-                  }
-                </span>
-              </div>
+          {/* Traffic chart (must-have) */}
+          <div className="mt-10">
+            <div className="text-sm font-semibold">Traffic</div>
+            <TrafficChart today={derived.hourToday} rangeAvg={derived.hourRange} tz={data.timezone} />
+            <div className="mt-3 text-[11px] text-muted-foreground">
+              Peak:{" "}
+              <span className="font-medium text-primary">
+                {derived.peakHour === null ? "—" : `${String(derived.peakHour).padStart(2, "0")}:00`}
+              </span>{" "}
+              · {formatInt(derived.peakCount)} Leads
             </div>
           </div>
         </div>
 
+        {/* Right column: rankings */}
         <div>
-          <div className="text-[11px] font-medium tracking-wide text-muted-foreground">Traffic</div>
-          <div className="mt-2 text-2xl font-semibold tracking-tight">Heute</div>
-          <HourHeat hours={derived.hours} tz={data.timezone} />
+          <div className="text-sm font-semibold">Leads pro Formular</div>
+          <TinyBarList rows={derived.forms} empty="Keine Leads im Zeitraum." />
 
+          <div className="mt-10 text-sm font-semibold">Top Interessen (Top-Antworten)</div>
+          <TinyBarList rows={derived.interests} empty="Keine passenden Antworten gefunden (Interesse/Thema/Topic…)." />
+
+          <div className="mt-10 grid gap-8 md:grid-cols-2">
+            <div>
+              <div className="text-sm font-semibold">Leads pro Gerät</div>
+              <div className="mt-1 text-[11px] text-muted-foreground">Heute</div>
+              <TinyBarList rows={derived.devToday} empty="Heute noch keine Leads." />
+            </div>
+            <div>
+              <div className="text-sm font-semibold">&nbsp;</div>
+              <div className="mt-1 text-[11px] text-muted-foreground">Total (Zeitraum)</div>
+              <TinyBarList rows={derived.devTotal} empty="Keine Geräte-Infos in meta." />
+            </div>
+          </div>
+
+          {/* Status mini */}
           <div className="mt-10">
             <div className="text-sm font-semibold">Status</div>
-            <div className="mt-3 space-y-2">
+            <div className="mt-3 grid gap-2">
               <div className="flex items-center justify-between rounded-lg bg-muted/30 px-3 py-2">
                 <div className="text-sm">NEW</div>
                 <div className="tabular-nums text-sm text-muted-foreground">{formatInt(k.newCount)}</div>
@@ -442,18 +435,6 @@ export default function StatsClient() {
               </div>
             </div>
           </div>
-
-          <MinimalList
-            title="Top Formulare"
-            rows={data.tops.forms.map((f) => ({ name: f.name, count: f.count }))}
-            empty="Keine Leads im Zeitraum."
-          />
-
-          <MinimalList
-            title="Top Events"
-            rows={data.tops.events.map((e) => ({ name: e.name, count: e.count }))}
-            empty="Keine Event-Zuordnung vorhanden oder keine Daten."
-          />
         </div>
       </div>
     </div>
