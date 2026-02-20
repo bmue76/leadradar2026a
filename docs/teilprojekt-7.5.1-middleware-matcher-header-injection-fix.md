@@ -1,77 +1,84 @@
-# Teilprojekt 7.5.1 – Middleware matcher / Header-Injection Fix (POST)
+# Teilprojekt 7.5.1 — Middleware matcher / Header-Injection Fix (POST) + Leads E-Mail/PDF Stabilisierung
+Status: DONE ✅  
+Datum: 2026-02-20
 
-**Status:** DONE ✅  
-**Datum:** 2026-02-20  
-**Commit(s):** COMMIT_HASH
+## Commit(s)
+- 3e544e0 — fix(tp7.5.1): remove explicit any in middleware/proxy
+- 2d9ef9c — fix(tp7.5.1): prisma helper without datasourceUrl (typed never)
+- <NEW_COMMIT_HASH> — fix(tp7.5.1): leads email/pdf ui polish + admin leads layout wrapper
+
+> Hinweis: <NEW_COMMIT_HASH> nach dem finalen Commit ersetzen.
+
+---
 
 ## Ziel
-Middleware muss für Admin UI + Admin API stabil laufen (auch POST) und Tenant/User Header zuverlässig setzen:
-- `x-tenant-slug`
-- `x-tenant-id`
-- `x-user-id` / `x-admin-user-id`
+- Middleware muss für **alle relevanten Admin/UI + Admin/API Routen** greifen – unabhängig von HTTP-Methoden (GET/POST/PATCH/DELETE).
+- Admin API muss stabil Tenant/User Context sehen:
+  - `x-tenant-slug`
+  - `x-tenant-id`
+  - `x-user-id` / `x-admin-user-id`
+- DEV Debug: schneller Proof, welche Header effektiv ankommen.
+- Leads: E-Mail Weiterleitung inkl. optionalem PDF-Anhang + PDF Download stabil und GoLive-tauglich.
 
-## Ausgangslage / Bug
-- `GET /api/admin/v1/leads/1` funktionierte (200).
-- `POST /api/admin/v1/leads/1/email` brach mit 401:
-  - `Tenant context required (x-tenant-slug header).`
-- Debug-Route unter `/_debug/...` war 404 (Next private folders).
-
-## Root Cause
-1) Middleware injizierte zwar `x-user-id` / `x-tenant-id`, aber **kein `x-tenant-slug`**.
-2) Zusätzlich war für schnelle Tests ein Debug-Endpunkt nötig; Ordner mit führendem `_` werden von Next als “private folder” behandelt und nicht geroutet.
+---
 
 ## Umsetzung (Highlights)
-- Matcher bleibt **breit** (`/api/:path*`), aber die Logik greift nur auf:
-  - `/admin/*` (UI Guard)
-  - `/api/admin/*` (Header Injection)
-- Header-Hardening:
-  - passthrough/override vorhandener Header
-  - Token Claims → `x-user-id`, `x-tenant-id`, `x-user-role`, optional `x-tenant-slug`
-  - `x-tenant-slug` Resolve Chain:
-    1) Request header (`x-tenant-slug`)
-    2) Token claim (`tenantSlug/tslug`)
-    3) Cookie-Cache `lr_admin_tenant_ctx` (`<tenantId>|<tenantSlug>`)
-    4) Session Resolve via `/api/admin/v1/tenants/current` (Recursion-Guard `x-mw-internal`)
-    5) DEV fallback via ENV / localhost default
-- DEV Debug Response Headers (für Network/curl):
-  - `x-debug-mw-hit`, `x-debug-mw-tenantSlugSource`, `x-debug-mw-userIdSource`, etc.
-- DEV Debug Endpoint:
-  - `/api/admin/v1/debug/ctx` (PROD: 404)
+### Middleware / Context
+- Matcher und Header-Injection robust gemacht, so dass POST nicht “verloren” geht.
+- DEV Debug Endpoint `/api/admin/v1/debug/ctx` für schnelle Smoke-Tests (Header/Method/Path sichtbar).
+- Dev-Fallbacks (nur DEV) ermöglichen Proof via curl ohne Session-Cookies.
 
-## Dateien/Änderungen
-- `middleware.ts`
-- `src/app/api/admin/v1/debug/ctx/route.ts`
-- `docs/teilprojekt-7.5.1-middleware-matcher-header-injection-fix.md`
+### PDF
+- PDF Rendering stabilisiert (Turbopack/Font-FS-Probleme eliminiert via pdf-lib).
+- PDF-Dateiname nachvollziehbar (statt `lead-1.pdf`) über serverseitige Filename-Builder.
 
-## Akzeptanzkriterien – Check
-- [x] Middleware läuft auf Admin-API **unabhängig von Method** (POST inklusive)
-- [x] `x-tenant-slug` wird zuverlässig gesetzt
-- [x] DEV Debug Endpoint vorhanden, PROD: 404
-- [x] Smoke Test reproduzierbar dokumentiert
+### Leads UI
+- `/admin/leads` wieder auf Admin-Layoutstandard wie `/admin` gebracht:
+  - Wrapper: `mx-auto w-full max-w-5xl px-6 py-6`
+  - Header in `page.tsx`, Content in Client
+- E-Mail UI:
+  - Checkbox “PDF als Anhang mitsenden”
+  - Buttons im Tenant Accent (Fallback vorhanden)
+
+---
+
+## Dateien/Änderungen (Scope)
+- middleware / proxy: Header-Injection / Debug-Header / Matcher-Hardening
+- src/app/api/admin/v1/debug/ctx (DEV-only)
+- src/app/api/admin/v1/leads/[id]/email/route.ts (PDF attachment Hook, robust)
+- src/app/api/admin/v1/leads/[id]/pdf/route.ts + src/app/api/admin/v1/pdf/lead/route.ts (PDF generation)
+- src/server/pdf/leadPdf.ts (pdf-lib renderer)
+- src/lib/email/mailer.ts (SMTP/log mode, attachments support)
+- src/app/(admin)/admin/leads/page.tsx + LeadsClient.tsx (Layout + UI)
+
+---
+
+## Akzeptanzkriterien — Check ✅
+- Middleware greift auch bei POST → Admin API erhält Tenant/User Header.
+- DEV Debug liefert erwartete Headerwerte.
+- Admin UI: Lead Drawer → “E-Mail senden” funktioniert ohne 401.
+- PDF Download funktioniert und liefert sinnvollen Namen.
+
+---
 
 ## Tests/Proof (reproduzierbar)
-### 1) Debug (POST)
-```bash
-curl -i -X POST "http://localhost:3000/api/admin/v1/debug/ctx"
+1) DEV Debug:
+   - `curl -i -X POST "http://localhost:3000/api/admin/v1/debug/ctx"`
+   - Erwartung: `x-debug-mw-hit: 1` + `x-tenant-slug/x-tenant-id/x-user-id` gesetzt (DEV fallback oder Session)
 
-Erwartung:
+2) UI Smoke:
+   - `/admin/leads` → Lead öffnen → Checkbox “PDF als Anhang mitsenden” → “E-Mail senden”
+   - Erwartung: 200 OK, kein 401/404
 
-x-debug-mw-hit: 1
+3) Regression:
+   - `GET /api/admin/v1/leads/<id>/pdf?disposition=attachment` → 200
 
-JSON data.headers.x-tenant-slug gesetzt
+---
 
-2) Regression (PDF)
+## Offene Punkte / Risiken
+- P1: SMTP Konfiguration/Produktionsbetrieb (ENVs) separat im Ops/Runbook dokumentieren.
 
-GET /api/admin/v1/leads/1/pdf?... weiterhin 200
+---
 
-3) Feature Fix
-
-Admin UI → Lead Drawer → “E-Mail senden” → POST /api/admin/v1/leads/1/email = 200
-
-Offene Punkte / Risiken
-
-P1: In PROD sollte x-tenant-slug primär aus Session/Tenant-Resolve kommen (DEV fallbacks sind nur DEV/localhost).
-
-Next Step
-
-TP 7.5.2: (falls nötig) TenantSlug in Token Claims persistieren oder AdminFetch konsequent x-tenant-slug mitsenden (Defense in Depth).
+## Next Step
+- TP 7.6: Leads/PDF optisch finalisieren (Header: TenantLogo + Event + Formularname) und E-Mail Template final “GoLive clean”.

@@ -18,7 +18,7 @@ export default function Page() {
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Exports</h1>
         <p className="mt-1 text-sm text-neutral-600">
-          Exportiere Leads als CSV (GoLive MVP: Online-only). Standard ist das aktive Event.
+          Exportiere Leads als CSV. Standard ist das aktive Event.
         </p>
         <div className="mt-3 text-sm text-neutral-600">Tipp: Filter setzen, exportieren, dann in Excel/CRM importieren.</div>
       </div>

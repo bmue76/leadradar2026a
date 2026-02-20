@@ -4,6 +4,25 @@ import { buildLeadPdfFileName, renderLeadPdf, type LeadPdfPayload } from "@/serv
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type AnyRecord = Record<string, unknown>;
+function isRecord(v: unknown): v is AnyRecord {
+  return typeof v === "object" && v !== null;
+}
+function pickString(v: unknown): string | null {
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+function get(obj: unknown, path: string[]): unknown {
+  let cur: unknown = obj;
+  for (const k of path) {
+    if (!isRecord(cur)) return undefined;
+    cur = cur[k];
+  }
+  return cur;
+}
+function getStr(obj: unknown, path: string[]): string | null {
+  return pickString(get(obj, path));
+}
+
 type ApiOk<T> = { ok: true; data: T; traceId: string };
 type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
 type ApiResp<T> = ApiOk<T> | ApiErr;
@@ -26,7 +45,6 @@ async function fetchJson<T>(req: NextRequest, path: string): Promise<ApiResp<T>>
     headers: {
       cookie,
       "x-mw-internal": "1",
-      // propagate ctx headers
       "x-tenant-slug": hdr(req, "x-tenant-slug"),
       "x-tenant-id": hdr(req, "x-tenant-id"),
       "x-user-id": hdr(req, "x-user-id") || hdr(req, "x-admin-user-id"),
@@ -34,13 +52,10 @@ async function fetchJson<T>(req: NextRequest, path: string): Promise<ApiResp<T>>
     },
     cache: "no-store",
   });
+
   const json = (await res.json().catch(() => null)) as ApiResp<T> | null;
   if (json) return json;
-  return {
-    ok: false,
-    error: { code: "BAD_UPSTREAM", message: "Upstream returned invalid JSON." },
-    traceId: "unknown",
-  };
+  return { ok: false, error: { code: "BAD_UPSTREAM", message: "Upstream invalid JSON." }, traceId: "unknown" };
 }
 
 async function fetchLogo(req: NextRequest): Promise<Buffer | null> {
@@ -71,20 +86,16 @@ function flattenFields(values: unknown): Array<{ label: string; value: string }>
   if (!values) return [];
   if (typeof values === "string") return [{ label: "Werte", value: values }];
   if (Array.isArray(values)) {
-    return values.map((v, i) => ({ label: `Feld ${i + 1}`, value: typeof v === "string" ? v : JSON.stringify(v) }));
+    return values.map((v, i) => ({
+      label: `Feld ${i + 1}`,
+      value: typeof v === "string" ? v : v == null ? "" : JSON.stringify(v),
+    }));
   }
-  if (typeof values === "object") {
-    const rec = values as Record<string, unknown>;
+  if (isRecord(values)) {
     const out: Array<{ label: string; value: string }> = [];
-    for (const [k, v] of Object.entries(rec)) {
+    for (const [k, v] of Object.entries(values)) {
       const val =
-        typeof v === "string"
-          ? v
-          : v == null
-            ? ""
-            : typeof v === "number" || typeof v === "boolean"
-              ? String(v)
-              : JSON.stringify(v);
+        typeof v === "string" ? v : v == null ? "" : typeof v === "number" || typeof v === "boolean" ? String(v) : JSON.stringify(v);
       out.push({ label: k, value: val });
     }
     return out;
@@ -96,44 +107,44 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const { id } = await ctx.params;
 
   const tenantSlug = hdr(req, "x-tenant-slug");
+  const traceId = crypto.randomUUID();
   if (!tenantSlug) {
     return NextResponse.json(
-      { ok: false, error: { code: "TENANT_REQUIRED", message: "Tenant context required (x-tenant-slug header)." }, traceId: crypto.randomUUID() },
-      { status: 401 }
+      { ok: false, error: { code: "TENANT_REQUIRED", message: "Tenant context required (x-tenant-slug header).", details: { traceId } }, traceId },
+      { status: 401, headers: { "x-trace-id": traceId } }
     );
   }
 
   const url = new URL(req.url);
   const disposition = (url.searchParams.get("disposition") ?? "inline").trim();
 
-  // Load lead detail via existing endpoint (no schema duplication)
-  const leadResp = await fetchJson<any>(req, `/api/admin/v1/leads/${id}`);
+  const leadResp = await fetchJson<unknown>(req, `/api/admin/v1/leads/${id}`);
   if (!leadResp.ok) {
-    return NextResponse.json(leadResp, { status: 404 });
+    return NextResponse.json(leadResp, { status: 404, headers: { "x-trace-id": traceId } });
   }
 
-  const d = leadResp.data;
+  const lead = leadResp.data;
 
   const payload: LeadPdfPayload = {
     tenantSlug,
     tenantName: null,
-    eventName: d?.event?.name ?? null,
-    formName: d?.form?.name ?? null,
-    leadId: String(d?.id ?? id),
-    capturedAt: d?.capturedAt ?? null,
-    createdAt: d?.createdAt ?? null,
-    contactName: d?.contact?.name ?? null,
-    company: d?.contact?.company ?? null,
-    email: d?.contact?.email ?? null,
-    phone: d?.contact?.phoneRaw ?? d?.contact?.phone ?? null,
-    mobile: d?.contact?.mobile ?? null,
-    notes: d?.adminNotes ?? null,
-    fields: flattenFields(d?.values),
+    eventName: getStr(lead, ["event", "name"]),
+    formName: getStr(lead, ["form", "name"]),
+    leadId: String(getStr(lead, ["id"]) ?? id),
+    capturedAt: getStr(lead, ["capturedAt"]),
+    createdAt: getStr(lead, ["createdAt"]),
+    contactName: getStr(lead, ["contact", "name"]),
+    company: getStr(lead, ["contact", "company"]),
+    email: getStr(lead, ["contact", "email"]),
+    phone: getStr(lead, ["contact", "phoneRaw"]) ?? getStr(lead, ["contact", "phone"]),
+    mobile: getStr(lead, ["contact", "mobile"]),
+    notes: getStr(lead, ["adminNotes"]),
+    fields: flattenFields(get(lead, ["values"])),
   };
 
   const logo = await fetchLogo(req);
-  const pdfU8 = await renderLeadPdf({ payload, logoPng: logo });
-  const ab = toArrayBuffer(pdfU8);
+  const u8 = await renderLeadPdf({ payload, logoPng: logo });
+  const ab = toArrayBuffer(u8);
 
   const filename = buildLeadPdfFileName(payload);
 
@@ -143,6 +154,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       "content-type": "application/pdf",
       "content-disposition": `${disposition}; filename="${filename}"`,
       "cache-control": "no-store",
+      "x-trace-id": traceId,
     },
   });
 }

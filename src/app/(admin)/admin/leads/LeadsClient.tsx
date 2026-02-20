@@ -172,6 +172,60 @@ function Button({
   );
 }
 
+/**
+ * Accent button:
+ * - uses tenant accent if set (CSS var --lr-accent)
+ * - fallback so it is never "invisible"
+ */
+function AccentButton({
+  label,
+  onClick,
+  disabled,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  const cls = [
+    "inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium transition-colors",
+    "focus:outline-none focus:ring-2 focus:ring-slate-200",
+    "text-white hover:opacity-90",
+    disabled ? "opacity-60 pointer-events-none" : "",
+  ].join(" ");
+
+  return (
+    <button
+      type="button"
+      className={cls}
+      style={{ backgroundColor: "var(--lr-accent, #0f172a)" }}
+      onClick={onClick}
+      disabled={disabled}
+    >
+      {label}
+    </button>
+  );
+}
+
+function AccentLinkButton({ label, href }: { label: string; href: string }) {
+  const cls = [
+    "inline-flex h-9 items-center justify-center rounded-xl px-3 text-sm font-medium transition-opacity",
+    "focus:outline-none focus:ring-2 focus:ring-slate-200",
+    "text-white hover:opacity-90",
+  ].join(" ");
+
+  return (
+    <a
+      className={cls}
+      style={{ backgroundColor: "var(--lr-accent, #0f172a)" }}
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+    >
+      {label}
+    </a>
+  );
+}
+
 function IconButton({ title, onClick }: { title: string; onClick: () => void }) {
   return (
     <button
@@ -246,7 +300,7 @@ function DrawerShell({
   return (
     <div className="fixed inset-0 z-50">
       <button type="button" className="absolute inset-0 bg-black/20" aria-label="Schliessen" onClick={onClose} />
-      <aside className="absolute right-0 top-0 h-full w-full max-w-[520px] bg-white shadow-2xl">
+      <aside className="absolute right-0 top-0 h-full w-full max-w-[480px] bg-white shadow-2xl">
         <div className="flex h-14 items-center justify-between border-b border-slate-200 px-6">
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-slate-900">{title}</div>
@@ -394,7 +448,7 @@ export default function LeadsClient() {
 
   const [exportNavBusy, setExportNavBusy] = useState(false);
 
-  // ✅ E-Mail forwarding (TP7.5 MVP)
+  // E-Mail forwarding
   const [emailTo, setEmailTo] = useState("");
   const [emailSubject, setEmailSubject] = useState("");
   const [emailMessage, setEmailMessage] = useState("");
@@ -901,10 +955,15 @@ export default function LeadsClient() {
     }
   }, [detail, emailSending, emailTo, emailSubject, emailMessage, emailIncludeValues, emailIncludePdf]);
 
+  const pdfHref = useMemo(() => {
+    if (!detail?.id) return null;
+    return `/api/admin/v1/leads/${detail.id}/pdf?disposition=attachment`;
+  }, [detail?.id]);
+
   return (
     <div className="space-y-4">
-      {/* Active Event Card (Info-only, nicht als Filter erzwungen) */}
-      <section className="rounded-2xl border border-slate-200 bg-white p-4">
+      {/* Active Event Card */}
+      <section className="rounded-2xl border border-slate-200 bg-white p-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <div className="text-sm font-semibold text-slate-900">Aktives Event (Mobile Erfassung)</div>
@@ -933,7 +992,7 @@ export default function LeadsClient() {
       </section>
 
       {/* Toolbar */}
-      <section className="rounded-2xl border border-slate-200 bg-white p-4">
+      <section className="rounded-2xl border border-slate-200 bg-white p-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
             <StatusPills value={status} onChange={setStatus} />
@@ -955,7 +1014,7 @@ export default function LeadsClient() {
               </div>
             ) : null}
 
-            <div className="flex flex-col items-end gap-1">
+            <div className="ml-auto flex flex-wrap items-center gap-2">
               <Button
                 label={exportNavBusy ? "Exportiere…" : "Exportieren"}
                 kind="secondary"
@@ -963,12 +1022,9 @@ export default function LeadsClient() {
                 disabled={exportNavBusy}
                 title="Exportiert aktuell gefilterte Leads."
               />
-              <div className="text-[11px] text-slate-500">Exportiert aktuell gefilterte Leads</div>
+              {isDirtyFilters ? <Button label="Reset" kind="ghost" onClick={resetFilters} /> : null}
+              <IconButton title="Neu laden" onClick={() => void loadList()} />
             </div>
-
-            {isDirtyFilters ? <Button label="Reset" kind="ghost" onClick={resetFilters} /> : null}
-
-            <IconButton title="Neu laden" onClick={() => void loadList()} />
           </div>
         </div>
       </section>
@@ -976,7 +1032,7 @@ export default function LeadsClient() {
       {/* List */}
       <section className="rounded-2xl border border-slate-200 bg-white">
         <div className="overflow-x-auto">
-          <table className="w-full text-left">
+          <table className="w-full table-auto text-left">
             <thead>
               <tr className="border-b border-slate-200 bg-white">
                 <th className="w-10 px-4 py-3">
@@ -987,16 +1043,16 @@ export default function LeadsClient() {
                     onChange={() => toggleSelectAllOnPage()}
                   />
                 </th>
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Kontakt</th>
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">E-Mail / Telefon</th>
-                <th className="hidden px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600 md:table-cell">Event</th>
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Status</th>
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Erfasst am</th>
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600">Info</th>
+                <th className="px-4 py-3 text-xs font-semibold text-slate-600">Kontakt</th>
+                <th className="px-4 py-3 text-xs font-semibold text-slate-600">E-Mail / Telefon</th>
+                <th className="hidden px-4 py-3 text-xs font-semibold text-slate-600 md:table-cell">Event</th>
+                <th className="px-4 py-3 text-xs font-semibold text-slate-600">Status</th>
+                <th className="px-4 py-3 text-xs font-semibold text-slate-600">Erfasst am</th>
+                <th className="px-4 py-3 text-xs font-semibold text-slate-600">Info</th>
               </tr>
             </thead>
 
-            <tbody>
+            <tbody className="divide-y divide-slate-100">
               {loadingList ? (
                 <tr>
                   <td colSpan={7} className="px-4 py-6 text-sm text-slate-600">
@@ -1031,7 +1087,7 @@ export default function LeadsClient() {
                   return (
                     <tr
                       key={it.id}
-                      className="cursor-pointer border-b border-slate-100 hover:bg-slate-50"
+                      className="cursor-pointer hover:bg-slate-50"
                       onClick={() => openDrawer(it.id)}
                     >
                       <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
@@ -1061,7 +1117,11 @@ export default function LeadsClient() {
                       </td>
 
                       <td className="px-4 py-3">
-                        <span className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(it.reviewStatus)}`}>
+                        <span
+                          className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(
+                            it.reviewStatus
+                          )}`}
+                        >
                           {statusLabel(it.reviewStatus)}
                         </span>
                       </td>
@@ -1092,7 +1152,12 @@ export default function LeadsClient() {
 
         {nextCursor ? (
           <div className="flex items-center justify-center p-4">
-            <Button label={loadingMore ? "Lade…" : "Mehr laden"} kind="secondary" onClick={() => void loadMore()} disabled={loadingMore} />
+            <Button
+              label={loadingMore ? "Lade…" : "Mehr laden"}
+              kind="secondary"
+              onClick={() => void loadMore()}
+              disabled={loadingMore}
+            />
           </div>
         ) : null}
       </section>
@@ -1109,7 +1174,9 @@ export default function LeadsClient() {
               <div className="mt-2 text-xs text-rose-700">Support-Code: {errTraceId(drawerErr)}</div>
             ) : null}
             <div className="mt-3">
-              {selectedId ? <Button label="Erneut versuchen" kind="secondary" onClick={() => void loadDetail(selectedId)} /> : null}
+              {selectedId ? (
+                <Button label="Erneut versuchen" kind="secondary" onClick={() => void loadDetail(selectedId)} />
+              ) : null}
             </div>
           </div>
         ) : !detail ? (
@@ -1151,7 +1218,8 @@ export default function LeadsClient() {
               </div>
 
               <div className="mt-3 text-xs text-slate-500">
-                Kontakt-Quelle: <span className="font-medium text-slate-700">{detail.contact?.source ?? "—"}</span> · aktualisiert:{" "}
+                Kontakt-Quelle: <span className="font-medium text-slate-700">{detail.contact?.source ?? "—"}</span> ·
+                aktualisiert:{" "}
                 <span className="font-medium text-slate-700">{fmtDateTime(detail.contact?.updatedAt ?? null)}</span>
               </div>
             </Card>
@@ -1166,9 +1234,24 @@ export default function LeadsClient() {
               <div className="mt-2 text-xs text-slate-500">Nur intern (nicht in der App sichtbar).</div>
             </Card>
 
+            <Card title="PDF">
+              <div className="flex flex-wrap items-center gap-2">
+                {pdfHref ? (
+                  <AccentLinkButton label="PDF herunterladen" href={pdfHref} />
+                ) : (
+                  <span className="text-sm text-slate-600">PDF nicht verfügbar.</span>
+                )}
+              </div>
+            </Card>
+
             <Card title="Per E-Mail weiterleiten">
               <div className="space-y-3">
-                <Field label="Empfänger E-Mail" value={emailTo} onChange={setEmailTo} placeholder="z.B. verkauf@firma.ch" />
+                <Field
+                  label="Empfänger E-Mail"
+                  value={emailTo}
+                  onChange={setEmailTo}
+                  placeholder="z.B. verkauf@firma.ch"
+                />
                 <Field label="Betreff" value={emailSubject} onChange={setEmailSubject} placeholder="Betreff" />
 
                 <TextArea
@@ -1187,15 +1270,33 @@ export default function LeadsClient() {
                   Lead-Felder (values) im E-Mail mitsenden
                 </label>
 
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={emailIncludePdf}
+                    onChange={(e) => setEmailIncludePdf(e.target.checked)}
+                  />
+                  PDF als Anhang mitsenden
+                </label>
+
                 <div className="flex flex-wrap items-center gap-2">
-                  <button type="button" onClick={() => void sendLeadEmail()} disabled={emailSending} className={["inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-slate-200","bg-[color:var(--lr-accent)] text-white hover:opacity-90", emailSending ? "opacity-60 pointer-events-none" : ""].join(" ")}>{emailSending ? "Sende…" : "E-Mail senden"}</button>
-                  </div>
+                  <AccentButton
+                    label={emailSending ? "Sende…" : "E-Mail senden"}
+                    onClick={() => void sendLeadEmail()}
+                    disabled={emailSending}
+                  />
+                  <span className="text-xs text-slate-500">
+                    {emailIncludePdf ? "PDF wird als Anhang mitgesendet." : "Ohne PDF-Anhang."}
+                  </span>
+                </div>
 
                 {emailError ? (
                   <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3">
                     <div className="text-sm font-medium text-rose-900">E-Mail Fehler</div>
                     <div className="mt-1 text-sm text-rose-800">{emailError.message}</div>
-                    {emailError.traceId ? <div className="mt-2 text-xs text-rose-700">Support-Code: {emailError.traceId}</div> : null}
+                    {emailError.traceId ? (
+                      <div className="mt-2 text-xs text-rose-700">Support-Code: {emailError.traceId}</div>
+                    ) : null}
                   </div>
                 ) : null}
 
@@ -1227,7 +1328,11 @@ export default function LeadsClient() {
                 </div>
                 <div>
                   <span className="text-slate-500">Status:</span>{" "}
-                  <span className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(detail.reviewStatus)}`}>
+                  <span
+                    className={`inline-flex rounded-full border px-2 py-1 text-xs font-medium ${statusPillClasses(
+                      detail.reviewStatus
+                    )}`}
+                  >
                     {statusLabel(detail.reviewStatus)}
                   </span>
                 </div>
@@ -1242,7 +1347,9 @@ export default function LeadsClient() {
                   </div>
 
                   <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
-                    {String(pickBusinessCardAttachment.mimeType || "").toLowerCase().startsWith("image/") ? (
+                    {String(pickBusinessCardAttachment.mimeType || "")
+                      .toLowerCase()
+                      .startsWith("image/") ? (
                       <>
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
@@ -1266,7 +1373,12 @@ export default function LeadsClient() {
                       Download
                     </a>
 
-                    <Button label={ocrLoading ? "OCR lade…" : "OCR laden"} kind="secondary" onClick={() => void loadOcr()} disabled={ocrLoading} />
+                    <Button
+                      label={ocrLoading ? "OCR lade…" : "OCR laden"}
+                      kind="secondary"
+                      onClick={() => void loadOcr()}
+                      disabled={ocrLoading}
+                    />
                     <Button
                       label={ocrApplying ? "Wende an…" : "OCR anwenden"}
                       kind="secondary"
@@ -1280,7 +1392,9 @@ export default function LeadsClient() {
                     <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3">
                       <div className="text-sm font-medium text-rose-900">OCR Fehler</div>
                       <div className="mt-1 text-sm text-rose-800">{ocrError.message}</div>
-                      {ocrError.traceId ? <div className="mt-2 text-xs text-rose-700">Support-Code: {ocrError.traceId}</div> : null}
+                      {ocrError.traceId ? (
+                        <div className="mt-2 text-xs text-rose-700">Support-Code: {ocrError.traceId}</div>
+                      ) : null}
                     </div>
                   ) : null}
 
@@ -1293,7 +1407,8 @@ export default function LeadsClient() {
                         {typeof ocrData.ocr.confidence === "number" ? (
                           <>
                             {" "}
-                            · Confidence: <span className="font-medium">{Math.round(ocrData.ocr.confidence * 100)}%</span>
+                            · Confidence:{" "}
+                            <span className="font-medium">{Math.round(ocrData.ocr.confidence * 100)}%</span>
                           </>
                         ) : null}
                       </div>
@@ -1309,7 +1424,9 @@ export default function LeadsClient() {
               <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
                 <div className="text-sm font-medium text-rose-900">Fehler</div>
                 <div className="mt-1 text-sm text-rose-800">{errMessage(drawerErr)}</div>
-                {errTraceId(drawerErr) ? <div className="mt-2 text-xs text-rose-700">Support-Code: {errTraceId(drawerErr)}</div> : null}
+                {errTraceId(drawerErr) ? (
+                  <div className="mt-2 text-xs text-rose-700">Support-Code: {errTraceId(drawerErr)}</div>
+                ) : null}
               </div>
             ) : null}
           </div>

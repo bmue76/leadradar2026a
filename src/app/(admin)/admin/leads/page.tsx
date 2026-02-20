@@ -1,5 +1,7 @@
 import { Suspense } from "react";
-import ScreenClient from "./ScreenClient";
+import LeadsClient from "./LeadsClient";
+
+export const dynamic = "force-dynamic";
 
 function LoadingCard() {
   return (
@@ -9,18 +11,16 @@ function LoadingCard() {
   );
 }
 
-export default function Page() {
+export default function LeadsPage() {
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-6">
       <header className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">Leads</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Nachbearbeitung der erfassten Leads. Standardmässig werden alle Leads angezeigt; optional kannst du auf das aktive Event filtern.
-        </p>
+        <p className="mt-1 text-sm text-slate-600">Leads prüfen, exportieren und per E-Mail weiterleiten.</p>
       </header>
 
       <Suspense fallback={<LoadingCard />}>
-        <ScreenClient />
+        <LeadsClient />
       </Suspense>
     </div>
   );
