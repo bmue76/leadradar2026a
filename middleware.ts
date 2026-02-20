@@ -67,14 +67,55 @@ async function getAnyToken(req: NextRequest): Promise<{
   return { token, cookieNames, cookieNameUsed: token ? "(default)" : null };
 }
 
+function extractSlugFromTenantCurrentJson(json: any): string | null {
+  // Be tolerant to response shapes
+  const candidates = [
+    json?.data?.slug,
+    json?.data?.tenant?.slug,
+    json?.data?.tenantSlug,
+    json?.data?.currentTenant?.slug,
+    json?.slug,
+    json?.tenant?.slug,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim()) return c.trim();
+  }
+  return null;
+}
+
+async function resolveTenantSlugViaCurrent(req: NextRequest): Promise<string | null> {
+  try {
+    const url = new URL("/api/admin/v1/tenants/current", req.url);
+
+    // Forward cookies for session auth + mark as internal to avoid recursion
+    const cookie = req.headers.get("cookie") ?? "";
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        cookie,
+        "x-mw-internal": "1",
+      },
+      cache: "no-store",
+    });
+
+    if (!res.ok) return null;
+    const json = await res.json().catch(() => null);
+    if (!json) return null;
+
+    return extractSlugFromTenantCurrentJson(json);
+  } catch {
+    return null;
+  }
+}
+
+const TENANT_CTX_COOKIE = "lr_admin_tenant_ctx"; // value: "<tenantId>|<tenantSlug>"
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // Always ignore Next internals
   if (pathname.startsWith("/_next")) return NextResponse.next();
   if (pathname === "/favicon.ico") return NextResponse.next();
 
-  // We only care about Admin UI + Admin API (v1 and future)
   const isAdminUi = pathname.startsWith("/admin");
   const isAdminApi = pathname.startsWith("/api/admin");
 
@@ -90,24 +131,26 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Admin API: inject / passthrough headers for ALL METHODS (GET/POST/PATCH/DELETE)
+  // Admin API: inject/passthrough headers for ALL METHODS (GET/POST/PATCH/DELETE)
   if (isAdminApi) {
     const headers = new Headers(req.headers);
 
-    // Preserve existing values (client may explicitly set overrides in DEV)
+    const internal = (headers.get("x-mw-internal") ?? "").trim() === "1";
+
     const existingUserId = (headers.get("x-user-id") || headers.get("x-admin-user-id") || "").trim();
     const existingTenantId = (headers.get("x-tenant-id") || "").trim();
     const existingTenantSlug = (headers.get("x-tenant-slug") || "").trim();
     const existingRole = (headers.get("x-user-role") || "").trim();
 
-    // If client already provided x-user-id, ensure alias header exists too
+    // Ensure alias if provided
     if (existingUserId) {
       headers.set("x-user-id", existingUserId);
       headers.set("x-admin-user-id", existingUserId);
     }
 
+    let debugSlugSource: string = "none";
+
     if (token) {
-      // Be liberal in claim keys (prevents "token exists but headers empty")
       const userId =
         existingUserId ||
         readClaim(token, ["uid", "sub", "userId", "id"]);
@@ -116,7 +159,7 @@ export async function middleware(req: NextRequest) {
         existingTenantId ||
         readClaim(token, ["tenantId", "tid"]);
 
-      const tenantSlug =
+      let tenantSlug =
         existingTenantSlug ||
         readClaim(token, ["tenantSlug", "tslug", "tenant_slug", "slug"]);
 
@@ -127,16 +170,54 @@ export async function middleware(req: NextRequest) {
 
       if (userId) {
         headers.set("x-user-id", userId);
-        headers.set("x-admin-user-id", userId); // alias for endpoints that check x-admin-user-id
+        headers.set("x-admin-user-id", userId);
       }
       if (tenantId) headers.set("x-tenant-id", tenantId);
-      if (tenantSlug) headers.set("x-tenant-slug", tenantSlug);
       if (role) headers.set("x-user-role", role);
+
+      // 1) If slug already present -> keep
+      if (tenantSlug) {
+        headers.set("x-tenant-slug", tenantSlug);
+        debugSlugSource = existingTenantSlug ? "request" : "token";
+      } else if (tenantId) {
+        // 2) Try cached cookie (tenantId-bound)
+        const ctxCookie = (req.cookies.get(TENANT_CTX_COOKIE)?.value ?? "").trim();
+        if (ctxCookie && ctxCookie.includes("|")) {
+          const [cid, cslug] = ctxCookie.split("|");
+          if (cid === tenantId && cslug && cslug.trim()) {
+            tenantSlug = cslug.trim();
+            headers.set("x-tenant-slug", tenantSlug);
+            debugSlugSource = "cookie";
+          }
+        }
+
+        // 3) If still missing and NOT internal call, resolve once via /tenants/current
+        if (!tenantSlug && !internal) {
+          const resolved = await resolveTenantSlugViaCurrent(req);
+          if (resolved) {
+            tenantSlug = resolved;
+            headers.set("x-tenant-slug", tenantSlug);
+            debugSlugSource = "fetch(tenants/current)";
+          }
+        }
+      }
     }
 
     const res = NextResponse.next({ request: { headers } });
 
-    // DEV-only debug response headers so we can see if middleware sees the session
+    // If we resolved slug via fetch, cache it tenantId-bound
+    const finalTenantId = (headers.get("x-tenant-id") ?? "").trim();
+    const finalTenantSlug = (headers.get("x-tenant-slug") ?? "").trim();
+    if (finalTenantId && finalTenantSlug && debugSlugSource === "fetch(tenants/current)") {
+      res.cookies.set(TENANT_CTX_COOKIE, `${finalTenantId}|${finalTenantSlug}`, {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        path: "/",
+      });
+    }
+
+    // DEV debug headers
     if (process.env.NODE_ENV !== "production") {
       res.headers.set("x-debug-mw-token", token ? "1" : "0");
       res.headers.set("x-debug-mw-cookieNameUsed", cookieNameUsed ?? "");
@@ -144,6 +225,8 @@ export async function middleware(req: NextRequest) {
       res.headers.set("x-debug-mw-host", req.headers.get("host") ?? "");
       res.headers.set("x-debug-mw-path", pathname);
       res.headers.set("x-debug-mw-method", req.method);
+      res.headers.set("x-debug-mw-tenantSlugSource", debugSlugSource);
+      res.headers.set("x-debug-mw-internal", internal ? "1" : "0");
     }
 
     return res;
@@ -153,6 +236,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  // Precise: only Admin UI + Admin API (covers all methods)
   matcher: ["/admin/:path*", "/api/admin/:path*"],
 };
