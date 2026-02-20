@@ -60,7 +60,6 @@ const NAV: NavGroup[] = [
     Icon: IconLeads,
     items: [
       { href: "/admin/leads", label: "Leads" },
-      { href: "/admin/recipients", label: "Empfängerlisten" },
       { href: "/admin/exports", label: "Exporte" },
     ],
   },
@@ -164,7 +163,12 @@ export function SidebarNav() {
                 />
               </span>
 
-              <span className={["flex-1 text-left font-medium", isGroupActive ? "text-slate-900" : ""].join(" ")}>
+              <span
+                className={[
+                  "flex-1 text-left font-medium",
+                  isGroupActive ? "text-slate-900" : "",
+                ].join(" ")}
+              >
                 {group.title}
               </span>
 
@@ -176,7 +180,10 @@ export function SidebarNav() {
               />
             </button>
 
-            <div id={`nav-group-${group.key}`} className={["mt-1", isOpen ? "block" : "hidden"].join(" ")}>
+            <div
+              id={`nav-group-${group.key}`}
+              className={["mt-1", isOpen ? "block" : "hidden"].join(" ")}
+            >
               <div className="relative ml-6 border-l border-slate-200 pl-5">
                 <div className="flex flex-col gap-1 py-1">
                   {group.items.map((item) => {

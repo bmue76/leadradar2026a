@@ -399,6 +399,7 @@ export default function LeadsClient() {
   const [emailSubject, setEmailSubject] = useState("");
   const [emailMessage, setEmailMessage] = useState("");
   const [emailIncludeValues, setEmailIncludeValues] = useState(true);
+  const [emailIncludePdf, setEmailIncludePdf] = useState(true);
   const [emailSending, setEmailSending] = useState(false);
   const [emailResult, setEmailResult] = useState<{ delivered: boolean; mode: "smtp" | "log" } | null>(null);
   const [emailError, setEmailError] = useState<UiError | null>(null);
@@ -601,6 +602,7 @@ export default function LeadsClient() {
     setEmailSubject("");
     setEmailMessage("");
     setEmailIncludeValues(true);
+    setEmailIncludePdf(true);
     setEmailSending(false);
     setEmailResult(null);
     setEmailError(null);
@@ -870,6 +872,7 @@ export default function LeadsClient() {
           subject: emailSubject.trim() || undefined,
           message: emailMessage.trim() || undefined,
           includeValues: emailIncludeValues,
+          includePdf: emailIncludePdf,
         }),
       });
 
@@ -896,7 +899,7 @@ export default function LeadsClient() {
       setEmailError({ message: "Konnte E-Mail nicht senden. Bitte erneut versuchen." });
       setEmailSending(false);
     }
-  }, [detail, emailSending, emailTo, emailSubject, emailMessage, emailIncludeValues]);
+  }, [detail, emailSending, emailTo, emailSubject, emailMessage, emailIncludeValues, emailIncludePdf]);
 
   return (
     <div className="space-y-4">
@@ -1185,14 +1188,8 @@ export default function LeadsClient() {
                 </label>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    label={emailSending ? "Sende…" : "E-Mail senden"}
-                    kind="secondary"
-                    onClick={() => void sendLeadEmail()}
-                    disabled={emailSending}
-                  />
-                  <div className="text-xs text-slate-500">DEV: ohne SMTP wird die E-Mail im Server-Log ausgegeben.</div>
-                </div>
+                  <button type="button" onClick={() => void sendLeadEmail()} disabled={emailSending} className={["inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-slate-200","bg-[color:var(--lr-accent)] text-white hover:opacity-90", emailSending ? "opacity-60 pointer-events-none" : ""].join(" ")}>{emailSending ? "Sende…" : "E-Mail senden"}</button>
+                  </div>
 
                 {emailError ? (
                   <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3">
