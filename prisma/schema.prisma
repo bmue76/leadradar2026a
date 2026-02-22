@@ -144,6 +144,19 @@ enum BillingOrderStatus {
 }
 
 //
+// TP 7.7 — Device Licenses (GoLive-MVP: replaces credits for device usage)
+//
+enum DeviceLicenseType {
+  FAIR_30D
+  YEAR_365D
+}
+
+enum DeviceLicenseStatus {
+  ACTIVE
+  REVOKED
+}
+
+//
 // Core base models
 //
 model Tenant {
@@ -211,6 +224,9 @@ model Tenant {
   billingOrders BillingOrder[]
   stripeEvents  StripeEvent[]
 
+  // TP 7.7 — Device Licenses
+  deviceLicenses DeviceLicense[]
+
   @@index([country])
 }
 
@@ -230,7 +246,7 @@ model TenantProfile {
   addressLine2 String?
   postalCode   String?
   city         String?
-  countryCode  String @default("CH")
+  countryCode  String  @default("CH")
 
   vatId String?
 
@@ -238,8 +254,8 @@ model TenantProfile {
   contactFamilyName String?
   contactEmail      String?
 
-  logoUrl      String?
-  accentColor  String?
+  logoUrl     String?
+  accentColor String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -285,6 +301,9 @@ model User {
 
   // TP 4.3 — OCR corrections (optional audit)
   correctedLeadOcrResults LeadOcrResult[] @relation("OcrCorrectedBy")
+
+  // TP 7.7 — DeviceLicense manual/audit
+  createdDeviceLicenses DeviceLicense[] @relation("DeviceLicenseCreatedBy")
 
   @@index([tenantId])
   @@index([emailVerified])
@@ -381,7 +400,7 @@ model Form {
 
   // Option 2 — assigned to active event (nullable, MVP-lean)
   assignedEventId String?
-  assignedEvent   Event? @relation("FormAssignedEvent", fields: [assignedEventId], references: [id], onDelete: SetNull)
+  assignedEvent   Event?  @relation("FormAssignedEvent", fields: [assignedEventId], references: [id], onDelete: SetNull)
 
   tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   fields FormField[]
@@ -431,8 +450,8 @@ model FormPreset {
   config      Json
 
   // MVP: URL-only preview image (upload/storage later)
-  imageUrl  String?
-  isPublic  Boolean @default(false)
+  imageUrl String?
+  isPublic Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -443,7 +462,6 @@ model FormPreset {
   @@index([tenantId, updatedAt])
   @@index([tenantId, name])
   @@index([tenantId, category, createdAt])
-
   @@index([isPublic, createdAt])
   @@index([isPublic, name])
 }
@@ -677,12 +695,57 @@ model MobileDevice {
 
   assignments MobileDeviceForm[]
 
-  // TP 3.0 — Provision token audit (optional)
+  // TP 7.7 — Device Licenses (history)
+  licenses DeviceLicense[]
+
+  // TP 3.0 — Provision token audit (optional; device that redeemed a token)
   provisionTokensUsed MobileProvisionToken[] @relation("MobileProvisionTokenUsedBy")
+
+  // TP 7.8 — Provision token target (token created for this device during onboarding)
+  provisionTokens MobileProvisionToken[] @relation("MobileProvisionTokenDevice")
 
   @@index([tenantId, status, createdAt])
   @@index([tenantId, apiKeyId])
   @@index([tenantId, activeEventId])
+}
+
+//
+// TP 7.7 — Device Licenses
+//
+model DeviceLicense {
+  id       String @id @default(cuid())
+  tenantId String
+  deviceId String
+
+  type   DeviceLicenseType
+  status DeviceLicenseStatus @default(ACTIVE)
+
+  // validity window; active if status=ACTIVE and endsAt > now
+  startsAt DateTime
+  endsAt   DateTime
+
+  // Stripe (optional; only set for Stripe purchases)
+  stripeCheckoutSessionId String? @unique
+  stripePaymentIntentId   String?
+  currency                String?
+  amountCents             Int?
+
+  // audit / support
+  createdByUserId String?
+  createdByUser   User?   @relation("DeviceLicenseCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  note String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  device MobileDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, deviceId])
+  @@index([tenantId, deviceId, endsAt])
+  @@index([tenantId, endsAt])
+  @@index([endsAt])
 }
 
 model MobileDeviceForm {
@@ -708,10 +771,19 @@ model MobileProvisionToken {
   id       String @id @default(cuid())
   tenantId String
 
+  // TP 7.8 — token belongs to a specific device during onboarding.
+  // NOTE: nullable for backward-compatibility with older tokens.
+  deviceId String?
+  device   MobileDevice? @relation("MobileProvisionTokenDevice", fields: [deviceId], references: [id], onDelete: Cascade)
+
   prefix    String
   tokenHash String @unique
 
-  status    MobileProvisionTokenStatus @default(ACTIVE)
+  // TP 7.8 — plaintext code stored only for resend within TTL; cleared on USED/REVOKED.
+  tokenPlaintext String?
+  status         MobileProvisionTokenStatus @default(ACTIVE)
+
+  // TTL is app-layer: expiresAt is set to now()+12h when creating a token.
   expiresAt DateTime
 
   usedAt         DateTime?
@@ -726,6 +798,7 @@ model MobileProvisionToken {
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  @@index([tenantId, deviceId, status, expiresAt])
   @@index([tenantId, status, expiresAt])
   @@index([tenantId, createdAt])
   @@index([prefix, status])
@@ -735,10 +808,10 @@ model MobileProvisionToken {
 // TP 5.4 — Entitlement (current state per Tenant)
 //
 model TenantEntitlement {
-  tenantId   String   @id
+  tenantId   String    @id
   validUntil DateTime?
-  maxDevices Int      @default(1)
-  updatedAt  DateTime @updatedAt
+  maxDevices Int       @default(1)
+  updatedAt  DateTime  @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
@@ -766,13 +839,13 @@ model TenantCreditBalance {
 // TP 5.4 — Optional Audit Ledger (MVP-lean)
 //
 model TenantCreditLedger {
-  id        String                  @id @default(cuid())
+  id        String                   @id @default(cuid())
   tenantId  String
   type      TenantCreditType
   delta     Int
   reason    TenantCreditLedgerReason
   refId     String?
-  createdAt DateTime                @default(now())
+  createdAt DateTime                 @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -784,25 +857,25 @@ model TenantCreditLedger {
 // TP 5.4 — Promo Codes (global)
 //
 model PromoCode {
-  id                 String   @id @default(cuid())
-  code               String   @unique
-  active             Boolean  @default(true)
-  validFrom          DateTime?
-  validUntil         DateTime?
-  maxRedemptions     Int      @default(1)
-  redeemedCount      Int      @default(0)
+  id             String    @id @default(cuid())
+  code           String    @unique
+  active         Boolean   @default(true)
+  validFrom      DateTime?
+  validUntil     DateTime?
+  maxRedemptions Int       @default(1)
+  redeemedCount  Int       @default(0)
 
-  grantLicense30d     Int     @default(0)
-  grantLicense365d    Int     @default(0)
-  grantDeviceSlots    Int     @default(0)
-  creditExpiresInDays Int     @default(365)
+  grantLicense30d     Int @default(0)
+  grantLicense365d    Int @default(0)
+  grantDeviceSlots    Int @default(0)
+  creditExpiresInDays Int @default(365)
 
-  partner            String?
+  partner String?
 
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  redemptions        PromoRedemption[]
+  redemptions PromoRedemption[]
 }
 
 //
@@ -860,7 +933,7 @@ model BillingOrder {
   tenantId String
   skuId    String
 
-  stripeCheckoutSessionId String @unique
+  stripeCheckoutSessionId String  @unique
   stripePaymentIntentId   String?
 
   status BillingOrderStatus @default(PENDING)
@@ -868,8 +941,8 @@ model BillingOrder {
   currency    String?
   amountCents Int?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
   paidAt    DateTime?
 
   tenant Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -939,4 +1012,26 @@ model EmailVerificationToken {
 
   @@index([userId, createdAt])
   @@index([expiresAt])
+}
+
+// Restored from DB (TP7.5) — Email audit log
+model AdminEmailLog {
+  id                      String   @id
+  createdAt               DateTime @default(now())
+  tenantId                String
+  userId                  String
+  leadId                  String
+  to                      String
+  subject                 String?
+  includePdf              Boolean  @default(false)
+  attachmentsSentCount    Int      @default(0)
+  attachmentsSkippedCount Int      @default(0)
+  attachmentsSentBytes    Int      @default(0)
+  attachmentsSkippedBytes Int      @default(0)
+  mode                    String
+  delivered               Boolean
+  errorMessage            String?
+
+  @@index([leadId])
+  @@index([tenantId, createdAt])
 }
