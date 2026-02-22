@@ -15,7 +15,7 @@ function sleep(ms: number) {
 export default function StartGate() {
   const router = useRouter();
 
-  // Use memoized Animated.Value to satisfy react-hooks/refs lint (no ref.current reads in render)
+  // Memoized Animated.Value => no ref.current access during render (eslint react-hooks/refs)
   const opacityLogo = useMemo(() => new Animated.Value(0), []);
   const scaleLogo = useMemo(() => new Animated.Value(0.96), []);
   const opacitySub = useMemo(() => new Animated.Value(0), []);
@@ -136,27 +136,10 @@ const styles = StyleSheet.create({
   bg: { flex: 1, backgroundColor: "rgba(0,0,0,0.02)" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
 
-  glowA: {
-    position: "absolute",
-    width: 340,
-    height: 340,
-    borderRadius: 340,
-    top: -190,
-    left: -160,
-    opacity: 0.10,
-  },
-  glowB: {
-    position: "absolute",
-    width: 360,
-    height: 360,
-    borderRadius: 360,
-    bottom: -210,
-    right: -180,
-    opacity: 0.06,
-  },
+  glowA: { position: "absolute", width: 340, height: 340, borderRadius: 340, top: -190, left: -160, opacity: 0.10 },
+  glowB: { position: "absolute", width: 360, height: 360, borderRadius: 360, bottom: -210, right: -180, opacity: 0.06 },
 
   logo: { width: 240, height: 72 },
-
   subtitle: { marginTop: 14, fontSize: 15, fontWeight: "800", color: "rgba(0,0,0,0.62)", textAlign: "center" },
   micro: { marginTop: 10, fontSize: 12, fontWeight: "700", color: "rgba(0,0,0,0.35)" },
 });
