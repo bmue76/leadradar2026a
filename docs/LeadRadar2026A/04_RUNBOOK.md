@@ -227,3 +227,13 @@ Tenant Scope: tenant-owned Zugriff ist immer tenantId-scoped, mismatch -> 404 (l
 Mobile Auth: x-api-key + Tenant-Resolution (z. B. x-tenant-slug) projektkonform.
 
 Observability: traceId ist Standard und gehört in Troubleshooting immer dazu.
+
+## TP 7.8 — Stripe Webhook lokal testen (wichtig)
+
+Stripe kann `localhost` nicht direkt erreichen. Lokal funktioniert der Webhook nur mit Stripe CLI Forwarding:
+
+```bash
+stripe listen --forward-to localhost:3000/api/webhooks/stripe
+# -> whsec_... als STRIPE_WEBHOOK_SECRET in .env.local setzen
+
+Danach Dev-Server neu starten (npm run dev), Checkout durchführen → checkout.session.completed muss im stripe listen Terminal erscheinen.

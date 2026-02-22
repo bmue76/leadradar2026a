@@ -206,3 +206,20 @@ Tenant-scope leak-safe geprüft (mismatch -> 404)
 Nach Deploy:
 
 smoke:all gegen Prod (nur wenn Smoke-Accounts + Policies sauber)
+
+## TP 7.8 — GoLive Smoke: Lizenzkauf + Device Onboarding
+
+1) **Stripe listen** starten (lokal):
+   - `stripe listen --forward-to localhost:3000/api/webhooks/stripe`
+   - `STRIPE_WEBHOOK_SECRET=whsec_...` setzen
+   - Dev-Server neu starten
+
+2) **Admin → Geräte**
+   - Gerät hinzufügen, Name setzen
+   - „Lizenz“ → 30D/365D kaufen → nach Checkout:
+     - Status zeigt **Aktiv** oder **Gekauft · wartet auf Aktivierung**
+
+3) **Admin → Gerät einrichten**
+   - Token erzeugen, per Mail senden (kommt an)
+   - Redeem (API) liefert ApiKey
+   - `/api/mobile/v1/license` liefert korrekt `{isActive, endsAt, type}`
