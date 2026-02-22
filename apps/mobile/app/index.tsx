@@ -1,14 +1,12 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Animated, Easing, Image, SafeAreaView, StyleSheet, Text, View } from "react-native";
+import React, { useEffect, useMemo, useState } from "react";
+import { Animated, Easing, Image as RNImage, SafeAreaView, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
-import { LinearGradient } from "expo-linear-gradient";
 
+import BRAND_LOGO from "../assets/brand/leadradar-logo.png";
 import { getStoredAuth } from "../src/lib/mobileStorage";
 import { fetchLicense, ApiError } from "../src/lib/mobileApi";
 import { ACCENT_HEX } from "../src/lib/mobileConfig";
 import CollapsibleDetails from "../src/ui/CollapsibleDetails";
-
-const BRAND_LOGO = require("../assets/brand/leadradar-logo.png");
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -17,10 +15,11 @@ function sleep(ms: number) {
 export default function StartGate() {
   const router = useRouter();
 
-  const opacityLogo = useRef(new Animated.Value(0)).current;
-  const scaleLogo = useRef(new Animated.Value(0.96)).current;
-  const opacitySub = useRef(new Animated.Value(0)).current;
-  const lift = useRef(new Animated.Value(0)).current;
+  // Use memoized Animated.Value to satisfy react-hooks/refs lint (no ref.current reads in render)
+  const opacityLogo = useMemo(() => new Animated.Value(0), []);
+  const scaleLogo = useMemo(() => new Animated.Value(0.96), []);
+  const opacitySub = useMemo(() => new Animated.Value(0), []);
+  const lift = useMemo(() => new Animated.Value(0), []);
 
   const [debugErr, setDebugErr] = useState<ApiError | null>(null);
   const [debugMsg, setDebugMsg] = useState<string>("");
@@ -30,7 +29,6 @@ export default function StartGate() {
   useEffect(() => {
     const t0 = Date.now();
 
-    // Motion: 0–200ms quiet, 200–900ms logo fade+scale, 900–1200ms subtitle
     Animated.sequence([
       Animated.delay(200),
       Animated.parallel([
@@ -41,6 +39,11 @@ export default function StartGate() {
     ]).start();
 
     let routed = false;
+
+    const ensureMin = async () => {
+      const dt = Date.now() - t0;
+      if (dt < 1200) await sleep(1200 - dt);
+    };
 
     const routeNow = async (path: string) => {
       if (routed) return;
@@ -55,19 +58,12 @@ export default function StartGate() {
       try {
         const auth = await getStoredAuth();
 
-        // Always ensure min duration ~1.2s
-        const ensureMin = async () => {
-          const dt = Date.now() - t0;
-          if (dt < 1200) await sleep(1200 - dt);
-        };
-
         if (!auth.apiKey) {
           await ensureMin();
           await routeNow("/provision");
           return;
         }
 
-        // License check, but cap splash at 1.8s
         const checkPromise = fetchLicense({ apiKey: auth.apiKey, tenantSlug: auth.tenantSlug });
 
         const maxSplash = 1800;
@@ -95,10 +91,7 @@ export default function StartGate() {
         const err = e as ApiError;
         setDebugErr(err);
         setDebugMsg(err?.message || "Verbindung fehlgeschlagen.");
-
-        const dt = Date.now() - t0;
-        if (dt < 1200) await sleep(1200 - dt);
-
+        await ensureMin();
         await routeNow("/license");
       }
     })();
@@ -106,19 +99,17 @@ export default function StartGate() {
     return () => {
       routed = true;
     };
-  }, [router, lift, opacityLogo, scaleLogo, opacitySub]);
+  }, [router, lift, opacityLogo, opacitySub, scaleLogo]);
 
   return (
     <SafeAreaView style={styles.safe}>
-      <LinearGradient
-        colors={["rgba(0,0,0,0.02)", "rgba(255,255,255,1)"]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0, y: 1 }}
-        style={styles.bg}
-      >
+      <View style={styles.bg}>
+        <View pointerEvents="none" style={[styles.glowA, { backgroundColor: ACCENT_HEX }]} />
+        <View pointerEvents="none" style={[styles.glowB, { backgroundColor: ACCENT_HEX }]} />
+
         <Animated.View style={[styles.center, { transform: [{ translateY: lift }] }]}>
           <Animated.View style={{ opacity: opacityLogo, transform: [{ scale: scaleLogo }] }}>
-            <Image source={BRAND_LOGO} style={styles.logo} resizeMode="contain" />
+            <RNImage source={BRAND_LOGO} style={styles.logo} resizeMode="contain" accessibilityLabel="LeadRadar" />
           </Animated.View>
 
           <Animated.Text style={[styles.subtitle, { opacity: opacitySub }]}>{subtitle}</Animated.Text>
@@ -135,17 +126,35 @@ export default function StartGate() {
             ]}
           />
         </Animated.View>
-      </LinearGradient>
+      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#fff" },
-  bg: { flex: 1 },
+  bg: { flex: 1, backgroundColor: "rgba(0,0,0,0.02)" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
 
-  // Wordmark feels more enterprise than app icon
+  glowA: {
+    position: "absolute",
+    width: 340,
+    height: 340,
+    borderRadius: 340,
+    top: -190,
+    left: -160,
+    opacity: 0.10,
+  },
+  glowB: {
+    position: "absolute",
+    width: 360,
+    height: 360,
+    borderRadius: 360,
+    bottom: -210,
+    right: -180,
+    opacity: 0.06,
+  },
+
   logo: { width: 240, height: 72 },
 
   subtitle: { marginTop: 14, fontSize: 15, fontWeight: "800", color: "rgba(0,0,0,0.62)", textAlign: "center" },

@@ -1,286 +1,260 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { router } from "expo-router";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { StatusBar } from "expo-status-bar";
+import React, { useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, Alert, Linking as RNLinking, Pressable, SafeAreaView, StyleSheet, Text, View } from "react-native";
+import { useRouter } from "expo-router";
 
-import { apiFetch } from "../src/lib/api";
-import { getApiKey } from "../src/lib/auth";
-import { AppHeader } from "../src/ui/AppHeader";
-import { PoweredBy } from "../src/ui/PoweredBy";
-import { UI } from "../src/ui/tokens";
-import { useBranding } from "../src/features/branding/useBranding";
+import { ACCENT_HEX, ADMIN_URL, API_BASE_URL } from "../src/lib/mobileConfig";
+import { getStoredAuth, clearStoredAuth } from "../src/lib/mobileStorage";
+import { fetchLicense, ApiError, LicenseResponse } from "../src/lib/mobileApi";
+import CollapsibleDetails from "../src/ui/CollapsibleDetails";
 
-type JsonObject = Record<string, unknown>;
-
-type ApiErrorShape = {
-  code?: unknown;
-  message?: unknown;
-  details?: unknown;
-};
-
-type ApiRespShape =
-  | { ok: true; data?: unknown; traceId?: unknown }
-  | { ok: false; error?: ApiErrorShape; traceId?: unknown; status?: unknown; message?: unknown };
-
-function isObject(v: unknown): v is JsonObject {
-  return typeof v === "object" && v !== null;
+function formatEndsAt(iso?: string | null) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("de-CH", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+function isPast(iso?: string | null) {
+  if (!iso) return false;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return false;
+  return d.getTime() < Date.now();
+}
+function isPending(lic: LicenseResponse) {
+  const t = (lic.type || "").toLowerCase();
+  return t.includes("pending") || (!lic.isActive && !!lic.endsAt && !isPast(lic.endsAt));
+}
+function maskKey(k?: string | null) {
+  if (!k) return undefined;
+  const s = k.trim();
+  if (s.length <= 8) return "****";
+  return `${s.slice(0, 4)}…${s.slice(-4)}`;
 }
 
-function isApiResp(v: unknown): v is ApiRespShape {
-  return isObject(v) && typeof v.ok === "boolean";
-}
+type UiState =
+  | { kind: "checking" }
+  | { kind: "blocked"; license: LicenseResponse }
+  | { kind: "error"; error: ApiError }
+  | { kind: "noauth" };
 
-function readBool(v: unknown): boolean | null {
-  return typeof v === "boolean" ? v : null;
-}
+export default function LicenseGateScreen() {
+  const router = useRouter();
 
-function readString(v: unknown): string | null {
-  return typeof v === "string" ? v : null;
-}
+  const [auth, setAuth] = useState<{ tenantSlug: string | null; deviceId: string | null; apiKey: string | null } | null>(null);
+  const [state, setState] = useState<UiState>({ kind: "checking" });
 
-function extractErr(res: ApiRespShape): { status: number; code: string; message: string; traceId: string } {
-  const traceId = typeof res.traceId === "string" ? res.traceId : "";
-  const status = typeof (res as { status?: unknown }).status === "number" ? ((res as { status: number }).status) : 0;
-
-  const err = (res as { error?: ApiErrorShape }).error;
-  const code = err && typeof err.code === "string" ? err.code : "";
-  const msgFromErr = err && typeof err.message === "string" ? err.message : "";
-  const msgTop = typeof (res as { message?: unknown }).message === "string" ? (res as { message: string }).message : "";
-
-  return { status, code, message: msgFromErr || msgTop || "Request failed", traceId };
-}
-
-type StatusData = {
-  isActive: boolean;
-  validUntil: string | null;
-};
-
-function parseStatusData(v: unknown): StatusData | null {
-  if (!isObject(v)) return null;
-  const isActive = readBool(v.isActive);
-  const validUntil = readString(v.validUntil);
-  if (isActive === null) return null;
-  return { isActive, validUntil };
-}
-
-export default function LicenseScreen() {
-  const insets = useSafeAreaInsets();
-  const { state: brandingState, branding } = useBranding();
-
-  const tenantName = brandingState.kind === "ready" ? branding.tenantName : null;
-  const logoDataUrl = brandingState.kind === "ready" ? branding.logoDataUrl : null;
-
-  const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState<StatusData | null>(null);
-  const [code, setCode] = useState("");
-  const [errorText, setErrorText] = useState("");
-
-  const padBottom = useMemo(() => UI.tabBarBaseHeight + Math.max(insets.bottom, 0) + 28, [insets.bottom]);
-
-  const loadStatus = useCallback(async () => {
-    setErrorText("");
-    setBusy(true);
+  async function check() {
     try {
-      const apiKey = await getApiKey();
-      if (!apiKey) {
-        router.replace("/provision");
+      setState({ kind: "checking" });
+      const a = await getStoredAuth();
+      setAuth(a);
+
+      if (!a.apiKey) {
+        setState({ kind: "noauth" });
         return;
       }
 
-      const raw = await apiFetch({
-        method: "GET",
-        path: "/api/mobile/v1/billing/status",
-        apiKey,
-      });
-
-      if (!isApiResp(raw)) {
-        setErrorText("Ungültige API-Antwort (Shape).");
-        setStatus(null);
+      const lic = await fetchLicense({ apiKey: a.apiKey, tenantSlug: a.tenantSlug });
+      if (lic.isActive) {
+        router.replace("/stats");
         return;
       }
-
-      if (!raw.ok) {
-        const { status: httpStatus, message, traceId } = extractErr(raw);
-        setErrorText(`HTTP ${httpStatus || "?"} — ${message}${traceId ? ` (traceId: ${traceId})` : ""}`);
-        setStatus(null);
-        return;
-      }
-
-      const parsed = parseStatusData(raw.data);
-      if (!parsed) {
-        setErrorText("Ungültige Status-Antwort (Data).");
-        setStatus(null);
-        return;
-      }
-
-      setStatus(parsed);
-
-      // Already active → back to capture
-      if (parsed.isActive) {
-        router.replace("/forms");
-      }
-    } finally {
-      setBusy(false);
+      setState({ kind: "blocked", license: lic });
+    } catch (e) {
+      setState({ kind: "error", error: e as ApiError });
     }
-  }, []);
+  }
 
   useEffect(() => {
-    void loadStatus();
-  }, [loadStatus]);
+    void check();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const redeem = useCallback(async () => {
-    setErrorText("");
-    setBusy(true);
-    try {
-      const apiKey = await getApiKey();
-      if (!apiKey) {
-        router.replace("/provision");
-        return;
-      }
-
-      const trimmed = code.trim();
-      if (!trimmed) {
-        setErrorText("Bitte Gutscheincode eingeben.");
-        return;
-      }
-
-      const raw = await apiFetch({
-        method: "POST",
-        path: "/api/mobile/v1/billing/redeem-and-activate",
-        apiKey,
-        body: { code: trimmed },
-      });
-
-      if (!isApiResp(raw)) {
-        setErrorText("Ungültige API-Antwort (Shape).");
-        return;
-      }
-
-      if (!raw.ok) {
-        const { status: httpStatus, message, traceId } = extractErr(raw);
-        setErrorText(`HTTP ${httpStatus || "?"} — ${message}${traceId ? ` (traceId: ${traceId})` : ""}`);
-        return;
-      }
-
-      const parsed = parseStatusData(raw.data);
-      if (!parsed) {
-        setErrorText("Ungültige Aktivierungs-Antwort (Data).");
-        return;
-      }
-
-      setStatus(parsed);
-
-      if (parsed.isActive) {
-        router.replace("/forms");
-      }
-    } finally {
-      setBusy(false);
+  const headline = useMemo(() => {
+    if (state.kind === "noauth") return { title: "Gerät aktivieren", sub: "Dieses Gerät ist noch nicht verbunden." };
+    if (state.kind === "error") return { title: "Verbindung fehlgeschlagen", sub: "Lizenzstatus konnte nicht geprüft werden." };
+    if (state.kind === "blocked") {
+      const lic = state.license;
+      if (lic.endsAt && isPast(lic.endsAt)) return { title: "Abgelaufen", sub: "Diese Lizenz ist nicht mehr gültig." };
+      if (isPending(lic)) return { title: "Wartet auf Aktivierung", sub: "Der erste Check kann die Aktivierung starten. Bitte erneut prüfen." };
+      return { title: "Lizenz erforderlich", sub: "Für dieses Gerät ist keine aktive Lizenz verfügbar." };
     }
-  }, [code]);
+    return { title: "Prüfe Lizenz…", sub: "Bitte kurz warten." };
+  }, [state]);
+
+  async function onBuy() {
+    if (ADMIN_URL) {
+      try {
+        await RNLinking.openURL(ADMIN_URL);
+      } catch {
+        Alert.alert("Admin öffnen", "Konnte Admin-URL nicht öffnen.");
+      }
+      return;
+    }
+    Alert.alert("Lizenz kaufen", "Bitte im Admin unter Geräte/Lizenzen eine Lizenz zuweisen. Danach hier erneut prüfen.");
+  }
+
+  async function onDisconnect() {
+    Alert.alert("Gerät trennen", "Willst du die Verbindung (apiKey) löschen?", [
+      { text: "Abbrechen", style: "cancel" },
+      {
+        text: "Trennen",
+        style: "destructive",
+        onPress: async () => {
+          await clearStoredAuth();
+          router.replace("/provision");
+        },
+      },
+    ]);
+  }
+
+  const metaLines = useMemo((): Array<[string, string]> => {
+    if (state.kind !== "blocked") return [];
+    const lic = state.license;
+    return [
+      ["Status", lic.isActive ? "Aktiv" : isPending(lic) ? "Pending" : "Inaktiv"],
+      ["Typ", lic.type || "—"],
+      ["Gültig bis", formatEndsAt(lic.endsAt)],
+    ];
+  }, [state]);
+
+  const errLines = useMemo((): Array<[string, string | undefined | null]> => {
+    if (state.kind !== "error") return [];
+    const e = state.error;
+    return [
+      ["Message", e.message],
+      ["Error Code", e.code],
+      ["HTTP Status", e.status ? String(e.status) : undefined],
+      ["TraceId", e.traceId || undefined],
+    ];
+  }, [state]);
+
+  const detailsLines = useMemo((): Array<[string, string | undefined | null]> => {
+    const base: Array<[string, string | undefined | null]> = [
+      ["API Base URL", API_BASE_URL || "(nicht gesetzt)"],
+      ["Admin URL", ADMIN_URL || "(nicht gesetzt)"],
+      ["Tenant", auth?.tenantSlug || undefined],
+      ["DeviceId", auth?.deviceId || undefined],
+      ["API Key", maskKey(auth?.apiKey)],
+    ];
+    return base.concat(errLines);
+  }, [auth?.apiKey, auth?.deviceId, auth?.tenantSlug, errLines]);
+
+  const primaryLabel = state.kind === "noauth" ? "Jetzt verbinden" : "Erneut prüfen";
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      <StatusBar style="dark" backgroundColor={UI.bg} />
-      <AppHeader title="Lizenz" tenantName={tenantName} logoDataUrl={logoDataUrl} />
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.page}>
+        <Text style={styles.h1}>{headline.title}</Text>
+        <Text style={styles.help}>{headline.sub}</Text>
 
-      <View style={[styles.body, { paddingBottom: padBottom }]}>
-        <View style={styles.warnCard}>
-          <Text style={styles.warnTitle}>Lizenz abgelaufen</Text>
-          <Text style={styles.warnText}>
-            Deine Messe-Lizenz ist abgelaufen. Bitte verlängern, damit du wieder Leads erfassen kannst.
-          </Text>
+        <View style={styles.hero}>
+          <View pointerEvents="none" style={[styles.glowA, { backgroundColor: ACCENT_HEX }]} />
+          <View pointerEvents="none" style={[styles.glowB, { backgroundColor: ACCENT_HEX }]} />
 
-          <View style={styles.statusRow}>
-            <Text style={styles.statusLabel}>Gültig bis</Text>
-            <Text style={styles.statusValue}>{status?.validUntil ? status.validUntil : "—"}</Text>
+          <View style={styles.heroTop}>
+            <View style={styles.badge}>
+              <Text style={[styles.badgeText, { color: ACCENT_HEX }]}>
+                {state.kind === "checking" ? "CHECK" : state.kind === "error" ? "ERROR" : state.kind === "noauth" ? "ONBOARD" : "BLOCKED"}
+              </Text>
+            </View>
+
+            <View style={{ alignItems: "flex-end" }}>
+              <Text style={styles.metaMini}>{auth?.tenantSlug ? `Tenant: ${auth.tenantSlug}` : "Tenant: —"}</Text>
+              <Text style={styles.metaMini}>{auth?.deviceId ? `Device: ${auth.deviceId}` : "Device: —"}</Text>
+            </View>
+          </View>
+
+          <View style={{ marginTop: 10 }}>
+            {state.kind === "checking" ? (
+              <View style={styles.loadingRow}>
+                <ActivityIndicator size="small" color={ACCENT_HEX} />
+                <Text style={styles.loadingText}>Lizenzstatus wird geprüft…</Text>
+              </View>
+            ) : null}
+
+            {metaLines.length > 0 ? (
+              <View style={{ marginTop: 6 }}>
+                {metaLines.map(([k, v]) => (
+                  <View key={k} style={styles.row}>
+                    <Text style={styles.k}>{k}</Text>
+                    <Text style={styles.v}>{v}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
           </View>
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.h2}>Gutscheincode</Text>
-          <Text style={styles.p}>Gib den Code ein und aktiviere die Verlängerung direkt in der App.</Text>
+        <View style={{ marginTop: 18 }}>
+          <Pressable
+            style={[styles.btnPrimary, { backgroundColor: ACCENT_HEX }]}
+            onPress={async () => {
+              if (state.kind === "noauth") router.replace("/provision");
+              else await check();
+            }}
+          >
+            <Text style={styles.btnPrimaryText}>{primaryLabel}</Text>
+          </Pressable>
 
-          <TextInput
-            value={code}
-            onChangeText={setCode}
-            placeholder="z.B. LR-ABC123"
-            placeholderTextColor="rgba(15,23,42,0.35)"
-            autoCapitalize="characters"
-            autoCorrect={false}
-            style={styles.input}
-          />
+          <Pressable style={styles.btnSecondary} onPress={onBuy}>
+            <Text style={[styles.btnSecondaryText, { color: ACCENT_HEX }]}>Lizenz kaufen</Text>
+            <Text style={styles.btnSecondarySub}>{ADMIN_URL ? "öffnet Admin" : "im Admin → Geräte/Lizenzen"}</Text>
+          </Pressable>
 
-          {errorText ? <Text style={styles.errText}>{errorText}</Text> : null}
+          <Pressable style={styles.btnGhost} onPress={onDisconnect}>
+            <Text style={styles.btnGhostText}>Gerät trennen</Text>
+          </Pressable>
 
-          <View style={styles.row}>
-            <Pressable onPress={loadStatus} disabled={busy} style={[styles.btn, styles.btnGhost, busy ? styles.btnDisabled : null]}>
-              <Text style={styles.btnGhostText}>Aktualisieren</Text>
-            </Pressable>
-
-            <Pressable onPress={redeem} disabled={busy} style={[styles.btn, styles.btnAccent, busy ? styles.btnDisabled : null]}>
-              <Text style={styles.btnAccentText}>Aktivieren</Text>
-            </Pressable>
-          </View>
+          <CollapsibleDetails title="Details anzeigen" lines={detailsLines} />
         </View>
-
-        <PoweredBy />
       </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: UI.bg },
+  safe: { flex: 1, backgroundColor: "#fff" },
+  page: { flex: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 24 },
 
-  body: { paddingHorizontal: UI.padX, paddingTop: 14, gap: 12 },
+  h1: { fontSize: 30, fontWeight: "900", letterSpacing: -0.2, color: "rgba(0,0,0,0.9)" },
+  help: { marginTop: 8, fontSize: 15, lineHeight: 21, color: "rgba(0,0,0,0.62)" },
 
-  warnCard: {
-    borderRadius: 16,
-    padding: 14,
+  hero: {
+    marginTop: 16,
+    borderRadius: 28,
+    padding: 16,
     borderWidth: 1,
-    borderColor: "rgba(220,38,38,0.25)",
-    backgroundColor: "rgba(220,38,38,0.06)",
+    borderColor: "rgba(0,0,0,0.06)",
+    backgroundColor: "rgba(255,255,255,0.92)",
+    shadowColor: "#000",
+    shadowOpacity: 0.10,
+    shadowRadius: 28,
+    shadowOffset: { width: 0, height: 14 },
+    elevation: 5,
+    overflow: "hidden",
   },
-  warnTitle: { fontWeight: "900", color: "rgba(153,27,27,0.95)" },
-  warnText: { marginTop: 6, color: "rgba(153,27,27,0.95)" },
+  glowA: { position: "absolute", width: 320, height: 320, borderRadius: 320, top: -190, left: -170, opacity: 0.10 },
+  glowB: { position: "absolute", width: 360, height: 360, borderRadius: 360, bottom: -240, right: -240, opacity: 0.06 },
 
-  statusRow: { marginTop: 12, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  statusLabel: { opacity: 0.8, color: "rgba(153,27,27,0.95)" },
-  statusValue: { fontWeight: "900", color: "rgba(153,27,27,0.95)" },
+  heroTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  badge: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1, borderColor: "rgba(0,0,0,0.08)", backgroundColor: "rgba(255,255,255,0.9)" },
+  badgeText: { fontSize: 12, fontWeight: "900" },
+  metaMini: { fontSize: 12, fontWeight: "800", color: "rgba(0,0,0,0.48)" },
 
-  card: {
-    backgroundColor: UI.bg,
-    borderRadius: 16,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: UI.border,
-  },
+  loadingRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 6 },
+  loadingText: { fontSize: 14, fontWeight: "800", color: "rgba(0,0,0,0.58)" },
 
-  h2: { fontWeight: "900", color: UI.text },
-  p: { marginTop: 6, opacity: 0.75, color: UI.text },
+  row: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 7 },
+  k: { fontSize: 13, fontWeight: "900", color: "rgba(0,0,0,0.55)" },
+  v: { fontSize: 13, fontWeight: "900", color: "rgba(0,0,0,0.85)" },
 
-  input: {
-    marginTop: 10,
-    borderWidth: 1,
-    borderColor: UI.border,
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    color: UI.text,
-    backgroundColor: "rgba(255,255,255,0.75)",
-  },
+  btnPrimary: { height: 56, borderRadius: 18, alignItems: "center", justifyContent: "center" },
+  btnPrimaryText: { color: "#fff", fontSize: 16, fontWeight: "900" },
 
-  errText: { marginTop: 10, color: "rgba(153,27,27,0.95)", fontWeight: "700" },
+  btnSecondary: { marginTop: 12, borderRadius: 18, paddingVertical: 14, paddingHorizontal: 16, backgroundColor: "rgba(0,0,0,0.045)", borderWidth: 1, borderColor: "rgba(0,0,0,0.06)" },
+  btnSecondaryText: { fontSize: 16, fontWeight: "900" },
+  btnSecondarySub: { marginTop: 4, fontSize: 12, fontWeight: "800", color: "rgba(0,0,0,0.45)" },
 
-  row: { flexDirection: "row", gap: 10, marginTop: 12 },
-
-  btn: { flex: 1, paddingVertical: 12, borderRadius: 14, alignItems: "center" },
-  btnAccent: { backgroundColor: UI.accent },
-  btnAccentText: { color: "white", fontWeight: "900" },
-
-  btnGhost: { backgroundColor: "rgba(15,23,42,0.06)" },
-  btnGhostText: { color: UI.text, fontWeight: "900" },
-
-  btnDisabled: { opacity: 0.6 },
+  btnGhost: { marginTop: 10, height: 44, borderRadius: 14, alignItems: "center", justifyContent: "center" },
+  btnGhostText: { fontSize: 14, fontWeight: "900", color: "rgba(0,0,0,0.48)" },
 });

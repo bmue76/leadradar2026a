@@ -1,233 +1,265 @@
-import React, { useState } from "react";
-import { Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { router, useLocalSearchParams } from "expo-router";
+import React, { useEffect, useMemo, useState } from "react";
+import { Alert, KeyboardAvoidingView, Platform, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { StatusBar } from "expo-status-bar";
+import * as Linking from "expo-linking";
 
-import { apiFetch } from "../src/lib/api";
-import { clearApiKey, setApiKey } from "../src/lib/auth";
-import { parseProvisionToken } from "../src/lib/tokenParse";
-import { PoweredBy } from "../src/ui/PoweredBy";
-import { UI } from "../src/ui/tokens";
+import SegmentedControl from "../src/ui/SegmentedControl";
+import CollapsibleDetails from "../src/ui/CollapsibleDetails";
+import { ACCENT_HEX, ADMIN_URL } from "../src/lib/mobileConfig";
+import { redeemProvisioning, fetchLicense, ApiError } from "../src/lib/mobileApi";
+import { setStoredAuth } from "../src/lib/mobileStorage";
 
-type Mode = "scan" | "manual";
+type TabKey = "qr" | "code";
 
-function mapError(code?: string, status?: number): string {
-  if (code === "INVALID_PROVISION_TOKEN") return "Token ungültig/abgelaufen/verwendet.";
-  if (status === 401) return "Nicht autorisiert (Token ungültig).";
-  if (status === 429) return "Zu viele Versuche – bitte kurz warten.";
-  return "Aktivierung fehlgeschlagen.";
+function normalizeTenant(v: string) {
+  return v.trim().toLowerCase();
+}
+function normalizeCode(v: string) {
+  return v.replace(/\s+/g, "").trim().toUpperCase();
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
+function parseProvisionPayload(payload: string): { tenant?: string; code?: string } | null {
+  try {
+    const parsed = Linking.parse(payload);
+    const qp = (parsed.queryParams ?? {}) as Record<string, unknown>;
+    const tenant = typeof qp.tenant === "string" ? qp.tenant : undefined;
+    const code = typeof qp.code === "string" ? qp.code : undefined;
+    if (!tenant && !code) return null;
+    return { tenant, code };
+  } catch {
+    return null;
+  }
 }
 
-function getStringProp(obj: Record<string, unknown>, key: string): string | undefined {
-  const v = obj[key];
-  return typeof v === "string" ? v : undefined;
-}
+export default function ProvisionScreen() {
+  const router = useRouter();
+  const params = useLocalSearchParams();
 
-function getNumberProp(obj: Record<string, unknown>, key: string): number | undefined {
-  const v = obj[key];
-  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
-}
+  const [tab, setTab] = useState<TabKey>("qr");
+  const segments = useMemo(
+    () => [
+      { key: "qr" as const, label: "QR scannen" },
+      { key: "code" as const, label: "Code eingeben" },
+    ],
+    []
+  );
 
-function getRecordProp(obj: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
-  const v = obj[key];
-  return isRecord(v) ? v : undefined;
-}
-
-function pickErrCode(obj: Record<string, unknown>): string | undefined {
-  // shape A: { ok:false, code, message, ... }
-  const direct = getStringProp(obj, "code");
-  if (direct) return direct;
-
-  // shape B: { ok:false, error:{ code, message, ... } }
-  const err = getRecordProp(obj, "error");
-  const nested = err ? getStringProp(err, "code") : undefined;
-  return nested;
-}
-
-function pickStatus(obj: Record<string, unknown>): number | undefined {
-  return getNumberProp(obj, "status");
-}
-
-function pickTraceId(obj: Record<string, unknown>): string {
-  return getStringProp(obj, "traceId") ?? "";
-}
-
-export default function Provision() {
-  const params = useLocalSearchParams<{ token?: string }>();
-  const [mode, setMode] = useState<Mode>("scan");
-  const [tokenInput, setTokenInput] = useState<string>(params.token ?? "");
-  const [busy, setBusy] = useState(false);
-  const [errorText, setErrorText] = useState<string | null>(null);
+  const [tenantSlug, setTenantSlug] = useState("");
+  const [code, setCode] = useState("");
 
   const [perm, requestPerm] = useCameraPermissions();
+  const [busy, setBusy] = useState(false);
+  const [statusLine, setStatusLine] = useState<string | null>(null);
+  const [lastError, setLastError] = useState<ApiError | null>(null);
+  const [debounceScan, setDebounceScan] = useState(false);
 
-  async function claimToken(raw: string) {
-    const parsed = parseProvisionToken ? parseProvisionToken(raw) : raw.trim();
-    const token = (parsed ?? "").trim();
-    if (!token) {
-      setErrorText("Token fehlt.");
-      return;
+  useEffect(() => {
+    const t = typeof params.tenant === "string" ? params.tenant : "";
+    const c = typeof params.code === "string" ? params.code : "";
+    if (t) setTenantSlug(normalizeTenant(t));
+    if (c) setCode(normalizeCode(c));
+    if (t || c) {
+      setTab("code");
+      setStatusLine("Link erkannt – bereit zum Verbinden.");
     }
+  }, [params.tenant, params.code]);
 
-    setBusy(true);
-    setErrorText(null);
+  const canConnect = normalizeTenant(tenantSlug).length > 0 && normalizeCode(code).length >= 6;
 
+  async function onConnect() {
     try {
-      await clearApiKey();
+      setBusy(true);
+      setLastError(null);
+      setStatusLine("Gerät wird verbunden…");
 
-      const res = await apiFetch({
-        method: "POST",
-        path: "/api/mobile/v1/provision/claim",
-        body: { token, deviceName: Platform.OS === "android" ? "Android Device" : "iOS Device" },
-        apiKey: null,
-      });
+      const t = normalizeTenant(tenantSlug);
+      const c = normalizeCode(code);
 
-      if (!isRecord(res)) {
-        setErrorText("Invalid API response shape");
-        return;
-      }
+      const redeemed = await redeemProvisioning(t, c);
 
-      const okVal = res["ok"];
-      if (typeof okVal !== "boolean") {
-        setErrorText("Invalid API response shape");
-        return;
-      }
+      setStatusLine("Gerät verbunden – Lizenzstatus wird geprüft…");
+      await setStoredAuth({ tenantSlug: redeemed.tenantSlug, apiKey: redeemed.apiKey, deviceId: redeemed.deviceId });
 
-      if (okVal !== true) {
-        const code = pickErrCode(res);
-        const status = pickStatus(res);
-        const traceId = pickTraceId(res);
-        setErrorText(`${mapError(code, status)}${traceId ? ` (traceId: ${traceId})` : ""}`);
-        return;
-      }
+      const lic = await fetchLicense({ apiKey: redeemed.apiKey, tenantSlug: redeemed.tenantSlug });
 
-      const data = getRecordProp(res, "data");
-      const tokenValue = data ? (getStringProp(data, "token") ?? "").trim() : "";
-
-      if (!tokenValue) {
-        const traceId = pickTraceId(res);
-        setErrorText(`Aktivierung fehlgeschlagen: apiKey fehlt in Response.${traceId ? ` (traceId: ${traceId})` : ""}`);
-        return;
-      }
-
-      await setApiKey(tokenValue);
-      router.replace("/");
+      if (lic.isActive) router.replace("/stats");
+      else router.replace("/license");
+    } catch (e) {
+      const err = e as ApiError;
+      setLastError(err);
+      setStatusLine(err.message || "Fehler beim Verbinden.");
+      Alert.alert("Verbindung fehlgeschlagen", err.message || "Bitte prüfen und erneut versuchen.");
     } finally {
       setBusy(false);
     }
   }
 
-  const canScan = mode === "scan";
-
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      <StatusBar style="dark" backgroundColor={UI.bg} />
+    <SafeAreaView style={styles.safe}>
+      <KeyboardAvoidingView style={styles.safe} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <View style={styles.page}>
+          <Text style={styles.h1}>Gerät verbinden</Text>
+          <Text style={styles.help}>QR scannen oder Kurzcode eingeben. Danach wird der Lizenzstatus geprüft.</Text>
 
-      <View style={styles.page}>
-        <Text style={styles.title}>Gerät aktivieren</Text>
-        <Text style={styles.sub}>Scanne den QR-Code oder füge den Token manuell ein.</Text>
+          <View style={styles.card}>
+            <View pointerEvents="none" style={[styles.glowA, { backgroundColor: ACCENT_HEX }]} />
+            <View pointerEvents="none" style={[styles.glowB, { backgroundColor: ACCENT_HEX }]} />
 
-        <View style={styles.modeRow}>
-          <Pressable onPress={() => setMode("scan")} style={[styles.modeBtn, mode === "scan" ? styles.modeBtnActive : styles.modeBtnIdle]}>
-            <Text style={[styles.modeText, mode === "scan" ? styles.modeTextActive : styles.modeTextIdle]}>QR Scan</Text>
-          </Pressable>
+            <View style={styles.topRow}>
+              <Text style={styles.mini}>{ADMIN_URL ? "Admin → Geräte/Lizenzen" : "Admin: Geräte/Lizenzen"}</Text>
+              <View style={styles.badge}>
+                <Text style={[styles.badgeText, { color: ACCENT_HEX }]}>{tab === "qr" ? "SCAN" : "CODE"}</Text>
+              </View>
+            </View>
 
-          <Pressable onPress={() => setMode("manual")} style={[styles.modeBtn, mode === "manual" ? styles.modeBtnActive : styles.modeBtnIdle]}>
-            <Text style={[styles.modeText, mode === "manual" ? styles.modeTextActive : styles.modeTextIdle]}>Manuell</Text>
-          </Pressable>
-        </View>
+            <SegmentedControl value={tab} segments={segments} onChange={setTab} />
 
-        {canScan ? (
-          <View style={styles.cameraWrap}>
-            {perm?.granted ? (
-              <CameraView
-                style={{ flex: 1 }}
-                onBarcodeScanned={(ev) => {
-                  if (busy) return;
-                  const raw = (ev.data ?? "").toString();
-                  void claimToken(raw);
-                }}
-              />
+            {tab === "qr" ? (
+              <View style={{ marginTop: 14 }}>
+                {!perm?.granted ? (
+                  <View style={styles.qrFallback}>
+                    <Text style={styles.qrTitle}>Kamera-Zugriff erforderlich</Text>
+                    <Text style={styles.qrText}>Erlaube Kamera-Zugriff, um den QR-Code zu scannen.</Text>
+                    <Pressable style={[styles.btnPrimary, { backgroundColor: ACCENT_HEX }]} onPress={requestPerm}>
+                      <Text style={styles.btnPrimaryText}>Kamera erlauben</Text>
+                    </Pressable>
+                    <Pressable style={styles.btnGhost} onPress={() => setTab("code")}>
+                      <Text style={[styles.btnGhostText, { color: ACCENT_HEX }]}>Code eingeben</Text>
+                    </Pressable>
+                  </View>
+                ) : (
+                  <View style={styles.cameraCard}>
+                    <CameraView
+                      style={StyleSheet.absoluteFill}
+                      barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
+                      onBarcodeScanned={(ev) => {
+                        if (debounceScan) return;
+                        setDebounceScan(true);
+                        setTimeout(() => setDebounceScan(false), 900);
+
+                        const parsed = parseProvisionPayload(ev.data || "");
+                        if (!parsed) {
+                          setStatusLine("QR erkannt, aber kein Provision-Payload.");
+                          return;
+                        }
+                        if (parsed.tenant) setTenantSlug(normalizeTenant(parsed.tenant));
+                        if (parsed.code) setCode(normalizeCode(parsed.code));
+                        setTab("code");
+                        setStatusLine("QR erkannt – bereit zum Verbinden.");
+                      }}
+                    />
+                    <View style={styles.overlay}>
+                      <View style={styles.frame} />
+                      <Text style={styles.overlayText}>QR-Code in den Rahmen halten</Text>
+                    </View>
+                  </View>
+                )}
+              </View>
             ) : (
-              <View style={styles.center}>
-                <Text style={{ fontWeight: "900", color: UI.text }}>Kamera-Berechtigung benötigt</Text>
+              <View style={{ marginTop: 14 }}>
+                <Text style={styles.label}>Tenant</Text>
+                <TextInput
+                  value={tenantSlug}
+                  onChangeText={(v) => setTenantSlug(normalizeTenant(v))}
+                  placeholder="z.B. atlex"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  style={styles.input}
+                  editable={!busy}
+                />
+
+                <Text style={[styles.label, { marginTop: 12 }]}>Kurzcode</Text>
+                <TextInput
+                  value={code}
+                  onChangeText={(v) => setCode(normalizeCode(v))}
+                  placeholder="z.B. MVVJJ6GQ78"
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  style={styles.input}
+                  editable={!busy}
+                />
+
                 <Pressable
-                  onPress={async () => {
-                    const r = await requestPerm();
-                    if (!r.granted) Alert.alert("Hinweis", "Bitte Kamera-Berechtigung aktivieren.");
-                  }}
-                  style={[styles.btn, styles.btnDark]}
+                  style={[styles.btnPrimary, { backgroundColor: canConnect && !busy ? ACCENT_HEX : "rgba(0,122,255,0.35)" }]}
+                  onPress={onConnect}
+                  disabled={!canConnect || busy}
                 >
-                  <Text style={styles.btnText}>Berechtigung anfragen</Text>
+                  <Text style={styles.btnPrimaryText}>{busy ? "Verbinde…" : "Verbinden"}</Text>
                 </Pressable>
+
+                <Text style={styles.statusLine}>{statusLine || " "}</Text>
+
+                <CollapsibleDetails
+                  title="Details anzeigen"
+                  lines={[
+                    ["TraceId", lastError?.traceId],
+                    ["Error Code", lastError?.code],
+                    ["HTTP Status", lastError?.status ? String(lastError.status) : undefined],
+                  ]}
+                />
               </View>
             )}
           </View>
-        ) : (
-          <View style={{ gap: 10 }}>
-            <Text style={{ fontWeight: "900", color: UI.text }}>Provision Token</Text>
-            <TextInput
-              value={tokenInput}
-              onChangeText={setTokenInput}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="lrp_…"
-              style={styles.input}
-            />
-
-            <Pressable disabled={busy} onPress={() => void claimToken(tokenInput)} style={[styles.btn, styles.btnDark, busy && { opacity: 0.6 }]}>
-              <Text style={styles.btnText}>{busy ? "Aktiviere…" : "Aktivieren"}</Text>
-            </Pressable>
-          </View>
-        )}
-
-        {errorText ? <Text style={styles.error}>{errorText}</Text> : null}
-
-        <View style={{ marginTop: 14 }}>
-          <PoweredBy />
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: UI.bg },
-  page: { flex: 1, paddingHorizontal: UI.padX, paddingTop: 14, gap: 12 },
+  safe: { flex: 1, backgroundColor: "#fff" },
+  page: { flex: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 24 },
+  h1: { fontSize: 28, fontWeight: "900", letterSpacing: -0.2, color: "rgba(0,0,0,0.9)" },
+  help: { marginTop: 8, fontSize: 15, lineHeight: 21, color: "rgba(0,0,0,0.62)" },
 
-  title: { fontSize: 26, fontWeight: "900", color: UI.text },
-  sub: { opacity: 0.7, color: UI.text },
-
-  modeRow: { flexDirection: "row", gap: 10 },
-  modeBtn: { paddingVertical: 10, paddingHorizontal: 14, borderRadius: 14 },
-  modeBtnActive: { backgroundColor: UI.text },
-  modeBtnIdle: { backgroundColor: "rgba(17,24,39,0.06)" },
-  modeText: { fontWeight: "900" },
-  modeTextActive: { color: "white" },
-  modeTextIdle: { color: UI.text },
-
-  cameraWrap: { flex: 1, borderRadius: 16, overflow: "hidden", borderWidth: 1, borderColor: UI.border },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 18, gap: 10 },
-
-  input: {
+  card: {
+    marginTop: 18,
+    borderRadius: 28,
+    padding: 16,
     borderWidth: 1,
-    borderColor: UI.border,
+    borderColor: "rgba(0,0,0,0.06)",
+    backgroundColor: "rgba(255,255,255,0.92)",
+    shadowColor: "#000",
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 4,
+    overflow: "hidden",
+  },
+  glowA: { position: "absolute", width: 300, height: 300, borderRadius: 300, top: -170, left: -150, opacity: 0.10 },
+  glowB: { position: "absolute", width: 340, height: 340, borderRadius: 340, bottom: -220, right: -220, opacity: 0.06 },
+
+  topRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  mini: { fontSize: 12, fontWeight: "700", color: "rgba(0,0,0,0.45)" },
+  badge: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1, borderColor: "rgba(0,0,0,0.08)", backgroundColor: "rgba(255,255,255,0.9)" },
+  badgeText: { fontSize: 12, fontWeight: "900" },
+
+  label: { fontSize: 13, fontWeight: "900", color: "rgba(0,0,0,0.55)", marginBottom: 6 },
+  input: {
+    height: 46,
     borderRadius: 14,
-    padding: 12,
-    fontFamily: "monospace",
-    backgroundColor: UI.bg,
-    color: UI.text,
+    paddingHorizontal: 14,
+    backgroundColor: "rgba(0,0,0,0.045)",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.06)",
+    fontSize: 15,
+    color: "rgba(0,0,0,0.85)",
   },
 
-  btn: { paddingVertical: 14, borderRadius: 14, alignItems: "center" },
-  btnDark: { backgroundColor: UI.text },
-  btnText: { color: "white", fontWeight: "900" },
+  btnPrimary: { marginTop: 16, height: 52, borderRadius: 16, alignItems: "center", justifyContent: "center" },
+  btnPrimaryText: { color: "#fff", fontSize: 16, fontWeight: "900" },
+  btnGhost: { marginTop: 10, height: 46, borderRadius: 14, alignItems: "center", justifyContent: "center" },
+  btnGhostText: { fontSize: 15, fontWeight: "900" },
 
-  error: { color: "rgba(176,0,32,0.95)", fontWeight: "900" },
+  statusLine: { marginTop: 10, fontSize: 13, color: "rgba(0,0,0,0.55)" },
+
+  cameraCard: { height: 300, borderRadius: 20, overflow: "hidden", borderWidth: 1, borderColor: "rgba(0,0,0,0.08)", backgroundColor: "rgba(0,0,0,0.03)" },
+  overlay: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center" },
+  frame: { width: 210, height: 210, borderRadius: 22, borderWidth: 2, borderColor: "rgba(255,255,255,0.85)", backgroundColor: "rgba(0,0,0,0.10)" },
+  overlayText: { marginTop: 12, fontSize: 13, fontWeight: "800", color: "rgba(255,255,255,0.92)" },
+
+  qrFallback: { padding: 16, borderRadius: 20, backgroundColor: "rgba(255,255,255,0.85)" },
+  qrTitle: { fontSize: 16, fontWeight: "900", color: "rgba(0,0,0,0.86)" },
+  qrText: { marginTop: 6, fontSize: 14, lineHeight: 20, color: "rgba(0,0,0,0.6)" },
 });

@@ -1,211 +1,163 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import React, { useEffect, useState } from "react";
+import { ActivityIndicator, Alert, Pressable, SafeAreaView, StyleSheet, Text, View } from "react-native";
+import { useRouter } from "expo-router";
 
-import { apiFetch } from "../src/lib/api";
-import { ScreenScaffold } from "../src/ui/ScreenScaffold";
-import { UI } from "../src/ui/tokens";
+import { ACCENT_HEX } from "../src/lib/mobileConfig";
+import { getStoredAuth, clearStoredAuth } from "../src/lib/mobileStorage";
+import { fetchLicense, ApiError, LicenseResponse } from "../src/lib/mobileApi";
+import CollapsibleDetails from "../src/ui/CollapsibleDetails";
 
-type StatsMeResponse = {
-  leadsToday: number;
-  avgPerHour: number;
-  pendingAttachments: number;
-  lastLeadAt?: string | null;
-  todayHourlyBuckets?: Array<{ hour: number; count: number }>;
-};
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
+function formatEndsAt(iso?: string | null) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("de-CH", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
-function pickNumber(v: unknown): number {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string" && v.trim().length) {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
-  }
-  return 0;
-}
+export default function ConnectedStatus() {
+  const router = useRouter();
+  const [auth, setAuth] = useState<{ tenantSlug: string | null; deviceId: string | null; apiKey: string | null } | null>(null);
+  const [license, setLicense] = useState<LicenseResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<ApiError | null>(null);
 
-function extractErrorMessage(res: unknown): string {
-  if (!isRecord(res)) return "Request failed.";
-  const err = res.error;
-  if (isRecord(err) && typeof err.message === "string") return err.message;
-  if (typeof res.message === "string") return res.message;
-  return "Request failed.";
-}
-
-export default function Stats() {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const [data, setData] = useState<Required<StatsMeResponse>>({
-    leadsToday: 0,
-    avgPerHour: 0,
-    pendingAttachments: 0,
-    lastLeadAt: null,
-    todayHourlyBuckets: [],
-  });
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  async function load() {
+    setBusy(true);
+    setErr(null);
     try {
-      const tzOffsetMinutes = new Date().getTimezoneOffset();
-      const path = `/api/mobile/v1/stats/me?range=today&tzOffsetMinutes=${encodeURIComponent(String(tzOffsetMinutes))}`;
+      const a = await getStoredAuth();
+      setAuth(a);
 
-      const res = await apiFetch({ method: "GET", path });
+      if (!a.apiKey) {
+        router.replace("/provision");
+        return;
+      }
 
-      if (!isRecord(res) || typeof res.ok !== "boolean") throw new Error("Invalid API response.");
-      if (res.ok !== true) throw new Error(extractErrorMessage(res));
+      const l = await fetchLicense({ apiKey: a.apiKey, tenantSlug: a.tenantSlug });
+      setLicense(l);
 
-      const s = (res.data ?? {}) as Partial<StatsMeResponse>;
-
-      setData({
-        leadsToday: pickNumber(s.leadsToday),
-        avgPerHour: pickNumber(s.avgPerHour),
-        pendingAttachments: pickNumber(s.pendingAttachments),
-        lastLeadAt: s.lastLeadAt ?? null,
-        todayHourlyBuckets: Array.isArray(s.todayHourlyBuckets) ? s.todayHourlyBuckets : [],
-      });
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Network error.");
+      if (!l.isActive) {
+        router.replace("/license");
+      }
+    } catch (e) {
+      setErr(e as ApiError);
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
-  }, []);
+  }
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function onDisconnect() {
+    Alert.alert("Gerät trennen", "Willst du die Verbindung (apiKey) löschen?", [
+      { text: "Abbrechen", style: "cancel" },
+      {
+        text: "Trennen",
+        style: "destructive",
+        onPress: async () => {
+          await clearStoredAuth();
+          router.replace("/provision");
+        },
+      },
+    ]);
+  }
 
   return (
-    <ScreenScaffold title="Statistik" refreshing={loading} onRefresh={refresh}>
-      <View style={styles.segment}>
-        <View style={[styles.segmentBtn, styles.segmentActive]}>
-          <Text style={[styles.segmentText, styles.segmentTextActive]}>Ich</Text>
-        </View>
-        <View style={styles.segmentBtn}>
-          <Text style={styles.segmentText}>Event</Text>
-        </View>
-      </View>
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.page}>
+        <Text style={styles.h1}>Verbunden</Text>
+        <Text style={styles.help}>Lizenz ist aktiv – Statusübersicht (MVP).</Text>
 
-      {loading ? (
-        <View style={styles.loadingWrap}>
-          <ActivityIndicator />
-          <Text style={styles.loadingText}>Lade…</Text>
-        </View>
-      ) : error ? (
-        <View style={[styles.card, styles.warnCard]}>
-          <Text style={styles.cardTitle}>Fehler</Text>
-          <Text style={styles.cardSub}>{error}</Text>
-          <Pressable style={styles.primaryBtn} onPress={refresh}>
-            <Text style={styles.primaryBtnText}>Retry</Text>
-          </Pressable>
-        </View>
-      ) : (
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Meine Statistik heute</Text>
+          <View pointerEvents="none" style={[styles.glowA, { backgroundColor: ACCENT_HEX }]} />
+          <View pointerEvents="none" style={[styles.glowB, { backgroundColor: ACCENT_HEX }]} />
 
-          <View style={styles.statsRow}>
-            <View style={styles.statBox}>
-              <Text style={styles.statLabel}>Leads</Text>
-              <Text style={styles.statValue}>{data.leadsToday}</Text>
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.statBox}>
-              <Text style={styles.statLabel}>Ø pro Stunde</Text>
-              <Text style={styles.statValue}>{data.avgPerHour}/h</Text>
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.statBox}>
-              <Text style={styles.statLabel}>Follow-ups</Text>
-              <Text style={styles.statValue}>{data.pendingAttachments}</Text>
-              <Text style={styles.badge}>Pending</Text>
-            </View>
+          <View style={styles.row}>
+            <Text style={styles.k}>Tenant</Text>
+            <Text style={styles.v}>{auth?.tenantSlug || "—"}</Text>
+          </View>
+          <View style={styles.row}>
+            <Text style={styles.k}>Device</Text>
+            <Text style={styles.v}>{auth?.deviceId || "—"}</Text>
+          </View>
+          <View style={styles.row}>
+            <Text style={styles.k}>Aktiv</Text>
+            <Text style={styles.v}>{license?.isActive ? "Ja" : busy ? "…" : "Nein"}</Text>
+          </View>
+          <View style={styles.row}>
+            <Text style={styles.k}>Typ</Text>
+            <Text style={styles.v}>{license?.type || "—"}</Text>
+          </View>
+          <View style={styles.row}>
+            <Text style={styles.k}>Gültig bis</Text>
+            <Text style={styles.v}>{formatEndsAt(license?.endsAt || null)}</Text>
           </View>
 
-          <View style={styles.bars}>
-            {data.todayHourlyBuckets.slice(-12).map((b) => {
-              const h = Math.max(6, Math.min(60, b.count * 8));
-              return <View key={String(b.hour)} style={[styles.bar, { height: h }]} />;
-            })}
-            {data.todayHourlyBuckets.length === 0 && (
-              <Text style={styles.cardSub}>Noch keine Daten für heute.</Text>
-            )}
-          </View>
-
-          <Text style={styles.cardSub}>
-            {data.lastLeadAt
-              ? `Letzter Lead um ${new Date(data.lastLeadAt).toLocaleTimeString()}`
-              : "Noch kein Lead heute."}
-          </Text>
-
-          <Pressable style={[styles.primaryBtn, { marginTop: 12 }]} onPress={refresh}>
-            <Text style={styles.primaryBtnText}>Statistik aktualisieren</Text>
-          </Pressable>
+          {busy ? (
+            <View style={styles.busyRow}>
+              <ActivityIndicator size="small" color={ACCENT_HEX} />
+              <Text style={styles.busyText}>Aktualisiere…</Text>
+            </View>
+          ) : null}
         </View>
-      )}
 
-      <Text style={styles.hint}>Pull to refresh</Text>
-    </ScreenScaffold>
+        <Pressable style={[styles.btnPrimary, { backgroundColor: ACCENT_HEX }]} onPress={load} disabled={busy}>
+          <Text style={styles.btnPrimaryText}>{busy ? "Prüfe…" : "Lizenzstatus prüfen"}</Text>
+        </Pressable>
+
+        <Pressable style={styles.btnGhost} onPress={onDisconnect}>
+          <Text style={styles.btnGhostText}>Gerät trennen</Text>
+        </Pressable>
+
+        <CollapsibleDetails
+          title="Details anzeigen"
+          lines={[
+            ["TraceId", err?.traceId],
+            ["Error Code", err?.code],
+            ["HTTP Status", err?.status ? String(err.status) : undefined],
+          ]}
+        />
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  segment: {
-    flexDirection: "row",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "#ECECEC",
-    overflow: "hidden",
-  },
-  segmentBtn: { flex: 1, paddingVertical: 10, alignItems: "center" },
-  segmentActive: { backgroundColor: UI.accent },
-  segmentText: { fontWeight: "700", color: "#333" },
-  segmentTextActive: { color: "#FFF" },
-
-  loadingWrap: { padding: 16, alignItems: "center", gap: 10 },
-  loadingText: { color: "#666" },
+  safe: { flex: 1, backgroundColor: "#fff" },
+  page: { flex: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 24 },
+  h1: { fontSize: 30, fontWeight: "900", letterSpacing: -0.2, color: "rgba(0,0,0,0.9)" },
+  help: { marginTop: 8, fontSize: 15, lineHeight: 21, color: "rgba(0,0,0,0.62)" },
 
   card: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 16,
+    marginTop: 16,
+    borderRadius: 24,
     padding: 16,
     borderWidth: 1,
-    borderColor: "#ECECEC",
-  },
-  warnCard: { borderColor: "#F0D6D6" },
-  cardTitle: { fontSize: 16, fontWeight: "800", color: "#111" },
-  cardSub: { marginTop: 8, fontSize: 13, color: "#666" },
-
-  statsRow: { flexDirection: "row", alignItems: "stretch", marginTop: 12 },
-  statBox: { flex: 1 },
-  statLabel: { fontSize: 12, color: "#777" },
-  statValue: { marginTop: 6, fontSize: 22, fontWeight: "900", color: "#111" },
-  divider: { width: 1, backgroundColor: "#EFEFEF", marginHorizontal: 12 },
-  badge: {
-    marginTop: 6,
-    alignSelf: "flex-start",
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#555",
-    backgroundColor: "#EFEFEF",
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
+    borderColor: "rgba(0,0,0,0.06)",
+    backgroundColor: "rgba(255,255,255,0.92)",
+    shadowColor: "#000",
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 4,
     overflow: "hidden",
   },
+  glowA: { position: "absolute", width: 280, height: 280, borderRadius: 280, top: -160, left: -150, opacity: 0.10 },
+  glowB: { position: "absolute", width: 320, height: 320, borderRadius: 320, bottom: -220, right: -220, opacity: 0.06 },
 
-  bars: { marginTop: 14, flexDirection: "row", alignItems: "flex-end", gap: 8, minHeight: 66 },
-  bar: { width: 12, borderRadius: 8, backgroundColor: "#D9E2F2" },
+  row: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 7 },
+  k: { fontSize: 13, fontWeight: "900", color: "rgba(0,0,0,0.55)" },
+  v: { fontSize: 13, fontWeight: "900", color: "rgba(0,0,0,0.85)" },
 
-  primaryBtn: { backgroundColor: UI.accent, borderRadius: 14, paddingVertical: 14, alignItems: "center" },
-  primaryBtnText: { color: "#FFF", fontWeight: "900" },
+  busyRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 10 },
+  busyText: { fontSize: 13, fontWeight: "800", color: "rgba(0,0,0,0.55)" },
 
-  hint: { textAlign: "center", color: "#888", fontSize: 12 },
+  btnPrimary: { marginTop: 18, height: 56, borderRadius: 18, alignItems: "center", justifyContent: "center" },
+  btnPrimaryText: { color: "#fff", fontSize: 16, fontWeight: "900" },
+
+  btnGhost: { marginTop: 10, height: 44, borderRadius: 14, alignItems: "center", justifyContent: "center" },
+  btnGhostText: { fontSize: 14, fontWeight: "900", color: "rgba(0,0,0,0.48)" },
 });
