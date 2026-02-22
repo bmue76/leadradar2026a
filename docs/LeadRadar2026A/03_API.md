@@ -669,3 +669,18 @@ Response (200):
 json
 Code kopieren
 { "ok": true, "data": { "id": "lead_..." }, "traceId": "..." }
+
+## TP 7.8 — Device Provisioning (Kurzcode)
+
+### Konzept
+- Admin erzeugt einen **Kurzcode** (z. B. `MVVJJ6GQ78`) mit TTL 12h.
+- Code ist **human-friendly** (abtippen möglich) und wird zusätzlich als QR/Deep Link verteilt.
+- Mobile App sendet beim Pairing:
+  `POST /api/mobile/v1/provisioning/redeem { tenantSlug, code }`
+- **Kein Prefix** wie `lrp_...` im MVP. Der Code im Admin/UI ist exakt der Code für die App.
+
+### QR Payload (Deep Link)
+`leadradar://provision?tenant=<tenantSlug>&code=<SHORTCODE>`
+
+Beispiel:
+`leadradar://provision?tenant=demo&code=MVVJJ6GQ78`

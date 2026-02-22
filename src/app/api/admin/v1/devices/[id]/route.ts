@@ -1,167 +1,104 @@
-import { Prisma } from "@prisma/client";
+import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { jsonError, jsonOk } from "@/lib/api";
-import { isHttpError, validateBody, httpError } from "@/lib/http";
-import { requireAdminAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-const PatchSchema = z.object({
-  name: z.string().max(120).nullable().optional(),
-  setActiveEventId: z.string().min(1).nullable().optional(),
+type ApiOk<T> = { ok: true; data: T; traceId: string };
+type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
+
+function traceId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+}
+
+function jsonOk<T>(data: T, tid: string): Response {
+  const body: ApiOk<T> = { ok: true, data, traceId: tid };
+  return NextResponse.json(body, { status: 200, headers: { "x-trace-id": tid } });
+}
+
+function jsonError(code: string, message: string, tid: string, status = 400, details?: unknown): Response {
+  const body: ApiErr = { ok: false, error: { code, message, details }, traceId: tid };
+  return NextResponse.json(body, { status, headers: { "x-trace-id": tid } });
+}
+
+function requireTenant(req: NextRequest, tid: string): { ok: true; tenantId: string } | { ok: false; res: Response } {
+  const tenantId = req.headers.get("x-tenant-id") || "";
+  if (!tenantId) return { ok: false, res: jsonError("TENANT_CONTEXT_REQUIRED", "Missing x-tenant-id.", tid, 401) };
+  return { ok: true, tenantId };
+}
+
+const PatchBody = z.object({
+  name: z.string().min(2).max(80),
 });
 
-type PatchBody = z.infer<typeof PatchSchema>;
+export async function PATCH(
+  req: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+): Promise<Response> {
+  const tid = traceId();
+  const tenant = requireTenant(req, tid);
+  if (!tenant.ok) return tenant.res;
 
-export async function GET(req: Request, ctxRoute: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+
+  let body: unknown;
   try {
-    const ctx = await requireAdminAuth(req);
-    const { id } = await ctxRoute.params;
-
-    const device = await prisma.mobileDevice.findFirst({
-      where: { id, tenantId: ctx.tenantId },
-      select: {
-        id: true,
-        name: true,
-        status: true,
-        lastSeenAt: true,
-        createdAt: true,
-        activeEventId: true,
-        activeEvent: { select: { id: true, name: true, status: true } },
-        apiKey: { select: { id: true, prefix: true, status: true, revokedAt: true, lastUsedAt: true } },
-      },
-    });
-
-    if (!device) return jsonError(req, 404, "NOT_FOUND", "Not found.");
-
-    return jsonOk(req, {
-      item: {
-        id: device.id,
-        name: device.name,
-        status: device.status,
-        lastSeenAt: device.lastSeenAt ? device.lastSeenAt.toISOString() : null,
-        createdAt: device.createdAt.toISOString(),
-        activeEvent: device.activeEvent
-          ? { id: device.activeEvent.id, name: device.activeEvent.name, status: device.activeEvent.status }
-          : null,
-        apiKey: {
-          id: device.apiKey.id,
-          prefix: device.apiKey.prefix,
-          status: device.apiKey.status,
-          revokedAt: device.apiKey.revokedAt ? device.apiKey.revokedAt.toISOString() : null,
-          lastUsedAt: device.apiKey.lastUsedAt ? device.apiKey.lastUsedAt.toISOString() : null,
-        },
-      },
-    });
-  } catch (e) {
-    if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
-
-    if (e instanceof Prisma.PrismaClientKnownRequestError) {
-      return jsonError(req, 500, "DB_ERROR", "Database error.", { code: e.code });
-    }
-
-    return jsonError(req, 500, "INTERNAL", "Unexpected error.");
+    body = await req.json();
+  } catch {
+    return jsonError("BAD_JSON", "Invalid JSON body.", tid, 400);
   }
+
+  const parsed = PatchBody.safeParse(body);
+  if (!parsed.success) return jsonError("VALIDATION_ERROR", parsed.error.message, tid, 400);
+
+  const device = await prisma.mobileDevice.findFirst({
+    where: { id, tenantId: tenant.tenantId, status: "ACTIVE" },
+    select: { id: true },
+  });
+  if (!device) return jsonError("NOT_FOUND", "Device not found.", tid, 404);
+
+  const updated = await prisma.mobileDevice.update({
+    where: { id },
+    data: { name: parsed.data.name.trim() },
+    select: { id: true, name: true },
+  });
+
+  return jsonOk(updated, tid);
 }
 
-export async function PATCH(req: Request, ctxRoute: { params: Promise<{ id: string }> }) {
-  try {
-    const ctx = await requireAdminAuth(req);
-    const { id } = await ctxRoute.params;
+export async function DELETE(
+  req: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+): Promise<Response> {
+  const tid = traceId();
+  const tenant = requireTenant(req, tid);
+  if (!tenant.ok) return tenant.res;
 
-    const body = (await validateBody(req, PatchSchema, 32 * 1024)) as PatchBody;
+  const { id } = await ctx.params;
 
-    const exists = await prisma.mobileDevice.findFirst({
-      where: { id, tenantId: ctx.tenantId },
-      select: { id: true },
-    });
-    if (!exists) return jsonError(req, 404, "NOT_FOUND", "Not found.");
+  const device = await prisma.mobileDevice.findFirst({
+    where: { id, tenantId: tenant.tenantId, status: "ACTIVE" },
+    select: { id: true, apiKeyId: true, apiKey: { select: { status: true } } },
+  });
+  if (!device) return jsonError("NOT_FOUND", "Device not found.", tid, 404);
 
-    let nextName: string | undefined;
-    if (Object.prototype.hasOwnProperty.call(body, "name")) {
-      const raw = body.name; // string | null | undefined
-      if (raw === null || raw === undefined) {
-        nextName = "Gerät";
-      } else {
-        const t = raw.trim();
-        nextName = t ? t : "Gerät";
-      }
+  const revokedApiKey = device.apiKey.status === "ACTIVE";
+
+  await prisma.$transaction(async (tx) => {
+    if (revokedApiKey) {
+      await tx.mobileApiKey.update({
+        where: { id: device.apiKeyId },
+        data: { status: "REVOKED", revokedAt: new Date() },
+      });
     }
 
-    let nextActiveEventId: string | null | undefined;
-    if (Object.prototype.hasOwnProperty.call(body, "setActiveEventId")) {
-      const raw = body.setActiveEventId; // string | null | undefined
-      if (raw === null || raw === undefined) {
-        nextActiveEventId = null;
-      } else {
-        const ev = await prisma.event.findFirst({
-          where: { id: raw, tenantId: ctx.tenantId },
-          select: { id: true },
-        });
-        if (!ev) throw httpError(404, "NOT_FOUND", "Not found.");
-        nextActiveEventId = ev.id;
-      }
-    }
-
-    const updated = await prisma.mobileDevice.update({
-      where: { id },
-      data: {
-        ...(nextName !== undefined ? { name: nextName } : {}),
-        ...(nextActiveEventId !== undefined ? { activeEventId: nextActiveEventId } : {}),
-      },
-      select: { id: true },
+    // soft delete: keep device row for license history
+    await tx.mobileDevice.update({
+      where: { id: device.id },
+      data: { status: "DISABLED" },
     });
+  });
 
-    return jsonOk(req, { id: updated.id });
-  } catch (e) {
-    if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
-
-    if (e instanceof Prisma.PrismaClientKnownRequestError) {
-      return jsonError(req, 500, "DB_ERROR", "Database error.", { code: e.code });
-    }
-
-    return jsonError(req, 500, "INTERNAL", "Unexpected error.");
-  }
-}
-
-export async function DELETE(req: Request, ctxRoute: { params: Promise<{ id: string }> }) {
-  try {
-    const ctx = await requireAdminAuth(req);
-    const { id } = await ctxRoute.params;
-
-    const device = await prisma.mobileDevice.findFirst({
-      where: { id, tenantId: ctx.tenantId },
-      select: {
-        id: true,
-        apiKeyId: true,
-        apiKey: { select: { status: true } },
-      },
-    });
-
-    if (!device) return jsonError(req, 404, "NOT_FOUND", "Not found.");
-
-    const revokedApiKey = device.apiKey.status === "ACTIVE";
-
-    await prisma.$transaction(async (tx) => {
-      if (revokedApiKey) {
-        await tx.mobileApiKey.update({
-          where: { id: device.apiKeyId },
-          data: { status: "REVOKED", revokedAt: new Date() },
-        });
-      }
-
-      await tx.mobileDevice.delete({ where: { id: device.id } });
-    });
-
-    return jsonOk(req, { deleted: true, id: device.id, revokedApiKey });
-  } catch (e) {
-    if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
-
-    if (e instanceof Prisma.PrismaClientKnownRequestError) {
-      return jsonError(req, 500, "DB_ERROR", "Database error.", { code: e.code });
-    }
-
-    return jsonError(req, 500, "INTERNAL", "Unexpected error.");
-  }
+  return jsonOk({ deleted: true, id: device.id, revokedApiKey }, tid);
 }

@@ -71,11 +71,10 @@ const NAV: NavGroup[] = [
   },
   {
     key: "billing",
-    title: "Abrechnung",
+    title: "Lizenzen",
     Icon: IconBilling,
     items: [
-      // Overview should NOT be active when user is in /admin/billing/*
-      { href: "/admin/billing", label: "Übersicht", exact: true },
+      { href: "/admin/licenses", label: "Übersicht", exact: true },
       { href: "/admin/billing/accounting", label: "Firma & Belege" },
     ],
   },

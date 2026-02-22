@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
-import { createHmac, randomBytes } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -23,58 +21,53 @@ function jsonError(code: string, message: string, tid: string, status = 400, det
   return NextResponse.json(body, { status, headers: { "x-trace-id": tid } });
 }
 
-function env(name: string): string {
-  return (process.env[name] || "").trim();
-}
-
 function requireTenant(req: NextRequest, tid: string): { ok: true; tenantId: string } | { ok: false; res: Response } {
   const tenantId = req.headers.get("x-tenant-id") || "";
   if (!tenantId) return { ok: false, res: jsonError("TENANT_CONTEXT_REQUIRED", "Missing x-tenant-id.", tid, 401) };
   return { ok: true, tenantId };
 }
 
-function genApiKeyPlain(): string {
-  return `lr_live_${randomBytes(32).toString("base64url")}`;
-}
+type DeviceItem = {
+  id: string;
+  name: string;
+  lastSeenAt: string | null;
+  activeLicense: null | { type: "FAIR_30D" | "YEAR_365D"; endsAt: string };
+  pendingCount: number;
+  pendingNextType: "FAIR_30D" | "YEAR_365D" | null;
+};
 
-function hmacKeyHash(apiKeyPlain: string): string {
-  const secret = env("MOBILE_API_KEY_SECRET");
-  if (!secret) throw new Error("Missing MOBILE_API_KEY_SECRET.");
-  return createHmac("sha256", secret).update(apiKeyPlain).digest("hex");
-}
-
-const CreateBody = z.object({ name: z.string().min(2).max(80) });
-
-function computeStatus(lastSeenAt: Date | null): "CONNECTED" | "STALE" | "NEVER" {
-  if (!lastSeenAt) return "NEVER";
-  const ageMin = (Date.now() - lastSeenAt.getTime()) / 60000;
-  return ageMin <= 30 ? "CONNECTED" : "STALE";
-}
+type HistoryItem = {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  type: "FAIR_30D" | "YEAR_365D";
+  status: "ACTIVE" | "REVOKED";
+  state: "ACTIVE" | "EXPIRED" | "PENDING_ACTIVATION" | "REVOKED";
+  startsAt: string;
+  endsAt: string;
+  createdAt: string;
+  source: "STRIPE" | "MANUAL";
+  note: string | null;
+};
 
 export async function GET(req: NextRequest): Promise<Response> {
   const tid = traceId();
   const tenant = requireTenant(req, tid);
   if (!tenant.ok) return tenant.res;
 
-  const { searchParams } = new URL(req.url);
-  const q = (searchParams.get("q") || "").trim();
-  const whereName = q.length > 0 ? { OR: [{ name: { contains: q, mode: "insensitive" as const } }] } : {};
+  const now = new Date();
 
   const devices = await prisma.mobileDevice.findMany({
-    where: { tenantId: tenant.tenantId, status: "ACTIVE", ...whereName },
+    where: { tenantId: tenant.tenantId, status: "ACTIVE" },
     orderBy: { createdAt: "desc" },
     select: {
       id: true,
       name: true,
       lastSeenAt: true,
-      createdAt: true,
-      activeEvent: { select: { id: true, name: true, status: true } },
-      apiKey: { select: { prefix: true, status: true, revokedAt: true } },
     },
   });
 
   const deviceIds = devices.map((d) => d.id);
-  const now = new Date();
 
   const activeLicenses = deviceIds.length
     ? await prisma.deviceLicense.findMany({
@@ -111,52 +104,62 @@ export async function GET(req: NextRequest): Promise<Response> {
     pendingByDeviceId.set(p.deviceId, cur);
   }
 
-  const items = devices.map((d) => ({
+  const deviceItems: DeviceItem[] = devices.map((d) => ({
     id: d.id,
     name: d.name,
-    status: computeStatus(d.lastSeenAt),
     lastSeenAt: d.lastSeenAt ? d.lastSeenAt.toISOString() : null,
-    createdAt: d.createdAt.toISOString(),
-    activeEvent: d.activeEvent ? { id: d.activeEvent.id, name: d.activeEvent.name, status: d.activeEvent.status } : null,
-    apiKey: { prefix: d.apiKey.prefix, status: d.apiKey.status, revokedAt: d.apiKey.revokedAt ? d.apiKey.revokedAt.toISOString() : null },
     activeLicense: activeByDeviceId.get(d.id) ?? null,
-    pendingLicenseCount: pendingByDeviceId.get(d.id)?.count ?? 0,
+    pendingCount: pendingByDeviceId.get(d.id)?.count ?? 0,
     pendingNextType: pendingByDeviceId.get(d.id)?.nextType ?? null,
   }));
 
-  return jsonOk({ items }, tid);
-}
-
-export async function POST(req: NextRequest): Promise<Response> {
-  const tid = traceId();
-  const tenant = requireTenant(req, tid);
-  if (!tenant.ok) return tenant.res;
-
-  let body: unknown;
-  try { body = await req.json(); } catch { return jsonError("BAD_JSON", "Invalid JSON body.", tid, 400); }
-
-  const parsed = CreateBody.safeParse(body);
-  if (!parsed.success) return jsonError("VALIDATION_ERROR", parsed.error.message, tid, 400);
-
-  const name = parsed.data.name.trim();
-
-  const apiKeyPlain = genApiKeyPlain();
-  const apiKeyHash = hmacKeyHash(apiKeyPlain);
-  const apiKeyPrefix = apiKeyPlain.slice(0, 14);
-
-  const created = await prisma.$transaction(async (tx) => {
-    const key = await tx.mobileApiKey.create({
-      data: { tenantId: tenant.tenantId, name: `${name} (initial)`, prefix: apiKeyPrefix, keyHash: apiKeyHash, status: "ACTIVE" },
-      select: { id: true },
-    });
-
-    const device = await tx.mobileDevice.create({
-      data: { tenantId: tenant.tenantId, name, apiKeyId: key.id, status: "ACTIVE" },
-      select: { id: true, name: true },
-    });
-
-    return device;
+  const history = await prisma.deviceLicense.findMany({
+    where: { tenantId: tenant.tenantId },
+    orderBy: { createdAt: "desc" },
+    take: 250,
+    select: {
+      id: true,
+      deviceId: true,
+      type: true,
+      status: true,
+      startsAt: true,
+      endsAt: true,
+      createdAt: true,
+      note: true,
+      stripeCheckoutSessionId: true,
+      device: { select: { name: true } },
+    },
   });
 
-  return jsonOk(created, tid);
+  const historyItems: HistoryItem[] = history.map((h) => {
+    const isPending = h.note === "stripe_pending";
+    const isRevoked = h.status === "REVOKED";
+    const isExpired = !isPending && !isRevoked && h.endsAt.getTime() <= now.getTime();
+
+    const state: HistoryItem["state"] = isRevoked
+      ? "REVOKED"
+      : isPending
+        ? "PENDING_ACTIVATION"
+        : isExpired
+          ? "EXPIRED"
+          : "ACTIVE";
+
+    const source: HistoryItem["source"] = h.stripeCheckoutSessionId ? "STRIPE" : "MANUAL";
+
+    return {
+      id: h.id,
+      deviceId: h.deviceId,
+      deviceName: h.device.name,
+      type: h.type,
+      status: h.status,
+      state,
+      startsAt: h.startsAt.toISOString(),
+      endsAt: h.endsAt.toISOString(),
+      createdAt: h.createdAt.toISOString(),
+      source,
+      note: h.note,
+    };
+  });
+
+  return jsonOk({ now: now.toISOString(), devices: deviceItems, history: historyItems }, tid);
 }

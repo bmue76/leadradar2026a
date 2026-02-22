@@ -1,274 +1,242 @@
+import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
-
-import { jsonError, jsonOk } from "@/lib/api";
-import { prisma } from "@/lib/dbAdapter";
-import { getStripe, getStripeWebhookSecret } from "@/lib/stripe";
+import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-function addDaysUtc(d: Date, days: number): Date {
-  const x = new Date(d.getTime());
-  x.setUTCDate(x.getUTCDate() + days);
-  return x;
+type ApiOk<T> = { ok: true; data: T; traceId: string };
+type ApiErr = { ok: false; error: { code: string; message: string; details?: unknown }; traceId: string };
+
+function traceId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 }
 
-type SessionObj = Stripe.Checkout.Session & {
-  metadata?: Record<string, string | undefined> | null;
-  amount_total?: number | null;
-  currency?: string | null;
-  payment_intent?: string | Stripe.PaymentIntent | null;
-};
+function jsonOk<T>(data: T, tid: string): Response {
+  const body: ApiOk<T> = { ok: true, data, traceId: tid };
+  return NextResponse.json(body, { status: 200, headers: { "x-trace-id": tid } });
+}
 
-function errToString(e: unknown): string {
-  if (e instanceof Error) return e.message;
+function jsonError(code: string, message: string, tid: string, status = 400, details?: unknown): Response {
+  const body: ApiErr = { ok: false, error: { code, message, details }, traceId: tid };
+  return NextResponse.json(body, { status, headers: { "x-trace-id": tid } });
+}
+
+function env(name: string): string {
+  return (process.env[name] || "").trim();
+}
+
+let cachedStripe: Stripe | null = null;
+function getStripe(): Stripe {
+  if (cachedStripe) return cachedStripe;
+  const key = env("STRIPE_SECRET_KEY");
+  if (!key) throw new Error("Missing STRIPE_SECRET_KEY.");
+  cachedStripe = new Stripe(key, { apiVersion: "2026-01-28.clover" });
+  return cachedStripe;
+}
+
+function addDays(d: Date, days: number): Date {
+  return new Date(d.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+function durationDays(type: string): number | null {
+  if (type === "FAIR_30D") return 30;
+  if (type === "YEAR_365D") return 365;
+  return null;
+}
+
+function extractPaymentIntentId(pi: Stripe.Checkout.Session["payment_intent"]): string | null {
+  if (!pi) return null;
+  if (typeof pi === "string") return pi;
+  if (typeof pi === "object" && "id" in pi && typeof pi.id === "string") return pi.id;
+  return null;
+}
+
+export async function POST(req: NextRequest): Promise<Response> {
+  const tid = traceId();
+
+  const webhookSecret = env("STRIPE_WEBHOOK_SECRET");
+  if (!webhookSecret) return jsonError("CONFIG_ERROR", "Missing STRIPE_WEBHOOK_SECRET.", tid, 500);
+
+  let stripe: Stripe;
   try {
-    return JSON.stringify(e);
-  } catch {
-    return String(e);
+    stripe = getStripe();
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Stripe init failed.";
+    return jsonError("CONFIG_ERROR", msg, tid, 500);
   }
-}
 
-export async function POST(req: Request) {
-  const stripe = getStripe();
+  const sig = req.headers.get("stripe-signature");
+  if (!sig) return jsonError("BAD_REQUEST", "Missing stripe-signature header.", tid, 400);
 
-  // only used in the outer catch
-  let lastStripeEventId: string | undefined;
+  const raw = await req.text();
+
+  let event: Stripe.Event;
+  try {
+    event = stripe.webhooks.constructEvent(raw, sig, webhookSecret) as Stripe.Event;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Webhook signature verification failed.";
+    return jsonError("STRIPE_SIGNATURE_ERROR", msg, tid, 400);
+  }
+
+  // StripeEvent idempotency
+  const existing = await prisma.stripeEvent.findUnique({
+    where: { stripeEventId: event.id },
+    select: { id: true },
+  });
+  if (existing) return jsonOk({ received: true, duplicate: true }, tid);
 
   try {
-    const sig = req.headers.get("stripe-signature");
-    if (!sig) return jsonError(req, 400, "STRIPE_SIGNATURE_MISSING", "Missing Stripe signature.");
-
-    const rawBody = await req.text();
-
-    let event: Stripe.Event;
-    try {
-      event = stripe.webhooks.constructEvent(rawBody, sig, getStripeWebhookSecret());
-    } catch {
-      return jsonError(req, 400, "STRIPE_SIGNATURE_INVALID", "Invalid Stripe signature.");
-    }
-
-    const stripeEventId = event.id; // stable, non-null
-    lastStripeEventId = stripeEventId;
-
-    const type = event.type;
-
-    // Concurrency-safe idempotency claim (create row first).
-    const stripeEventRow = await prisma.stripeEvent
-      .create({
+    if (event.type !== "checkout.session.completed") {
+      await prisma.stripeEvent.create({
         data: {
-          stripeEventId,
-          type,
-          status: "FAILED", // will be overwritten to PROCESSED/IGNORED on success
-          payloadJson: { stripeEventId, type },
-        },
-        select: { id: true, status: true },
-      })
-      .catch(async () => {
-        const existing = await prisma.stripeEvent.findUnique({
-          where: { stripeEventId },
-          select: { id: true, status: true },
-        });
-        if (!existing) throw new Error("StripeEvent claim failed unexpectedly.");
-        return existing;
-      });
-
-    if (stripeEventRow.status === "PROCESSED" || stripeEventRow.status === "IGNORED") {
-      return jsonOk(req, { received: true });
-    }
-
-    // Only process the event we care about (MVP)
-    if (type !== "checkout.session.completed") {
-      await prisma.stripeEvent.update({
-        where: { stripeEventId },
-        data: {
+          stripeEventId: event.id,
+          type: event.type,
           status: "IGNORED",
           processedAt: new Date(),
-          payloadJson: { stripeEventId, type },
-          errorMessage: null,
+          payloadJson: { type: event.type } as unknown as object,
         },
       });
-      return jsonOk(req, { received: true });
+      return jsonOk({ received: true, ignored: true }, tid);
     }
 
-    const session = event.data.object as SessionObj;
+    const session = event.data.object as Stripe.Checkout.Session;
 
-    const meta = session.metadata ?? {};
-    const tenantId = (meta.tenantId ?? "").trim();
-    const skuId = (meta.skuId ?? "").trim();
+    const md = session.metadata ?? {};
+    const tenantId = (md["tenantId"] || "").toString();
+    const deviceId = (md["deviceId"] || "").toString();
+    const licenseType = (md["licenseType"] || "").toString();
+    const userId = (md["userId"] || "").toString() || null;
 
-    if (!tenantId || !skuId) {
-      await prisma.stripeEvent.update({
-        where: { stripeEventId },
+    const days = durationDays(licenseType);
+    if (!tenantId || !deviceId || !days) {
+      await prisma.stripeEvent.create({
         data: {
-          status: "IGNORED",
+          stripeEventId: event.id,
+          type: event.type,
+          status: "FAILED",
           processedAt: new Date(),
-          payloadJson: { stripeEventId, type, sessionId: session.id, reason: "missing_metadata" },
-          errorMessage: null,
+          errorMessage: "Missing metadata tenantId/deviceId/licenseType.",
+          payloadJson: { tenantId, deviceId, licenseType } as unknown as object,
         },
       });
-      return jsonOk(req, { received: true });
+      return jsonOk({ received: true, failed: true }, tid);
     }
 
-    const paymentIntentId =
-      typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id ?? null;
+    const device = await prisma.mobileDevice.findFirst({
+      where: { id: deviceId, tenantId },
+      select: { id: true, lastSeenAt: true },
+    });
+    if (!device) {
+      await prisma.stripeEvent.create({
+        data: {
+          stripeEventId: event.id,
+          type: event.type,
+          status: "FAILED",
+          processedAt: new Date(),
+          tenantId,
+          errorMessage: "Device not found for tenant.",
+          payloadJson: { deviceId } as unknown as object,
+        },
+      });
+      return jsonOk({ received: true, failed: true }, tid);
+    }
+
+    const now = new Date();
 
     const amountCents = typeof session.amount_total === "number" ? session.amount_total : null;
-    const currency = session.currency ? String(session.currency).toUpperCase() : null;
+    const currency = typeof session.currency === "string" ? session.currency : null;
+    const paymentIntentId = extractPaymentIntentId(session.payment_intent);
 
-    await prisma.$transaction(async (tx) => {
-      const sku = await tx.billingSku.findUnique({
-        where: { id: skuId },
-        select: {
-          id: true,
-          active: true,
-          currency: true,
-          amountCents: true,
-          grantLicense30d: true,
-          grantLicense365d: true,
-          grantDeviceSlots: true,
-          creditExpiresInDays: true,
-        },
-      });
+    // If device never activated/used (lastSeenAt null), do NOT start countdown yet.
+    const shouldDefer = device.lastSeenAt === null;
 
-      if (!sku || !sku.active) {
-        await tx.stripeEvent.update({
-          where: { stripeEventId },
-          data: {
-            status: "IGNORED",
-            processedAt: new Date(),
-            tenantId,
-            payloadJson: { stripeEventId, type, sessionId: session.id, skuId, reason: "sku_not_found_or_inactive" },
-            errorMessage: null,
-          },
-        });
-        return;
-      }
-
-      const tenant = await tx.tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
-      if (!tenant) {
-        await tx.stripeEvent.update({
-          where: { stripeEventId },
-          data: {
-            status: "IGNORED",
-            processedAt: new Date(),
-            tenantId: null,
-            payloadJson: { stripeEventId, type, sessionId: session.id, skuId, reason: "tenant_not_found" },
-            errorMessage: null,
-          },
-        });
-        return;
-      }
-
-      /**
-       * IMPORTANT (Postgres):
-       * Do NOT do `create().catch(...)` inside a transaction to "ignore unique collisions".
-       * A failed statement marks the whole transaction as aborted.
-       *
-       * Use createMany(skipDuplicates) => ON CONFLICT DO NOTHING (no error, tx stays valid).
-       */
-      await tx.billingOrder.createMany({
-        data: [
-          {
-            tenantId,
-            skuId: sku.id,
-            stripeCheckoutSessionId: session.id,
-            stripePaymentIntentId: paymentIntentId,
-            status: "PENDING",
-            currency: currency ?? sku.currency,
-            amountCents: amountCents ?? sku.amountCents ?? null,
-          },
-        ],
-        skipDuplicates: true,
-      });
-
-      // Idempotency guard: only first processing flips status to PAID.
-      const now = new Date();
-      const updated = await tx.billingOrder.updateMany({
-        where: { stripeCheckoutSessionId: session.id, status: { not: "PAID" } },
+    if (shouldDefer) {
+      // Pending purchase: startsAt==endsAt==now, note marks as pending.
+      await prisma.deviceLicense.create({
         data: {
-          status: "PAID",
-          paidAt: now,
-          stripePaymentIntentId: paymentIntentId,
-          currency: currency ?? sku.currency,
-          amountCents: amountCents ?? sku.amountCents ?? null,
-        },
-      });
-
-      // If already paid, just mark event processed (idempotent)
-      if (updated.count === 0) {
-        await tx.stripeEvent.update({
-          where: { stripeEventId },
-          data: {
-            status: "PROCESSED",
-            processedAt: now,
-            tenantId,
-            payloadJson: { stripeEventId, type, sessionId: session.id, skuId, alreadyPaid: true },
-            errorMessage: null,
-          },
-        });
-        return;
-      }
-
-      const expiresAt = addDaysUtc(now, sku.creditExpiresInDays);
-
-      async function grant(creditType: "LICENSE_30D" | "LICENSE_365D" | "DEVICE_SLOT", qty: number) {
-        if (qty <= 0) return;
-
-        await tx.tenantCreditBalance.upsert({
-          where: {
-            tenantId_type_expiresAt: {
-              tenantId,
-              type: creditType,
-              expiresAt,
-            },
-          },
-          update: { quantity: { increment: qty } },
-          create: { tenantId, type: creditType, quantity: qty, expiresAt },
-        });
-
-        await tx.tenantCreditLedger.create({
-          data: { tenantId, type: creditType, delta: qty, reason: "STRIPE_PURCHASE", refId: session.id },
-        });
-      }
-
-      await grant("LICENSE_30D", sku.grantLicense30d);
-      await grant("LICENSE_365D", sku.grantLicense365d);
-      await grant("DEVICE_SLOT", sku.grantDeviceSlots);
-
-      await tx.stripeEvent.update({
-        where: { stripeEventId },
-        data: {
-          status: "PROCESSED",
-          processedAt: now,
           tenantId,
-          payloadJson: {
-            stripeEventId,
-            type,
-            sessionId: session.id,
-            paymentIntentId,
-            skuId,
-            amountCents: amountCents ?? sku.amountCents ?? null,
-            currency: currency ?? sku.currency,
-          },
-          errorMessage: null,
+          deviceId,
+          type: licenseType as "FAIR_30D" | "YEAR_365D",
+          status: "ACTIVE",
+          startsAt: now,
+          endsAt: now,
+          stripeCheckoutSessionId: session.id,
+          stripePaymentIntentId: paymentIntentId ?? undefined,
+          amountCents: amountCents ?? undefined,
+          currency: currency ?? undefined,
+          createdByUserId: userId,
+          note: "stripe_pending",
         },
+        select: { id: true },
       });
-    });
+    } else {
+      // Normal behavior: extend from max(now, currentEndsAt)
+      const current = await prisma.deviceLicense.findFirst({
+        where: {
+          tenantId,
+          deviceId,
+          status: "ACTIVE",
+          endsAt: { gt: now },
+          note: { not: "stripe_pending" },
+        },
+        orderBy: { endsAt: "desc" },
+        select: { endsAt: true },
+      });
 
-    return jsonOk(req, { received: true });
-  } catch (e) {
-    if (lastStripeEventId) {
-      await prisma.stripeEvent
-        .update({
-          where: { stripeEventId: lastStripeEventId },
-          data: { status: "FAILED", processedAt: new Date(), errorMessage: errToString(e) },
-        })
-        .catch(() => {
-          // ignore
-        });
+      const base = current?.endsAt && current.endsAt.getTime() > now.getTime() ? current.endsAt : now;
+      const startsAt = base;
+      const endsAt = addDays(base, days);
+
+      await prisma.deviceLicense.create({
+        data: {
+          tenantId,
+          deviceId,
+          type: licenseType as "FAIR_30D" | "YEAR_365D",
+          status: "ACTIVE",
+          startsAt,
+          endsAt,
+          stripeCheckoutSessionId: session.id,
+          stripePaymentIntentId: paymentIntentId ?? undefined,
+          amountCents: amountCents ?? undefined,
+          currency: currency ?? undefined,
+          createdByUserId: userId,
+          note: "stripe",
+        },
+        select: { id: true },
+      });
     }
 
-    // Important: return 500 so Stripe retries
-    return jsonError(req, 500, "WEBHOOK_FAILED", "Stripe webhook processing failed.", { message: errToString(e) });
+    await prisma.stripeEvent.create({
+      data: {
+        stripeEventId: event.id,
+        type: event.type,
+        status: "PROCESSED",
+        processedAt: new Date(),
+        tenantId,
+        payloadJson: { sessionId: session.id, deviceId, licenseType, deferred: shouldDefer } as unknown as object,
+      },
+    });
+
+    return jsonOk({ received: true, processed: true, deferred: shouldDefer }, tid);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Webhook handler error.";
+
+    try {
+      await prisma.stripeEvent.create({
+        data: {
+          stripeEventId: event.id,
+          type: event.type,
+          status: "FAILED",
+          processedAt: new Date(),
+          errorMessage: msg,
+          payloadJson: { type: event.type } as unknown as object,
+        },
+      });
+    } catch {
+      // ignore
+    }
+
+    return jsonError("WEBHOOK_ERROR", msg, tid, 500);
   }
 }
