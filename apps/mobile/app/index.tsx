@@ -1,235 +1,153 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
-import { router } from "expo-router";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Animated, Easing, Image, SafeAreaView, StyleSheet, Text, View } from "react-native";
+import { useRouter } from "expo-router";
+import { LinearGradient } from "expo-linear-gradient";
 
-import { apiFetch } from "../src/lib/api";
-import { getApiKey } from "../src/lib/auth";
-import { ScreenScaffold } from "../src/ui/ScreenScaffold";
-import { useTenantBranding } from "../src/ui/useTenantBranding";
-import { UI } from "../src/ui/tokens";
+import { getStoredAuth } from "../src/lib/mobileStorage";
+import { fetchLicense, ApiError } from "../src/lib/mobileApi";
+import { ACCENT_HEX } from "../src/lib/mobileConfig";
+import CollapsibleDetails from "../src/ui/CollapsibleDetails";
 
-type ActiveEventResp = { item?: { id: string; name: string } | null };
+const BRAND_LOGO = require("../assets/brand/leadradar-logo.png");
 
-type StatsMeResponse = {
-  leadsToday: number;
-  avgPerHour: number;
-  pendingAttachments: number;
-};
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
-function pickNumber(v: unknown): number {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string" && v.trim().length) {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
-  }
-  return 0;
-}
+export default function StartGate() {
+  const router = useRouter();
 
-function unwrapOkData<T>(res: unknown): T | null {
-  if (!isRecord(res) || typeof res.ok !== "boolean") return null;
-  if (res.ok !== true) return null;
-  return (res as { data?: unknown }).data as T;
-}
+  const opacityLogo = useRef(new Animated.Value(0)).current;
+  const scaleLogo = useRef(new Animated.Value(0.96)).current;
+  const opacitySub = useRef(new Animated.Value(0)).current;
+  const lift = useRef(new Animated.Value(0)).current;
 
-export default function Home() {
-  const insets = useSafeAreaInsets();
+  const [debugErr, setDebugErr] = useState<ApiError | null>(null);
+  const [debugMsg, setDebugMsg] = useState<string>("");
 
-  const [refreshing, setRefreshing] = useState(false);
-
-  const [activeEventName, setActiveEventName] = useState<string | null>(null);
-
-  const [todayLeads, setTodayLeads] = useState<number>(0);
-  const [todayLph, setTodayLph] = useState<number>(0);
-  const [todayAttachments, setTodayAttachments] = useState<number>(0);
-
-  // Central branding (header handled in ScreenScaffold)
-  const { state: brandingState } = useTenantBranding();
-
-  const accentColor = useMemo(() => {
-    if (brandingState.status === "ready" && brandingState.accentColor) return brandingState.accentColor;
-    return UI.accent;
-  }, [brandingState]);
-
-  const loadAll = useCallback(async () => {
-    const key = await getApiKey();
-    if (!key) {
-      router.replace("/provision");
-      return;
-    }
-
-    // Active Event
-    {
-      const res = await apiFetch({
-        method: "GET",
-        path: "/api/mobile/v1/events/active",
-        apiKey: key,
-      });
-
-      const data = unwrapOkData<ActiveEventResp>(res);
-      setActiveEventName(data?.item?.name ?? null);
-    }
-
-    // Stats me (today)
-    {
-      const tzOffsetMinutes = new Date().getTimezoneOffset();
-      const path = `/api/mobile/v1/stats/me?range=today&tzOffsetMinutes=${encodeURIComponent(String(tzOffsetMinutes))}`;
-
-      const res = await apiFetch({
-        method: "GET",
-        path,
-        apiKey: key,
-      });
-
-      const s = unwrapOkData<StatsMeResponse>(res);
-
-      // Contract: leadsToday / avgPerHour / pendingAttachments
-      if (s && isRecord(s)) {
-        setTodayLeads(pickNumber((s as Record<string, unknown>).leadsToday));
-        setTodayLph(pickNumber((s as Record<string, unknown>).avgPerHour));
-        setTodayAttachments(pickNumber((s as Record<string, unknown>).pendingAttachments));
-      } else {
-        setTodayLeads(0);
-        setTodayLph(0);
-        setTodayAttachments(0);
-      }
-    }
-  }, []);
+  const subtitle = useMemo(() => "Messe Leads. Digital. Sofort.", []);
 
   useEffect(() => {
-    void loadAll();
-  }, [loadAll]);
+    const t0 = Date.now();
 
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      await loadAll();
-    } finally {
-      setRefreshing(false);
-    }
-  }, [loadAll]);
+    // Motion: 0–200ms quiet, 200–900ms logo fade+scale, 900–1200ms subtitle
+    Animated.sequence([
+      Animated.delay(200),
+      Animated.parallel([
+        Animated.timing(opacityLogo, { toValue: 1, duration: 650, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(scaleLogo, { toValue: 1, duration: 650, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      ]),
+      Animated.timing(opacitySub, { toValue: 1, duration: 260, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+    ]).start();
 
-  const bottomPad = 18 + Math.max(insets.bottom, 10) + UI.tabBarBaseHeight;
+    let routed = false;
+
+    const routeNow = async (path: string) => {
+      if (routed) return;
+      routed = true;
+
+      Animated.timing(lift, { toValue: -30, duration: 220, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start(() => {
+        router.replace(path);
+      });
+    };
+
+    (async () => {
+      try {
+        const auth = await getStoredAuth();
+
+        // Always ensure min duration ~1.2s
+        const ensureMin = async () => {
+          const dt = Date.now() - t0;
+          if (dt < 1200) await sleep(1200 - dt);
+        };
+
+        if (!auth.apiKey) {
+          await ensureMin();
+          await routeNow("/provision");
+          return;
+        }
+
+        // License check, but cap splash at 1.8s
+        const checkPromise = fetchLicense({ apiKey: auth.apiKey, tenantSlug: auth.tenantSlug });
+
+        const maxSplash = 1800;
+        const dt = Date.now() - t0;
+        const remaining = Math.max(0, maxSplash - dt);
+
+        const winner = await Promise.race([
+          (async () => ({ kind: "license" as const, res: await checkPromise }))(),
+          (async () => {
+            await sleep(remaining);
+            return { kind: "timeout" as const };
+          })(),
+        ]);
+
+        await ensureMin();
+
+        if (winner.kind === "timeout") {
+          await routeNow("/license");
+          return;
+        }
+
+        if (winner.res.isActive) await routeNow("/stats");
+        else await routeNow("/license");
+      } catch (e) {
+        const err = e as ApiError;
+        setDebugErr(err);
+        setDebugMsg(err?.message || "Verbindung fehlgeschlagen.");
+
+        const dt = Date.now() - t0;
+        if (dt < 1200) await sleep(1200 - dt);
+
+        await routeNow("/license");
+      }
+    })();
+
+    return () => {
+      routed = true;
+    };
+  }, [router, lift, opacityLogo, scaleLogo, opacitySub]);
 
   return (
-    <ScreenScaffold title="Home" scroll={false}>
-      <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: bottomPad }]}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+    <SafeAreaView style={styles.safe}>
+      <LinearGradient
+        colors={["rgba(0,0,0,0.02)", "rgba(255,255,255,1)"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 0, y: 1 }}
+        style={styles.bg}
       >
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Aktives Event</Text>
-          {activeEventName ? (
-            <Text style={styles.cardText}>{activeEventName}</Text>
-          ) : (
-            <Text style={styles.cardMuted}>Kein aktives Event gefunden.</Text>
-          )}
+        <Animated.View style={[styles.center, { transform: [{ translateY: lift }] }]}>
+          <Animated.View style={{ opacity: opacityLogo, transform: [{ scale: scaleLogo }] }}>
+            <Image source={BRAND_LOGO} style={styles.logo} resizeMode="contain" />
+          </Animated.View>
 
-          <Pressable onPress={onRefresh} style={[styles.btn, styles.btnLight]}>
-            <Text style={styles.btnLightText}>Aktualisieren</Text>
-          </Pressable>
-        </View>
+          <Animated.Text style={[styles.subtitle, { opacity: opacitySub }]}>{subtitle}</Animated.Text>
 
-        <Pressable onPress={() => router.push("/stats")} style={styles.card}>
-          <View style={styles.cardRow}>
-            <Text style={styles.cardTitle}>Statistik heute</Text>
-            <Text style={styles.chev}>›</Text>
-          </View>
+          <Text style={styles.micro}>License Check…</Text>
 
-          <View style={styles.statsRow}>
-            <View style={styles.statBox}>
-              <Text style={styles.statLabel}>Leads</Text>
-              <Text style={styles.statValue}>{todayLeads}</Text>
-            </View>
-            <View style={styles.statBox}>
-              <Text style={styles.statLabel}>Ø/h</Text>
-              <Text style={styles.statValue}>{todayLph.toFixed(1)}</Text>
-            </View>
-            <View style={styles.statBox}>
-              <Text style={styles.statLabel}>Follow-ups</Text>
-              <Text style={styles.statValue}>{todayAttachments}</Text>
-            </View>
-          </View>
-
-          <Text style={styles.smallHint}>Weitere Statistiken im „Stats“-Tab</Text>
-        </Pressable>
-
-        <Pressable onPress={() => router.push("/forms")} style={[styles.btn, { backgroundColor: accentColor }]}>
-          <Text style={styles.btnAccentText}>Lead erfassen</Text>
-        </Pressable>
-
-        <View style={styles.listCard}>
-          <Pressable onPress={() => router.push("/leads")} style={styles.listRow}>
-            <Text style={styles.listRowText}>Visitenkarte scannen</Text>
-            <Text style={styles.chev}>›</Text>
-          </Pressable>
-          <View style={styles.divider} />
-          <Pressable onPress={() => router.push("/leads")} style={styles.listRow}>
-            <Text style={styles.listRowText}>Kontakt manuell hinzufügen</Text>
-            <Text style={styles.chev}>›</Text>
-          </Pressable>
-        </View>
-
-        <Text style={styles.footerHint}>Daten werden online erfasst · Pull to refresh</Text>
-      </ScrollView>
-    </ScreenScaffold>
+          <CollapsibleDetails
+            title="Details anzeigen"
+            lines={[
+              ["Hinweis", debugMsg || undefined],
+              ["TraceId", debugErr?.traceId],
+              ["Error Code", debugErr?.code],
+              ["HTTP Status", debugErr?.status ? String(debugErr.status) : undefined],
+            ]}
+          />
+        </Animated.View>
+      </LinearGradient>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: UI.padX, paddingTop: 14, gap: 14 },
+  safe: { flex: 1, backgroundColor: "#fff" },
+  bg: { flex: 1 },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
 
-  card: {
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: UI.border,
-    backgroundColor: UI.bg,
-    padding: 16,
-  },
-  cardRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  cardTitle: { fontSize: 18, fontWeight: "900", color: UI.text },
-  cardText: { marginTop: 6, fontSize: 16, color: UI.text },
-  cardMuted: { marginTop: 6, fontSize: 16, color: "rgba(17,24,39,0.55)" },
-  chev: { fontSize: 22, fontWeight: "900", color: "rgba(17,24,39,0.35)" },
+  // Wordmark feels more enterprise than app icon
+  logo: { width: 240, height: 72 },
 
-  btn: { borderRadius: 18, paddingVertical: 16, alignItems: "center" },
-  btnAccentText: { color: "white", fontSize: 18, fontWeight: "900" },
-  btnLight: { backgroundColor: "rgba(17,24,39,0.06)", marginTop: 12 },
-  btnLightText: { fontWeight: "900", color: UI.text },
-
-  statsRow: { flexDirection: "row", gap: 12, marginTop: 12 },
-  statBox: {
-    flex: 1,
-    borderRadius: 16,
-    backgroundColor: "rgba(17,24,39,0.03)",
-    borderWidth: 1,
-    borderColor: "rgba(17,24,39,0.06)",
-    padding: 12,
-  },
-  statLabel: { color: "rgba(17,24,39,0.55)", fontWeight: "900" },
-  statValue: { marginTop: 6, fontSize: 26, fontWeight: "900", color: UI.text },
-  smallHint: { marginTop: 10, color: "rgba(17,24,39,0.55)", fontWeight: "700" },
-
-  listCard: {
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: UI.border,
-    backgroundColor: UI.bg,
-    overflow: "hidden",
-  },
-  listRow: {
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  listRowText: { fontSize: 18, fontWeight: "900", color: UI.text },
-  divider: { height: 1, backgroundColor: "rgba(17,24,39,0.06)" },
-
-  footerHint: { textAlign: "center", color: "rgba(17,24,39,0.35)", fontWeight: "700", marginTop: 2 },
+  subtitle: { marginTop: 14, fontSize: 15, fontWeight: "800", color: "rgba(0,0,0,0.62)", textAlign: "center" },
+  micro: { marginTop: 10, fontSize: 12, fontWeight: "700", color: "rgba(0,0,0,0.35)" },
 });

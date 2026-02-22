@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 
@@ -19,8 +19,11 @@ function jsonOk(data: unknown, tid: string): Response {
   return NextResponse.json({ ok: true, data, traceId: tid }, { status: 200, headers: { "x-trace-id": tid } });
 }
 
-function jsonError(code: string, message: string, tid: string, status = 400): Response {
-  return NextResponse.json({ ok: false, error: { code, message }, traceId: tid }, { status, headers: { "x-trace-id": tid } });
+function jsonError(code: string, message: string, tid: string, status = 400, details?: unknown): Response {
+  return NextResponse.json(
+    { ok: false, error: { code, message, details }, traceId: tid },
+    { status, headers: { "x-trace-id": tid } }
+  );
 }
 
 async function validateBody(
@@ -38,8 +41,18 @@ async function validateBody(
   return { ok: true, data: parsed.data };
 }
 
+function env(name: string): string {
+  return (process.env[name] || "").trim();
+}
+
 function sha256Hex(s: string): string {
   return createHash("sha256").update(s).digest("hex");
+}
+
+function hmacKeyHash(apiKeyPlain: string): string {
+  const secret = env("MOBILE_API_KEY_SECRET");
+  if (!secret) throw new Error("Missing MOBILE_API_KEY_SECRET.");
+  return createHmac("sha256", secret).update(apiKeyPlain).digest("hex");
 }
 
 function genApiKey(): string {
@@ -110,8 +123,17 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   if (!device) return jsonError("INVALID_CODE", "Invalid provisioning code.", tid, 401);
 
-  const apiKeyPlain = genApiKey();
-  const apiKeyHash = sha256Hex(apiKeyPlain);
+  // IMPORTANT: Store keyHash compatible with /license (HMAC-SHA256 with MOBILE_API_KEY_SECRET)
+  let apiKeyPlain: string;
+  let apiKeyHash: string;
+  try {
+    apiKeyPlain = genApiKey();
+    apiKeyHash = hmacKeyHash(apiKeyPlain);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Config error.";
+    return jsonError("CONFIG_ERROR", msg, tid, 500);
+  }
+
   const apiKeyPrefix = apiKeyPlain.slice(0, 14);
 
   await prisma.$transaction(async (tx) => {

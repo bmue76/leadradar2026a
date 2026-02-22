@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHmac } from "node:crypto";
+import { createHmac, createHash } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -32,6 +32,21 @@ function hmacKeyHash(apiKeyPlain: string): string {
   return createHmac("sha256", secret).update(apiKeyPlain).digest("hex");
 }
 
+// Legacy compatibility: older redeem versions stored SHA256(apiKeyPlain)
+function sha256Hex(s: string): string {
+  return createHash("sha256").update(s).digest("hex");
+}
+
+function getApiKeyFromHeaders(req: NextRequest): string {
+  const x = (req.headers.get("x-api-key") || req.headers.get("x-mobile-api-key") || "").trim();
+  if (x) return x;
+
+  const auth = (req.headers.get("authorization") || "").trim();
+  if (!auth) return "";
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  return m ? (m[1] || "").trim() : "";
+}
+
 function addDays(d: Date, days: number): Date {
   return new Date(d.getTime() + days * 24 * 60 * 60 * 1000);
 }
@@ -45,19 +60,24 @@ function durationDays(type: string): number | null {
 export async function GET(req: NextRequest): Promise<Response> {
   const tid = traceId();
 
-  const apiKey = (req.headers.get("x-api-key") || req.headers.get("x-mobile-api-key") || "").trim();
+  const apiKey = getApiKeyFromHeaders(req);
   if (!apiKey) return jsonError("UNAUTHORIZED", "Unauthorized.", tid, 401);
 
-  let keyHash: string;
+  let keyHashHmac: string;
   try {
-    keyHash = hmacKeyHash(apiKey);
+    keyHashHmac = hmacKeyHash(apiKey);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Config error.";
     return jsonError("CONFIG_ERROR", msg, tid, 500);
   }
 
+  const keyHashLegacy = sha256Hex(apiKey);
+
   const key = await prisma.mobileApiKey.findFirst({
-    where: { keyHash, status: "ACTIVE" },
+    where: {
+      status: "ACTIVE",
+      keyHash: { in: [keyHashHmac, keyHashLegacy] },
+    },
     select: {
       id: true,
       tenantId: true,
