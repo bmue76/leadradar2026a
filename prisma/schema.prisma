@@ -203,6 +203,9 @@ model Tenant {
   // TP 3.3 — Events
   events Event[]
 
+  // TP 7.10 — Event↔Form Assignments (Many-to-Many)
+  eventFormAssignments EventFormAssignment[]
+
   // TP 2.5 — Mobile Device Auth
   mobileApiKeys     MobileApiKey[]
   mobileDevices     MobileDevice[]
@@ -378,8 +381,11 @@ model Event {
   // Devices bound to this event (activeEventId)
   activeDevices MobileDevice[] @relation("ActiveEvent")
 
-  // Option 2 — Forms assigned to this event (MVP-lean)
+  // Legacy (TP3.3): 1:1 Form.assignedEventId relation (kept for backward-compat + migration backfill).
   assignedForms Form[] @relation("FormAssignedEvent")
+
+  // TP 7.10 — Many-to-Many (source of truth for MVP visibility)
+  formAssignments EventFormAssignment[] @relation("EventFormAssignments")
 
   @@index([tenantId, status])
   @@index([tenantId, startsAt])
@@ -398,9 +404,13 @@ model Form {
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
-  // Option 2 — assigned to active event (nullable, MVP-lean)
+  // Legacy (TP3.3): assigned to active event (nullable, MVP-lean).
+  // TP7.10: used only for migration backfill; source of truth becomes EventFormAssignment.
   assignedEventId String?
   assignedEvent   Event?  @relation("FormAssignedEvent", fields: [assignedEventId], references: [id], onDelete: SetNull)
+
+  // TP 7.10 — Many-to-Many (source of truth for MVP visibility)
+  eventAssignments EventFormAssignment[] @relation("FormEventAssignments")
 
   tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   fields FormField[]
@@ -411,6 +421,28 @@ model Form {
 
   @@index([tenantId, status])
   @@index([tenantId, status, assignedEventId])
+}
+
+//
+// TP 7.10 — Event ↔ Form Assignments (Many-to-Many, tenant-scoped)
+// - Unique per (tenantId, eventId, formId).
+// - Source of truth for Mobile form visibility (MVP).
+// - Backfill happens from Form.assignedEventId in migration.
+//
+model EventFormAssignment {
+  tenantId String
+  eventId  String
+  formId   String
+
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  event  Event  @relation("EventFormAssignments", fields: [eventId], references: [id], onDelete: Cascade)
+  form   Form   @relation("FormEventAssignments", fields: [formId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, eventId, formId])
+  @@index([tenantId, eventId])
+  @@index([tenantId, formId])
 }
 
 //
