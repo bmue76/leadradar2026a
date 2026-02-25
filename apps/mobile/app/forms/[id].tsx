@@ -9,6 +9,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import { apiFetch, createLead, patchLeadContact, storeAttachmentOcrResult, uploadLeadAttachment } from "../../src/lib/api";
 import { clearApiKey, getApiKey } from "../../src/lib/auth";
 import { uuidV4 } from "../../src/lib/uuid";
+import { getActiveEventId } from "../../src/lib/eventStorage";
 
 import { recognizeTextFromBusinessCard } from "../../src/ocr/recognizeText";
 import { parseBusinessCard } from "../../src/ocr/parseBusinessCard";
@@ -31,14 +32,7 @@ function asNumber(v: unknown): number | undefined {
   return typeof v === "number" ? v : undefined;
 }
 
-type FieldType =
-  | "TEXT"
-  | "TEXTAREA"
-  | "EMAIL"
-  | "PHONE"
-  | "CHECKBOX"
-  | "SINGLE_SELECT"
-  | "MULTI_SELECT";
+type FieldType = "TEXT" | "TEXTAREA" | "EMAIL" | "PHONE" | "CHECKBOX" | "SINGLE_SELECT" | "MULTI_SELECT";
 
 type FieldOption = { label: string; value: string };
 
@@ -108,10 +102,13 @@ function parseFormDetail(payload: unknown): { form: FormDetail; fields: FormFiel
   const form: FormDetail = { id, name: asString(formObj.name), title: asString(formObj.title) };
 
   const fieldsRaw =
-    Array.isArray(payload.fields) ? payload.fields :
-    isObject(payload.form) && Array.isArray((payload.form as JsonObject).fields) ? ((payload.form as JsonObject).fields as unknown[]) :
-    Array.isArray((payload as JsonObject).fields) ? ((payload as JsonObject).fields as unknown[]) :
-    [];
+    Array.isArray(payload.fields)
+      ? payload.fields
+      : isObject(payload.form) && Array.isArray((payload.form as JsonObject).fields)
+      ? ((payload.form as JsonObject).fields as unknown[])
+      : Array.isArray((payload as JsonObject).fields)
+      ? ((payload as JsonObject).fields as unknown[])
+      : [];
 
   const fields = fieldsRaw
     .map(parseField)
@@ -236,10 +233,25 @@ function seemsWeakText(rawText: string): boolean {
   return false;
 }
 
+function readError(res: unknown): { status: number; code: string; message: string; traceId: string } {
+  const r = isObject(res) ? res : {};
+  const status = typeof (r as { status?: unknown }).status === "number" ? (r as { status: number }).status : 0;
+  const traceId = typeof (r as { traceId?: unknown }).traceId === "string" ? (r as { traceId: string }).traceId : "";
+  const err = isObject((r as { error?: unknown }).error) ? ((r as { error?: unknown }).error as JsonObject) : null;
+  const code = err && typeof err.code === "string" ? err.code : "";
+  const msgFromErr = err && typeof err.message === "string" ? err.message : "";
+  const msgTop = typeof (r as { message?: unknown }).message === "string" ? (r as { message: string }).message : "";
+  const message = msgFromErr || msgTop || "Request failed";
+  return { status, code, message, traceId };
+}
+
 export default function CaptureScreen() {
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ id?: string }>();
+  const params = useLocalSearchParams<{ id?: string; eventId?: string }>();
+
   const formId = (params?.id ?? "").toString().trim();
+  const eventIdParam = (params?.eventId ?? "").toString().trim();
+  const [eventId, setEventId] = useState<string>(eventIdParam);
 
   const [busy, setBusy] = useState(false);
   const [submitBusy, setSubmitBusy] = useState(false);
@@ -264,6 +276,33 @@ export default function CaptureScreen() {
   const [rawExpanded, setRawExpanded] = useState(false);
 
   const title = useMemo(() => (form ? labelForForm(form) : "Lead erfassen"), [form]);
+
+  // Ensure eventId: prefer URL param, else read from storage, else go to gate
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      const fromUrl = eventIdParam;
+      if (fromUrl) {
+        if (alive) setEventId(fromUrl);
+        return;
+      }
+
+      const stored = await getActiveEventId();
+      if (stored && alive) {
+        setEventId(stored);
+        router.replace(`/forms/${encodeURIComponent(formId)}?eventId=${encodeURIComponent(stored)}`);
+        return;
+      }
+
+      // No event context => gate
+      if (alive) router.replace("/event-gate");
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [eventIdParam, formId]);
 
   const resetValues = useCallback(() => {
     const next: ValuesMap = {};
@@ -301,8 +340,15 @@ export default function CaptureScreen() {
 
   const load = useCallback(async () => {
     setErrorText("");
+
     if (!formId) {
       setErrorText("Ungültige Form-ID.");
+      return;
+    }
+
+    const eid = (eventId || "").trim();
+    if (!eid) {
+      router.replace("/event-gate");
       return;
     }
 
@@ -313,25 +359,31 @@ export default function CaptureScreen() {
 
       const res = await apiFetch({
         method: "GET",
-        path: `/api/mobile/v1/forms/${encodeURIComponent(formId)}`,
+        path: `/api/mobile/v1/forms/${encodeURIComponent(formId)}?eventId=${encodeURIComponent(eid)}`,
         apiKey: key,
       });
 
-      if (!isObject(res) || typeof res.ok !== "boolean") {
+      if (!isObject(res) || typeof (res as { ok?: unknown }).ok !== "boolean") {
         setErrorText("Invalid API response shape");
         return;
       }
 
-      if (res.ok !== true) {
-        const status = typeof (res as { status?: unknown }).status === "number" ? (res as { status: number }).status : 0;
-        const message =
-          typeof (res as { message?: unknown }).message === "string"
-            ? (res as { message: string }).message
-            : "Request failed";
-        const traceId = typeof (res as { traceId?: unknown }).traceId === "string" ? (res as { traceId: string }).traceId : "";
+      if ((res as { ok: boolean }).ok !== true) {
+        const { status, code, message, traceId } = readError(res);
 
-        if (status === 401) {
+        if (status === 401 || code === "INVALID_API_KEY") {
           await handleUnauthorized(traceId || undefined);
+          return;
+        }
+
+        if (status === 402 || code === "PAYMENT_REQUIRED") {
+          router.replace("/license");
+          return;
+        }
+
+        // If event is no longer active or not found => back to event gate
+        if (code === "EVENT_NOT_ACTIVE" || code === "NOT_FOUND") {
+          router.replace("/event-gate");
           return;
         }
 
@@ -358,7 +410,7 @@ export default function CaptureScreen() {
     } finally {
       setBusy(false);
     }
-  }, [formId, handleUnauthorized, requireKeyOrRedirect]);
+  }, [eventId, formId, handleUnauthorized, requireKeyOrRedirect]);
 
   useEffect(() => {
     void load();
@@ -495,7 +547,10 @@ export default function CaptureScreen() {
           await handleUnauthorized(leadRes.traceId);
           return;
         }
-        Alert.alert("Fehler", `Konnte nicht gespeichert werden.\n${leadRes.message}${leadRes.traceId ? `\ntraceId: ${leadRes.traceId}` : ""}`);
+        Alert.alert(
+          "Fehler",
+          `Konnte nicht gespeichert werden.\n${leadRes.message}${leadRes.traceId ? `\ntraceId: ${leadRes.traceId}` : ""}`
+        );
         return;
       }
 
@@ -517,7 +572,10 @@ export default function CaptureScreen() {
             await handleUnauthorized(attRes.traceId);
             return;
           }
-          Alert.alert("Fehler", `Attachment Upload fehlgeschlagen.\n${attRes.message}${attRes.traceId ? `\ntraceId: ${attRes.traceId}` : ""}`);
+          Alert.alert(
+            "Fehler",
+            `Attachment Upload fehlgeschlagen.\n${attRes.message}${attRes.traceId ? `\ntraceId: ${attRes.traceId}` : ""}`
+          );
           return;
         }
 
@@ -546,7 +604,10 @@ export default function CaptureScreen() {
             await handleUnauthorized(ocrStoreRes.traceId);
             return;
           }
-          Alert.alert("Fehler", `OCR speichern fehlgeschlagen.\n${ocrStoreRes.message}${ocrStoreRes.traceId ? `\ntraceId: ${ocrStoreRes.traceId}` : ""}`);
+          Alert.alert(
+            "Fehler",
+            `OCR speichern fehlgeschlagen.\n${ocrStoreRes.message}${ocrStoreRes.traceId ? `\ntraceId: ${ocrStoreRes.traceId}` : ""}`
+          );
           return;
         }
 
@@ -569,7 +630,10 @@ export default function CaptureScreen() {
             await handleUnauthorized(contactRes.traceId);
             return;
           }
-          Alert.alert("Fehler", `Kontakt setzen fehlgeschlagen.\n${contactRes.message}${contactRes.traceId ? `\ntraceId: ${contactRes.traceId}` : ""}`);
+          Alert.alert(
+            "Fehler",
+            `Kontakt setzen fehlgeschlagen.\n${contactRes.message}${contactRes.traceId ? `\ntraceId: ${contactRes.traceId}` : ""}`
+          );
           return;
         }
       }
@@ -627,7 +691,15 @@ export default function CaptureScreen() {
     <ScreenScaffold title={title} scroll={false}>
       {errorText ? (
         <View style={{ paddingHorizontal: UI.padX, paddingTop: 14 }}>
-          <View style={{ padding: 12, borderRadius: 14, borderWidth: 1, borderColor: "rgba(220,38,38,0.25)", backgroundColor: "rgba(220,38,38,0.06)" }}>
+          <View
+            style={{
+              padding: 12,
+              borderRadius: 14,
+              borderWidth: 1,
+              borderColor: "rgba(220,38,38,0.25)",
+              backgroundColor: "rgba(220,38,38,0.06)",
+            }}
+          >
             <Text style={{ fontWeight: "900", color: "rgba(153,27,27,0.95)" }}>Hinweis</Text>
             <Text style={{ color: "rgba(153,27,27,0.95)", marginTop: 6 }}>{errorText}</Text>
 
@@ -641,16 +713,42 @@ export default function CaptureScreen() {
 
               <Pressable
                 onPress={() => router.replace("/forms")}
-                style={{ flex: 1, paddingVertical: 10, borderRadius: 12, backgroundColor: "rgba(17,24,39,0.06)", alignItems: "center" }}
+                style={{
+                  flex: 1,
+                  paddingVertical: 10,
+                  borderRadius: 12,
+                  backgroundColor: "rgba(17,24,39,0.06)",
+                  alignItems: "center",
+                }}
               >
                 <Text style={{ fontWeight: "900", color: UI.text }}>Zur Liste</Text>
               </Pressable>
             </View>
+
+            <Pressable
+              onPress={() => router.replace("/event-gate")}
+              style={{
+                marginTop: 10,
+                paddingVertical: 10,
+                borderRadius: 12,
+                backgroundColor: "rgba(17,24,39,0.06)",
+                alignItems: "center",
+              }}
+            >
+              <Text style={{ fontWeight: "900", color: UI.text }}>Event wählen</Text>
+            </Pressable>
           </View>
         </View>
       ) : null}
 
-      <ScrollView contentContainerStyle={{ paddingHorizontal: UI.padX, paddingTop: 14, paddingBottom: padBottom, gap: 12 }}>
+      <ScrollView
+        contentContainerStyle={{
+          paddingHorizontal: UI.padX,
+          paddingTop: 14,
+          paddingBottom: padBottom,
+          gap: 12,
+        }}
+      >
         {/* Business card scan section */}
         <View style={{ padding: 12, borderRadius: 14, borderWidth: 1, borderColor: UI.border, backgroundColor: UI.bg, gap: 10 }}>
           <Text style={{ fontWeight: "900", color: UI.text }}>Visitenkarte</Text>
@@ -670,7 +768,12 @@ export default function CaptureScreen() {
                   <Pressable
                     onPress={scanBusinessCard}
                     disabled={ocrBusy || submitBusy}
-                    style={{ paddingVertical: 9, paddingHorizontal: 12, borderRadius: 12, backgroundColor: (ocrBusy || submitBusy) ? "rgba(17,24,39,0.35)" : UI.text }}
+                    style={{
+                      paddingVertical: 9,
+                      paddingHorizontal: 12,
+                      borderRadius: 12,
+                      backgroundColor: ocrBusy || submitBusy ? "rgba(17,24,39,0.35)" : UI.text,
+                    }}
                   >
                     <Text style={{ color: "white", fontWeight: "900" }}>{ocrBusy ? "Einen Moment …" : "Neu aufnehmen"}</Text>
                   </Pressable>
@@ -700,7 +803,7 @@ export default function CaptureScreen() {
               style={{
                 paddingVertical: 12,
                 borderRadius: 12,
-                backgroundColor: (ocrBusy || submitBusy) ? "rgba(17,24,39,0.35)" : UI.text,
+                backgroundColor: ocrBusy || submitBusy ? "rgba(17,24,39,0.35)" : UI.text,
                 alignItems: "center",
               }}
             >
@@ -776,7 +879,7 @@ export default function CaptureScreen() {
                   style={{
                     paddingVertical: 12,
                     borderRadius: 12,
-                    backgroundColor: (submitBusy || ocrBusy) ? "rgba(17,24,39,0.35)" : UI.text,
+                    backgroundColor: submitBusy || ocrBusy ? "rgba(17,24,39,0.35)" : UI.text,
                     alignItems: "center",
                     marginTop: 4,
                   }}
@@ -811,7 +914,7 @@ export default function CaptureScreen() {
                 {f.label} {f.required ? <Text style={{ color: UI.accent }}>*</Text> : null}
               </Text>
 
-              {(f.type === "TEXT" || f.type === "EMAIL" || f.type === "PHONE") ? (
+              {f.type === "TEXT" || f.type === "EMAIL" || f.type === "PHONE" ? (
                 <TextInput
                   value={typeof v === "string" ? v : ""}
                   onChangeText={(t) => setValue(f.key, t)}

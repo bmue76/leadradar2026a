@@ -35,13 +35,26 @@ function getHeader(req: Request, name: string): string {
   return (req.headers.get(name) || "").trim();
 }
 
+function readBearerToken(req: Request): string {
+  const v = getHeader(req, "authorization");
+  if (!v) return "";
+  const lower = v.toLowerCase();
+  if (!lower.startsWith("bearer ")) return "";
+  return v.slice(7).trim();
+}
+
 function safeInvalidKey(): never {
   // Strict, leak-safe: no tenant details, no existence details.
   throw httpError(401, "INVALID_API_KEY", "Invalid API key.");
 }
 
 export async function requireMobileAuth(req: Request): Promise<MobileAuthContext> {
-  const apiKeyToken = getHeader(req, "x-api-key") || getHeader(req, "x-mobile-api-key");
+  // Accept either:
+  // - x-api-key / x-mobile-api-key
+  // - Authorization: Bearer <token>
+  const apiKeyToken =
+    getHeader(req, "x-api-key") || getHeader(req, "x-mobile-api-key") || readBearerToken(req);
+
   if (!apiKeyToken || apiKeyToken.length < 10) safeInvalidKey();
 
   const expectedKeyHash = hmacSha256Hex(getMobileApiKeySecret(), apiKeyToken);
@@ -94,7 +107,7 @@ export async function requireMobileAuth(req: Request): Promise<MobileAuthContext
 
     if (!apiKeyRow) safeInvalidKey();
   } else {
-    // NEW: tenant-less mode (robust for clients that forgot x-tenant-slug)
+    // tenant-less mode (robust for clients that forgot x-tenant-slug)
     const direct = await prisma.mobileApiKey.findFirst({
       where: { keyHash: expectedKeyHash, status: "ACTIVE" },
       select: {
@@ -130,7 +143,7 @@ export async function requireMobileAuth(req: Request): Promise<MobileAuthContext
     tenantSlug = t?.slug || "";
   }
 
-  // Resolve the device via apiKeyId (NOT via tenant-only heuristics)
+  // Resolve the device via apiKeyId
   const device = await prisma.mobileDevice.findFirst({
     where: { tenantId, apiKeyId: apiKeyRow.id },
     select: { id: true, status: true },

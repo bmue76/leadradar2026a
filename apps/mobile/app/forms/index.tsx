@@ -6,6 +6,7 @@ import { StatusBar } from "expo-status-bar";
 
 import { apiFetch } from "../../src/lib/api";
 import { clearApiKey, getApiKey } from "../../src/lib/auth";
+import { getActiveEventId } from "../../src/lib/eventStorage";
 import { AppHeader } from "../../src/ui/AppHeader";
 import { PoweredBy } from "../../src/ui/PoweredBy";
 import { UI } from "../../src/ui/tokens";
@@ -35,7 +36,7 @@ function isObject(v: unknown): v is JsonObject {
 }
 
 function isApiResp(v: unknown): v is ApiRespShape {
-  return isObject(v) && typeof v.ok === "boolean";
+  return isObject(v) && typeof (v as { ok?: unknown }).ok === "boolean";
 }
 
 function asFormSummary(v: unknown): FormSummary | null {
@@ -62,14 +63,12 @@ function pickList(data: unknown): unknown[] {
 function extractError(res: ApiRespShape): { status: number; code: string; message: string; traceId: string } {
   const traceId = typeof res.traceId === "string" ? res.traceId : "";
 
-  const status = typeof (res as { status?: unknown }).status === "number" ? ((res as { status: number }).status) : 0;
+  const status = typeof (res as { status?: unknown }).status === "number" ? (res as { status: number }).status : 0;
 
-  // Prefer standard jsonError shape: { ok:false, error:{code,message,details}, traceId }
   const err = (res as { error?: ApiErrorShape }).error;
   const code = err && typeof err.code === "string" ? err.code : "";
   const msgFromErr = err && typeof err.message === "string" ? err.message : "";
 
-  // Fallback: some clients attach { status, message }
   const msgTop = typeof (res as { message?: unknown }).message === "string" ? (res as { message: string }).message : "";
 
   const message = msgFromErr || msgTop || "Request failed";
@@ -84,6 +83,7 @@ export default function FormsIndex() {
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [errorText, setErrorText] = useState<string>("");
+  const [eventId, setEventId] = useState<string | null>(null);
 
   const tenantName = brandingState.kind === "ready" ? branding.tenantName : null;
   const logoDataUrl = brandingState.kind === "ready" ? branding.logoDataUrl : null;
@@ -93,6 +93,10 @@ export default function FormsIndex() {
   const reActivate = useCallback(async () => {
     await clearApiKey();
     router.replace("/provision");
+  }, []);
+
+  const goEventGate = useCallback(() => {
+    router.replace("/event-gate");
   }, []);
 
   const load = useCallback(async () => {
@@ -106,9 +110,16 @@ export default function FormsIndex() {
         return;
       }
 
+      const activeEventId = await getActiveEventId();
+      if (!activeEventId) {
+        router.replace("/event-gate");
+        return;
+      }
+      setEventId(activeEventId);
+
       const raw = await apiFetch({
         method: "GET",
-        path: "/api/mobile/v1/forms",
+        path: `/api/mobile/v1/forms?eventId=${encodeURIComponent(activeEventId)}`,
         apiKey: key,
       });
 
@@ -121,9 +132,19 @@ export default function FormsIndex() {
       if (!raw.ok) {
         const { status, code, message, traceId } = extractError(raw);
 
-        // Mobile Capture Hardblock → License Screen
         if (status === 402 || code === "PAYMENT_REQUIRED") {
           router.replace("/license");
+          return;
+        }
+
+        if (status === 401 || code === "INVALID_API_KEY") {
+          await reActivate();
+          return;
+        }
+
+        // Event not active / not found => event gate
+        if (code === "EVENT_NOT_ACTIVE" || code === "NOT_FOUND") {
+          router.replace("/event-gate");
           return;
         }
 
@@ -139,7 +160,7 @@ export default function FormsIndex() {
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [reActivate]);
 
   useEffect(() => {
     void load();
@@ -159,6 +180,15 @@ export default function FormsIndex() {
       <StatusBar style="dark" backgroundColor={UI.bg} />
       <AppHeader title="Formulare" tenantName={tenantName} logoDataUrl={logoDataUrl} />
 
+      {eventId ? (
+        <View style={[styles.eventHint, { paddingHorizontal: UI.padX }]}>
+          <Text style={styles.eventHintText}>Event: <Text style={styles.eventHintMono}>{eventId}</Text></Text>
+          <Pressable onPress={goEventGate} style={styles.eventHintBtn}>
+            <Text style={styles.eventHintBtnText}>Wechseln</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
       {errorText ? (
         <View style={[styles.body, { paddingBottom: listPadBottom }]}>
           <View style={styles.warnCard}>
@@ -170,10 +200,14 @@ export default function FormsIndex() {
                 <Text style={styles.btnDarkText}>Retry</Text>
               </Pressable>
 
-              <Pressable onPress={reActivate} style={[styles.btn, styles.btnAccent]}>
-                <Text style={styles.btnAccentText}>Neu aktivieren</Text>
+              <Pressable onPress={goEventGate} style={[styles.btn, styles.btnAccent]}>
+                <Text style={styles.btnAccentText}>Event wählen</Text>
               </Pressable>
             </View>
+
+            <Pressable onPress={reActivate} style={[styles.btnWide, styles.btnGhost]}>
+              <Text style={styles.btnGhostText}>Neu aktivieren</Text>
+            </Pressable>
           </View>
 
           <PoweredBy />
@@ -181,12 +215,20 @@ export default function FormsIndex() {
       ) : !errorText && !busy && items.length === 0 ? (
         <View style={[styles.body, { paddingBottom: listPadBottom }]}>
           <View style={styles.card}>
-            <Text style={styles.h2}>Keine Formulare zugewiesen.</Text>
-            <Text style={styles.p}>Weise im Admin ein ACTIVE Formular dem Gerät zu.</Text>
+            <Text style={styles.h2}>Keine Formulare sichtbar.</Text>
+            <Text style={styles.p}>
+              Dieses Event hat aktuell keine aktiven Formulare (Global oder Event-Zuweisung). Setze im Admin im Formular die Sichtbarkeit.
+            </Text>
 
-            <Pressable onPress={reActivate} style={[styles.btn, styles.btnDark, { marginTop: 10 }]}>
-              <Text style={styles.btnDarkText}>Neu aktivieren</Text>
-            </Pressable>
+            <View style={styles.row}>
+              <Pressable onPress={load} style={[styles.btn, styles.btnDark, { marginTop: 10 }]}>
+                <Text style={styles.btnDarkText}>Aktualisieren</Text>
+              </Pressable>
+
+              <Pressable onPress={goEventGate} style={[styles.btn, styles.btnAccent, { marginTop: 10 }]}>
+                <Text style={styles.btnAccentText}>Event wählen</Text>
+              </Pressable>
+            </View>
           </View>
 
           <PoweredBy />
@@ -199,7 +241,13 @@ export default function FormsIndex() {
           contentContainerStyle={[styles.list, { paddingBottom: listPadBottom }]}
           ListFooterComponent={<PoweredBy />}
           renderItem={({ item }) => (
-            <Pressable onPress={() => router.push(`/forms/${item.id}`)} style={styles.formCard}>
+            <Pressable
+              onPress={() => {
+                const eid = eventId ? encodeURIComponent(eventId) : "";
+                router.push(`/forms/${item.id}?eventId=${eid}`);
+              }}
+              style={styles.formCard}
+            >
               <Text style={styles.formTitle}>{labelForForm(item)}</Text>
               <Text style={styles.formId}>{item.id}</Text>
               {item.status ? <Text style={styles.formStatus}>Status: {item.status}</Text> : null}
@@ -213,6 +261,12 @@ export default function FormsIndex() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: UI.bg },
+
+  eventHint: { marginTop: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  eventHintText: { color: UI.text, opacity: 0.75, fontWeight: "800" },
+  eventHintMono: { fontFamily: "monospace", opacity: 0.9 },
+  eventHintBtn: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1, borderColor: UI.border },
+  eventHintBtnText: { fontWeight: "900", color: UI.text, opacity: 0.8 },
 
   body: { paddingHorizontal: UI.padX, paddingTop: 14, gap: 12 },
   list: { paddingHorizontal: UI.padX, paddingTop: 14 },
@@ -238,10 +292,16 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", gap: 10, marginTop: 12 },
 
   btn: { flex: 1, paddingVertical: 12, borderRadius: 14, alignItems: "center" },
+  btnWide: { marginTop: 10, paddingVertical: 12, borderRadius: 14, alignItems: "center" },
+
   btnDark: { backgroundColor: UI.text },
   btnDarkText: { color: "white", fontWeight: "900" },
+
   btnAccent: { backgroundColor: UI.accent },
   btnAccentText: { color: "white", fontWeight: "900" },
+
+  btnGhost: { backgroundColor: "rgba(0,0,0,0.04)", borderWidth: 1, borderColor: "rgba(0,0,0,0.06)" },
+  btnGhostText: { fontWeight: "900", color: "rgba(0,0,0,0.55)" },
 
   h2: { fontWeight: "900", color: UI.text },
   p: { marginTop: 6, opacity: 0.75, color: UI.text },

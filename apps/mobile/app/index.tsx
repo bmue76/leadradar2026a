@@ -15,7 +15,6 @@ function sleep(ms: number) {
 export default function StartGate() {
   const router = useRouter();
 
-  // Memoized Animated.Value => no ref.current access during render (eslint react-hooks/refs)
   const opacityLogo = useMemo(() => new Animated.Value(0), []);
   const scaleLogo = useMemo(() => new Animated.Value(0.96), []);
   const opacitySub = useMemo(() => new Animated.Value(0), []);
@@ -85,7 +84,7 @@ export default function StartGate() {
           return;
         }
 
-        if (winner.res.isActive) await routeNow("/stats");
+        if (winner.res.isActive) await routeNow("/event-gate");
         else await routeNow("/license");
       } catch (e) {
         const err = e as ApiError;
@@ -114,7 +113,7 @@ export default function StartGate() {
 
           <Animated.Text style={[styles.subtitle, { opacity: opacitySub }]}>{subtitle}</Animated.Text>
 
-          <Text style={styles.micro}>License Check…</Text>
+          <Text style={styles.micro}>Start…</Text>
 
           <CollapsibleDetails
             title="Details anzeigen"

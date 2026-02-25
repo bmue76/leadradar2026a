@@ -55,7 +55,7 @@ export default function LicenseGateScreen() {
 
       const lic = await fetchLicense({ apiKey: a.apiKey, tenantSlug: a.tenantSlug });
       if (lic.isActive) {
-        router.replace("/stats");
+        router.replace("/event-gate");
         return;
       }
       setState({ kind: "blocked", license: lic });

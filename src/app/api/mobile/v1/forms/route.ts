@@ -1,11 +1,21 @@
+import { z } from "zod";
 import { jsonError, jsonOk } from "@/lib/api";
-import { isHttpError } from "@/lib/http";
+import { httpError, isHttpError, validateQuery } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { requireMobileAuth } from "@/lib/mobileAuth";
 import { enforceRateLimit } from "@/lib/rateLimit";
 import { enforceMobileCaptureLicense } from "@/lib/billing/mobileCaptureGate";
 
 export const runtime = "nodejs";
+
+const QuerySchema = z
+  .object({
+    eventId: z.preprocess(
+      (v) => (typeof v === "string" ? v.trim() : ""),
+      z.string().min(1).max(64)
+    ),
+  })
+  .strict();
 
 export async function GET(req: Request) {
   try {
@@ -15,6 +25,9 @@ export async function GET(req: Request) {
 
     // Hardblock: Mobile Capture only
     await enforceMobileCaptureLicense(auth.tenantId);
+
+    const query = await validateQuery(req, QuerySchema);
+    const eventId = query.eventId;
 
     // Ops telemetry
     const now = new Date();
@@ -27,39 +40,30 @@ export async function GET(req: Request) {
       data: { lastSeenAt: now },
     });
 
-    // Multi-ACTIVE: capture context is per device (MobileDevice.activeEventId)
-    // If device not bound OR event not ACTIVE => return []
-    const device = await prisma.mobileDevice.findFirst({
-      where: { id: auth.deviceId, tenantId: auth.tenantId },
-      select: {
-        activeEventId: true,
-        activeEvent: { select: { id: true, status: true } },
-      },
+    // Validate event in tenant; must be ACTIVE
+    const ev = await prisma.event.findFirst({
+      where: { id: eventId, tenantId: auth.tenantId },
+      select: { id: true, status: true },
     });
-    if (!device?.activeEventId) return jsonOk(req, []);
-    if (!device.activeEvent || device.activeEvent.status !== "ACTIVE") return jsonOk(req, []);
+    if (!ev) throw httpError(404, "NOT_FOUND", "Not found.");
+    if (ev.status !== "ACTIVE") throw httpError(409, "EVENT_NOT_ACTIVE", "Event not active.");
 
-    const eventId = device.activeEventId;
-
-    const assignments = await prisma.mobileDeviceForm.findMany({
+    // TP7.10 visibility rule:
+    // - assigned to this event (join-table)
+    // - OR global (no assignments at all)
+    const forms = await prisma.form.findMany({
       where: {
         tenantId: auth.tenantId,
-        deviceId: auth.deviceId,
-        form: {
-          status: "ACTIVE",
-          assignedEventId: eventId,
-        },
+        status: "ACTIVE",
+        OR: [
+          { eventAssignments: { some: { tenantId: auth.tenantId, eventId } } },
+          { eventAssignments: { none: {} } },
+        ],
       },
-      select: {
-        form: {
-          select: { id: true, name: true, description: true, status: true },
-        },
-      },
-      orderBy: { form: { createdAt: "desc" } },
+      select: { id: true, name: true, description: true, status: true },
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
       take: 200,
     });
-
-    const forms = assignments.map((a) => a.form);
 
     return jsonOk(req, forms);
   } catch (e) {
