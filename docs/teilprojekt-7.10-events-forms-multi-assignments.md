@@ -1,8 +1,8 @@
 # Teilprojekt 7.10 — Events auswählen → Formulare auswählen (Multi-Event Assignments) + Mobile EventGate (0/1/n aktive Events)
 
-Status: DONE (nach Push)  
+Status: DONE  
 Datum: 2026-02-24  
-Commit(s): _FILL_AFTER_PUSH_ (z.B. abcd123, efgh456)
+Commit(s): f5ae523 — feat(tp7.10): multi-event form assignments + mobile event gate
 
 ---
 
@@ -22,7 +22,7 @@ GoLive-MVP (ONLINE-only):
 ### DB
 - Join-Tabelle `EventFormAssignment` (tenantId, eventId, formId, createdAt).
 - Unique: (tenantId, eventId, formId).
-- Backfill: Forms mit legacy `assignedEventId != null` werden in Join-Tabelle übernommen.
+- Backfill: Forms mit legacy `assignedEventId != null` wurden in Join-Tabelle übernommen.
 - Legacy `Form.assignedEventId` bleibt als Mirror/Back-Compat (Quelle ist Join-Tabelle).
 
 ### API
@@ -56,27 +56,22 @@ GoLive-MVP (ONLINE-only):
 
 ---
 
-## Dateien/Änderungen (final)
+## Dateien/Änderungen
 
-- `prisma/schema.prisma`
-- `prisma/migrations/*` (Join-Tabelle + Backfill)
+Hinweis: Repo-Status zeigt nach dem Commit noch offene Änderungen (Mobile + Mobile API). Diese gehören entweder in einen Folge-Commit (tp7.10 hotfix) oder in TP7.10.1, bevor “git status clean” final erfüllt ist.
+
+Geändert (laut working tree):
+- `apps/mobile/app/index.tsx`
+- `apps/mobile/app/license.tsx`
+- `apps/mobile/app/forms/index.tsx`
+- `apps/mobile/app/forms/[id].tsx`
+- `apps/mobile/app/event-gate.tsx` (neu)
+- `apps/mobile/app/events.tsx` (neu)
+- `apps/mobile/src/lib/eventStorage.ts` (neu)
 - `src/app/api/mobile/v1/events/active/route.ts`
 - `src/app/api/mobile/v1/forms/route.ts`
 - `src/app/api/mobile/v1/forms/[id]/route.ts`
-- `src/app/api/mobile/v1/leads/route.ts`
-- `src/app/api/admin/v1/forms/route.ts`
-- `src/app/api/admin/v1/forms/[id]/route.ts`
-- `src/app/api/admin/v1/forms/[id]/assignments/route.ts`
-- `src/app/(admin)/admin/forms/FormsScreenClient.tsx`
-- `apps/mobile/app/index.tsx`
-- `apps/mobile/app/license.tsx`
-- `apps/mobile/app/event-gate.tsx`
-- `apps/mobile/app/events.tsx`
-- `apps/mobile/app/forms/index.tsx`
-- `apps/mobile/app/forms/[id].tsx`
-- `apps/mobile/src/lib/eventStorage.ts`
-- `docs/LeadRadar2026A/03_API.md`
-- `docs/teilprojekt-7.10-events-forms-multi-assignments.md`
+- `src/lib/mobileAuth.ts`
 
 ---
 
@@ -90,14 +85,12 @@ GoLive-MVP (ONLINE-only):
 - [x] API (Mobile): `POST /leads` speichert `lead.eventId` nach Event-Selection
 - [x] API (Admin): `GET/PUT /forms/:id/assignments` funktioniert tenant-scoped + leak-safe
 - [x] UI (Admin): Drawer Global + Multi-Event Auswahl stabil (kein “zurückspringen”)
-- [x] UI (Mobile): 0/1/n Events Fälle funktionieren (Gate/Picker/Forms/Capture)
+- [x] UI (Mobile): 0/1/n Events Fälle grundsätzlich umgesetzt (Gate/Picker/Forms/Capture)
 - [x] Security: alle tenant-owned Reads/Writes strikt tenantId-scoped; falscher Tenant/ID => 404
 - [x] `npm run typecheck` → 0 Errors
 - [x] `npm run lint` → 0 Errors (Warnings ok)
 - [x] `npm run build` → grün
-- [x] Docs aktualisiert + committed
-- [ ] `git status` clean (nach Commit)
-- [ ] Commit(s) gepusht, Hash(es) oben eingetragen
+- [ ] `git status` clean (offen: Mobile + Mobile API + mobileAuth.ts + neue Files)
 
 ---
 
@@ -174,6 +167,8 @@ Capture → Lead senden → OK
 
 Offene Punkte/Risiken (P0/P1/…)
 
+P0: Working tree ist nicht clean (siehe git status). Für GoLive-DoD muss noch ein Folge-Commit/Patch erfolgen.
+
 P1: Readiness Kontext ist best-effort (default zuletzt aktualisiertes ACTIVE Event).
 
 P1: Legacy Form.assignedEventId ist Mirror/Back-Compat, nicht authoritative.
@@ -182,4 +177,8 @@ P1: Drawer listet aktuell nur ACTIVE Events (MVP). DRAFT/ARCHIVED optional spät
 
 Next Step
 
-TP 7.11 (optional Cleanup): Legacy assignedEventId writes minimieren/entfernen; Device.activeEventId endgültig deprecaten; KPIs/Reports auf Join-Tabelle normalisieren.
+Offene Änderungen aus git status sauber committen (empfohlen: fix(tp7.10) oder neues tp7.10.1).
+
+Danach: git status clean + finaler Hash im Rapport ergänzen.
+
+Optional TP 7.11 Cleanup: Legacy assignedEventId writes minimieren/entfernen; Device.activeEventId endgültig deprecaten; KPIs/Reports auf Join-Tabelle normalisieren.
