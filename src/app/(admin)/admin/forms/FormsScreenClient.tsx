@@ -28,8 +28,10 @@ type FormListItem = {
   name: string;
   status: FormStatus;
   updatedAt: string;
-  assignedToActiveEvent: boolean;
-  assignedEventId: string | null;
+
+  // visibility
+  assignmentCount: number; // 0 => global, 1 => single event, >1 => multi
+  assignedEventId: string | null; // derived for backward compat when assignmentCount===1
 };
 
 type FormsListApi = {
@@ -49,11 +51,13 @@ type FormDetail = {
   name: string;
   description: string | null;
   status: FormStatus;
-  assignedEventId: string | null;
+  assignedEventId: string | null; // legacy mirror only
   createdAt: string;
   updatedAt: string;
   fields?: Array<{ id: string }>;
 };
+
+type AssignmentsResp = { eventIds: string[] };
 
 type UiError = { message: string; code?: string; traceId?: string };
 
@@ -86,6 +90,10 @@ function asNullableString(v: unknown): string | null {
 
 function asBool(v: unknown, fallback = false): boolean {
   return typeof v === "boolean" ? v : fallback;
+}
+
+function asNumber(v: unknown, fallback = 0): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
 
 function normalizePresetItems(input: unknown): PresetListItem[] {
@@ -268,7 +276,7 @@ function DrawerShell({
   return (
     <div className="fixed inset-0 z-50">
       <button type="button" className="absolute inset-0 bg-black/20" aria-label="Schliessen" onClick={onClose} />
-      <aside className="absolute right-0 top-0 h-full w-full max-w-[480px] bg-white shadow-2xl">
+      <aside className="absolute right-0 top-0 h-full w-full max-w-[520px] bg-white shadow-2xl">
         <div className="flex h-14 items-center justify-between border-b border-slate-200 px-6">
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-slate-900">{title}</div>
@@ -289,7 +297,7 @@ function DrawerShell({
 
 function ReadyCard(props: {
   activeEvents: ActiveEvent[];
-  contextEventId: string | null;
+  contextEvent: ActiveEvent | null;
   readiness: Readiness | null;
   onPrimary: () => void;
   onOpenTemplates: () => void;
@@ -297,7 +305,7 @@ function ReadyCard(props: {
   onOpenDevices: () => void;
 }) {
   const r = props.readiness;
-  const ctx = props.activeEvents.find((e) => e.id === props.contextEventId) ?? null;
+  const ctx = props.contextEvent;
 
   const badge = (() => {
     const base = "inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold";
@@ -371,15 +379,8 @@ function ReadyCard(props: {
 }
 
 /* ----------------------- Create-from-preset Modal ----------------------- */
-/**
- * Important for your eslint rule-set:
- * - NO setState directly inside useEffect
- * - Component is mounted only when open => reset happens by unmount/mount
- */
-function CreateFromPresetModal(props: {
-  onClose: () => void;
-  onCreated: (newFormId: string) => void;
-}) {
+
+function CreateFromPresetModal(props: { onClose: () => void; onCreated: (newFormId: string) => void }) {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<{ message: string; traceId?: string } | null>(null);
@@ -447,7 +448,6 @@ function CreateFromPresetModal(props: {
     }
   }, []);
 
-  // only side effect: load external data (allowed); no direct setState in effect body
   useEffect(() => {
     const t = setTimeout(() => {
       void loadPresets();
@@ -458,7 +458,6 @@ function CreateFromPresetModal(props: {
   const onSelectPreset = useCallback(
     (it: PresetListItem) => {
       setSelectedId(it.id);
-      // default name only if user didn't type yet
       setFormName((cur) => (cur.trim().length ? cur : it.name));
     },
     [setSelectedId, setFormName]
@@ -533,7 +532,6 @@ function CreateFromPresetModal(props: {
           </header>
 
           <div className="grid grid-cols-1 gap-0 md:grid-cols-[380px_1fr]">
-            {/* Left: list */}
             <div className="border-b border-slate-200 md:border-b-0 md:border-r md:border-slate-200">
               <div className="p-5">
                 <div className="flex items-center gap-2">
@@ -558,7 +556,7 @@ function CreateFromPresetModal(props: {
                   <div className="space-y-2 px-3 pb-3">
                     {Array.from({ length: 6 }).map((_, i) => (
                       <div key={`sk_${i}`} className="animate-pulse rounded-2xl border border-slate-200 p-3">
-                        <div className="h-4 w-2/3 rounded bg-slate-100" />
+                        <div className="h-4 w-3/4 rounded bg-slate-100" />
                         <div className="mt-2 h-3 w-1/3 rounded bg-slate-100" />
                       </div>
                     ))}
@@ -611,7 +609,6 @@ function CreateFromPresetModal(props: {
               </div>
             </div>
 
-            {/* Right: details */}
             <div className="p-5">
               {!selected ? (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
@@ -672,7 +669,7 @@ function CreateFromPresetModal(props: {
                   </div>
 
                   <div className="text-xs text-slate-500">
-                    Tipp: Nach dem Erstellen kannst du das Formular im Drawer direkt dem Event zuweisen und aktiv schalten.
+                    Tipp: Nach dem Erstellen kannst du im Drawer die Sichtbarkeit setzen (Global oder Events) und den Status auf „Aktiv“ stellen.
                   </div>
                 </div>
               )}
@@ -686,11 +683,42 @@ function CreateFromPresetModal(props: {
 
 /* -------------------------------- Screen -------------------------------- */
 
+function Toggle({
+  on,
+  disabled,
+  title,
+  onClick,
+}: {
+  on: boolean;
+  disabled?: boolean;
+  title: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-slate-200 ${
+        on ? "border-emerald-200 bg-emerald-500" : "border-slate-200 bg-slate-100"
+      } ${disabled ? "opacity-50 pointer-events-none" : ""}`}
+      aria-label={title}
+      title={title}
+      onClick={onClick}
+    >
+      <span
+        className={`inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${
+          on ? "translate-x-5" : "translate-x-0.5"
+        }`}
+      />
+    </button>
+  );
+}
+
 export function FormsScreenClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const [activeEvents, setActiveEvents] = useState<ActiveEvent[]>([]);
+  const [contextEvent, setContextEvent] = useState<ActiveEvent | null>(null);
   const [readiness, setReadiness] = useState<Readiness | null>(null);
 
   const [q, setQ] = useState("");
@@ -710,23 +738,19 @@ export function FormsScreenClient() {
 
   const [createOpen, setCreateOpen] = useState(false);
 
-  const autoOpenConsumedRef = useRef(false);
+  // assignments (join-table)
+  const [assignLoading, setAssignLoading] = useState(false);
+  const [assignBusy, setAssignBusy] = useState(false);
+  const [assignError, setAssignError] = useState<UiError | null>(null);
+  const [assignedEventIds, setAssignedEventIds] = useState<string[]>([]);
 
-  const selectedEventId = useMemo(() => {
-    const urlEventId = (searchParams.get("eventId") ?? "").trim();
-    return urlEventId ? urlEventId : null;
-  }, [searchParams]);
+  const autoOpenConsumedRef = useRef(false);
 
   const eventNameById = useMemo(() => {
     const m = new Map<string, string>();
     for (const ev of activeEvents) m.set(ev.id, ev.name);
     return m;
   }, [activeEvents]);
-
-  const selectedEventName = useMemo(() => {
-    if (!selectedEventId) return null;
-    return eventNameById.get(selectedEventId) ?? null;
-  }, [selectedEventId, eventNameById]);
 
   const { sort, dir } = useMemo(() => {
     if (sortOpt === "UPDATED_ASC") return { sort: "updatedAt" as const, dir: "asc" as const };
@@ -742,25 +766,15 @@ export function FormsScreenClient() {
     return n === 1 ? "1 Formular" : `${n} Formulare`;
   }, [items.length]);
 
-  const syncUrlEventId = useCallback(
-    (nextEventId: string | null) => {
-      const sp = new URLSearchParams(searchParams.toString());
-      if (nextEventId) sp.set("eventId", nextEventId);
-      else sp.delete("eventId");
-      router.replace(`/admin/forms?${sp.toString()}`);
-    },
-    [router, searchParams]
-  );
-
   const buildListUrl = useCallback((): string => {
     const sp = new URLSearchParams();
     if (q.trim()) sp.set("q", q.trim());
     sp.set("status", status);
     sp.set("sort", sort);
     sp.set("dir", dir);
-    if (selectedEventId) sp.set("eventId", selectedEventId);
+    // NOTE: assigned filter removed; eventId context is server-default via active event
     return `/api/admin/v1/forms?${sp.toString()}`;
-  }, [q, status, sort, dir, selectedEventId]);
+  }, [q, status, sort, dir]);
 
   const loadList = useCallback(async () => {
     setLoadingList(true);
@@ -794,27 +808,35 @@ export function FormsScreenClient() {
       setActiveEvents(evs);
 
       const ctx = (data.contextEvent ?? data.activeEvent ?? null) as ActiveEvent | null;
-
-      if (ctx?.id) {
-        const isValid = selectedEventId ? evs.some((e) => e.id === selectedEventId) : false;
-        if (!selectedEventId || !isValid) {
-          syncUrlEventId(ctx.id);
-        }
-      } else {
-        if (selectedEventId) syncUrlEventId(null);
-      }
+      setContextEvent(ctx?.id ? ctx : null);
 
       setReadiness((data.readiness ?? null) as Readiness | null);
 
-      const list = (data.items ?? data.forms ?? []) as FormListItem[];
-      setItems(Array.isArray(list) ? list : []);
+      const list = (data.items ?? data.forms ?? []) as unknown;
+      const normalized: FormListItem[] = Array.isArray(list)
+        ? (list as unknown[]).map((r) => {
+            if (!isRecord(r)) return null;
+            const id = asString(r.id, "").trim();
+            const name = asString(r.name, "").trim();
+            if (!id || !name) return null;
+
+            const s = asString(r.status, "DRAFT") as FormStatus;
+            const updatedAt = asString(r.updatedAt, "");
+            const assignmentCount = asNumber((r as Record<string, unknown>).assignmentCount, 0);
+            const assignedEventId = asNullableString((r as Record<string, unknown>).assignedEventId);
+
+            return { id, name, status: s, updatedAt, assignmentCount, assignedEventId };
+          }).filter((x): x is FormListItem => x !== null)
+        : [];
+
+      setItems(normalized);
       setLoadingList(false);
     } catch {
       setItems([]);
       setListError({ message: "Konnte Formulare nicht laden. Bitte erneut versuchen." });
       setLoadingList(false);
     }
-  }, [buildListUrl, selectedEventId, syncUrlEventId]);
+  }, [buildListUrl]);
 
   const refreshAll = useCallback(async () => {
     await loadList();
@@ -828,7 +850,7 @@ export function FormsScreenClient() {
   useEffect(() => {
     const t = setTimeout(() => void loadList(), 220);
     return () => clearTimeout(t);
-  }, [q, status, sortOpt, selectedEventId, loadList]);
+  }, [q, status, sortOpt, loadList]);
 
   const openDrawer = useCallback((id: string) => {
     setSelectedId(id);
@@ -838,9 +860,15 @@ export function FormsScreenClient() {
   const closeDrawer = useCallback(() => {
     setDrawerOpen(false);
     setSelectedId(null);
+
     setDetail(null);
     setDetailError(null);
     setLoadingDetail(false);
+
+    setAssignLoading(false);
+    setAssignBusy(false);
+    setAssignError(null);
+    setAssignedEventIds([]);
   }, []);
 
   useEffect(() => {
@@ -903,11 +931,46 @@ export function FormsScreenClient() {
     }
   }, []);
 
+  const loadAssignments = useCallback(async (id: string) => {
+    setAssignLoading(true);
+    setAssignError(null);
+
+    try {
+      const res = await fetch(`/api/admin/v1/forms/${id}/assignments`, { method: "GET", cache: "no-store" });
+      const json = (await res.json()) as ApiResp<AssignmentsResp>;
+
+      if (!json || typeof json !== "object") {
+        setAssignError({ message: "Ungültige Serverantwort." });
+        setAssignedEventIds([]);
+        setAssignLoading(false);
+        return;
+      }
+
+      if (!json.ok) {
+        setAssignError({ message: json.error?.message || "Konnte Sichtbarkeit nicht laden.", traceId: json.traceId });
+        setAssignedEventIds([]);
+        setAssignLoading(false);
+        return;
+      }
+
+      const ids = Array.isArray(json.data?.eventIds) ? json.data.eventIds : [];
+      setAssignedEventIds(ids.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim()));
+      setAssignLoading(false);
+    } catch {
+      setAssignError({ message: "Konnte Sichtbarkeit nicht laden. Bitte erneut versuchen." });
+      setAssignedEventIds([]);
+      setAssignLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!drawerOpen || !selectedId) return;
-    const t = setTimeout(() => void loadDetail(selectedId), 0);
+    const t = setTimeout(() => {
+      void loadDetail(selectedId);
+      void loadAssignments(selectedId);
+    }, 0);
     return () => clearTimeout(t);
-  }, [drawerOpen, selectedId, loadDetail]);
+  }, [drawerOpen, selectedId, loadDetail, loadAssignments]);
 
   const patchForm = useCallback(
     async (id: string, body: Record<string, unknown>): Promise<boolean> => {
@@ -952,14 +1015,46 @@ export function FormsScreenClient() {
     [loadList]
   );
 
-  const onToggleAssigned = useCallback(async () => {
-    if (!detail) return;
-    if (!selectedEventId) return;
-    setDetailError(null);
+  const saveAssignments = useCallback(
+    async (formId: string, eventIds: string[]) => {
+      setAssignBusy(true);
+      setAssignError(null);
 
-    const currentlyAssigned = detail.assignedEventId === selectedEventId;
-    await patchForm(detail.id, { setAssignedToEventId: currentlyAssigned ? null : selectedEventId });
-  }, [detail, selectedEventId, patchForm]);
+      try {
+        const res = await fetch(`/api/admin/v1/forms/${formId}/assignments`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ eventIds }),
+        });
+
+        const json = (await res.json()) as ApiResp<AssignmentsResp>;
+        if (!json || typeof json !== "object") {
+          setAssignError({ message: "Ungültige Serverantwort." });
+          setAssignBusy(false);
+          return;
+        }
+
+        if (!json.ok) {
+          setAssignError({ message: json.error?.message || "Speichern fehlgeschlagen.", traceId: json.traceId });
+          setAssignBusy(false);
+          return;
+        }
+
+        const ids = Array.isArray(json.data?.eventIds) ? json.data.eventIds : [];
+        setAssignedEventIds(ids.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim()));
+
+        // refresh list + detail (legacy mirror)
+        await loadList();
+        await loadDetail(formId);
+
+        setAssignBusy(false);
+      } catch {
+        setAssignError({ message: "Speichern fehlgeschlagen. Bitte erneut versuchen." });
+        setAssignBusy(false);
+      }
+    },
+    [loadDetail, loadList]
+  );
 
   const onChangeStatus = useCallback(
     async (next: FormStatus) => {
@@ -1008,7 +1103,7 @@ export function FormsScreenClient() {
   const onDelete = useCallback(async () => {
     if (!detail) return;
 
-    const ok = window.confirm('Formular wirklich löschen?\n\nHinweis: Felder werden ebenfalls gelöscht.');
+    const ok = window.confirm("Formular wirklich löschen?\n\nHinweis: Felder werden ebenfalls gelöscht.");
     if (!ok) return;
 
     setDetailError(null);
@@ -1047,9 +1142,8 @@ export function FormsScreenClient() {
     if (!detail) return;
     const sp = new URLSearchParams();
     sp.set("mode", "preview");
-    if (selectedEventId) sp.set("eventId", selectedEventId);
     router.push(`/admin/forms/${detail.id}/builder?${sp.toString()}`);
-  }, [detail, router, selectedEventId]);
+  }, [detail, router]);
 
   const onOpenTemplates = useCallback(() => {
     router.push("/admin/templates?intent=create");
@@ -1069,15 +1163,30 @@ export function FormsScreenClient() {
     setSortOpt("UPDATED_DESC");
   }, []);
 
-  const assignedLabelForRow = useCallback(
+  const visibilityLabelForRow = useCallback(
     (it: FormListItem): string => {
-      if (!it.assignedEventId) return "—";
-      const name = eventNameById.get(it.assignedEventId);
-      if (name) return name;
-      return "Zugewiesen (inaktiv)";
+      const n = it.assignmentCount ?? 0;
+
+      if (n <= 0) return "Global";
+      if (n === 1 && it.assignedEventId) {
+        const name = eventNameById.get(it.assignedEventId);
+        return name ? name : "Zugewiesen (inaktiv)";
+      }
+      if (n === 1) return "Zugewiesen";
+      return `Mehrere (${n})`;
     },
     [eventNameById]
   );
+
+  const isGlobal = assignedEventIds.length === 0;
+
+  const visibilitySummary = useMemo(() => {
+    if (assignLoading) return "Lade…";
+    if (assignError) return "—";
+    if (assignedEventIds.length === 0) return "Global";
+    const names = assignedEventIds.map((id) => eventNameById.get(id) || "Event (inaktiv)");
+    return names.length <= 2 ? names.join(", ") : `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
+  }, [assignError, assignLoading, assignedEventIds, eventNameById]);
 
   return (
     <div className="space-y-4">
@@ -1095,7 +1204,7 @@ export function FormsScreenClient() {
 
       <ReadyCard
         activeEvents={activeEvents}
-        contextEventId={selectedEventId}
+        contextEvent={contextEvent}
         readiness={readiness}
         onPrimary={() => {
           const href = readiness?.primary?.href;
@@ -1119,27 +1228,6 @@ export function FormsScreenClient() {
 
             <div className="ml-auto flex flex-wrap items-center gap-2">
               <Button label="Aus Vorlage" kind="secondary" onClick={() => setCreateOpen(true)} />
-
-              <div className="hidden md:flex items-center gap-2">
-                <div className="text-sm text-slate-500">Event</div>
-                <Select
-                  value={selectedEventId ?? ""}
-                  onChange={(v) => {
-                    const next = v.trim() ? v.trim() : null;
-                    syncUrlEventId(next);
-                  }}
-                  ariaLabel="Event wählen"
-                  disabled={activeEvents.length <= 0}
-                >
-                  <option value="">{activeEvents.length ? "Event wählen…" : "Keine aktiven Events"}</option>
-                  {activeEvents.map((ev) => (
-                    <option key={ev.id} value={ev.id}>
-                      {ev.name}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-
               <Input value={q} onChange={setQ} placeholder="Suchen…" />
               <IconButton title="Aktualisieren" onClick={() => void refreshAll()} />
             </div>
@@ -1159,15 +1247,10 @@ export function FormsScreenClient() {
             </div>
           </div>
 
-          {selectedEventName ? (
-            <div className="mt-2 text-xs text-slate-500">
-              Kontext-Event: <span className="font-semibold text-slate-700">{selectedEventName}</span>
-            </div>
-          ) : (
-            <div className="mt-2 text-xs text-slate-500">
-              Kontext-Event: <span className="font-semibold text-slate-700">—</span>
-            </div>
-          )}
+          <div className="mt-2 text-xs text-slate-500">
+            Kontext-Event (Readiness):{" "}
+            <span className="font-semibold text-slate-700">{contextEvent ? contextEvent.name : "—"}</span>
+          </div>
         </div>
 
         <div className="h-px w-full bg-slate-200" />
@@ -1178,7 +1261,7 @@ export function FormsScreenClient() {
               <tr className="text-left text-xs font-semibold text-slate-600">
                 <th className="px-5 py-3">Name</th>
                 <th className="px-5 py-3">Status</th>
-                <th className="px-5 py-3">Zuweisung</th>
+                <th className="px-5 py-3">Sichtbarkeit</th>
                 <th className="hidden md:table-cell px-5 py-3">Aktualisiert</th>
                 <th className="w-12 px-2 py-3" aria-label="Aktionen" />
               </tr>
@@ -1255,7 +1338,7 @@ export function FormsScreenClient() {
                     </td>
 
                     <td className="px-5 py-4">
-                      <div className="truncate text-sm text-slate-700">{assignedLabelForRow(it)}</div>
+                      <div className="truncate text-sm text-slate-700">{visibilityLabelForRow(it)}</div>
                     </td>
 
                     <td className="hidden md:table-cell px-5 py-4">
@@ -1283,8 +1366,9 @@ export function FormsScreenClient() {
           </table>
 
           <div className="px-5 py-4 text-xs text-slate-500">
-            In der App sichtbar: <span className="font-semibold text-slate-700">Aktiv</span> + dem{" "}
-            <span className="font-semibold text-slate-700">ausgewählten Event</span> zugewiesen.
+            In der App sichtbar: <span className="font-semibold text-slate-700">Aktiv</span> +{" "}
+            <span className="font-semibold text-slate-700">Global</span> oder{" "}
+            <span className="font-semibold text-slate-700">Events</span> (Sichtbarkeit im Drawer).
           </div>
         </div>
 
@@ -1313,7 +1397,10 @@ export function FormsScreenClient() {
                     label="Erneut versuchen"
                     kind="secondary"
                     onClick={() => {
-                      if (selectedId) void loadDetail(selectedId);
+                      if (selectedId) {
+                        void loadDetail(selectedId);
+                        void loadAssignments(selectedId);
+                      }
                     }}
                   />
                   <Button label="Schliessen" kind="ghost" onClick={closeDrawer} />
@@ -1334,45 +1421,96 @@ export function FormsScreenClient() {
                   </Select>
                 </div>
                 <div className="mt-2 text-xs text-slate-500">
-                  In der App sichtbar: <span className="font-semibold text-slate-700">Aktiv</span> + dem ausgewählten Event zugewiesen.
+                  In der App sichtbar: <span className="font-semibold text-slate-700">Aktiv</span> + Sichtbarkeit (Global oder Events).
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <div className="text-sm font-semibold text-slate-900">
-                      Für das ausgewählte Event sichtbar{" "}
-                      <span className="text-slate-500">({selectedEventName ? selectedEventName : "kein Event"})</span>
-                    </div>
+                    <div className="text-sm font-semibold text-slate-900">Sichtbarkeit in der App</div>
                     <div className="mt-1 text-sm text-slate-600">
-                      Wenn das Formular zugewiesen ist, erscheint es (bei Status „Aktiv“) in der App.
+                      Wähle <span className="font-semibold">Global</span> (alle Events) oder spezifische{" "}
+                      <span className="font-semibold">Events</span>. Mehrere Events sind möglich.
+                    </div>
+                    <div className="mt-2 text-xs text-slate-500">
+                      Aktuell: <span className="font-semibold text-slate-700">{visibilitySummary}</span>
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-slate-200 ${
-                      selectedEventId && detail.assignedEventId === selectedEventId
-                        ? "border-emerald-200 bg-emerald-500"
-                        : "border-slate-200 bg-slate-100"
-                    } ${!selectedEventId || detail.status === "ARCHIVED" ? "opacity-50 pointer-events-none" : ""}`}
-                    aria-label="Zuweisung umschalten"
-                    title={
-                      !selectedEventId
-                        ? "Kein Event ausgewählt."
-                        : detail.status === "ARCHIVED"
-                        ? "Archivierte Formulare können nicht zugewiesen werden."
-                        : "Zuweisung umschalten"
-                    }
-                    onClick={() => void onToggleAssigned()}
-                  >
-                    <span
-                      className={`inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${
-                        selectedEventId && detail.assignedEventId === selectedEventId ? "translate-x-5" : "translate-x-0.5"
-                      }`}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-slate-500">Global</span>
+                    <Toggle
+                      on={isGlobal}
+                      disabled={assignLoading || assignBusy || detail.status === "ARCHIVED"}
+                      title="Global sichtbar"
+                      onClick={() => void saveAssignments(detail.id, [])}
                     />
-                  </button>
+                  </div>
+                </div>
+
+                <div className="h-px bg-slate-100" />
+
+                {assignLoading ? (
+                  <div className="text-sm text-slate-600">Lade Sichtbarkeit…</div>
+                ) : assignError ? (
+                  <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3">
+                    <div className="text-sm font-semibold text-rose-900">Hinweis</div>
+                    <div className="mt-1 text-sm text-rose-800">{assignError.message}</div>
+                    {assignError.traceId ? (
+                      <div className="mt-2 text-xs text-rose-800">
+                        Trace: <span className="font-mono">{assignError.traceId}</span>
+                      </div>
+                    ) : null}
+                    <div className="mt-3">
+                      <Button label="Erneut versuchen" kind="secondary" onClick={() => void loadAssignments(detail.id)} />
+                    </div>
+                  </div>
+                ) : activeEvents.length <= 0 ? (
+                  <div className="text-sm text-slate-600">
+                    Keine aktiven Events.{" "}
+                    <button type="button" className="font-semibold text-slate-900 underline" onClick={onOpenEvents}>
+                      Events öffnen
+                    </button>
+                    .
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold text-slate-600">Events (Multi-Select)</div>
+
+                    {activeEvents.map((ev) => {
+                      const on = assignedEventIds.includes(ev.id);
+                      return (
+                        <div key={ev.id} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold text-slate-900">{ev.name}</div>
+                            <div className="truncate text-xs text-slate-500">{ev.id}</div>
+                          </div>
+
+                          <Toggle
+                            on={on}
+                            disabled={assignLoading || assignBusy || detail.status === "ARCHIVED"}
+                            title={`Event ${ev.name} sichtbar`}
+                            onClick={() => {
+                              const next = on
+                                ? assignedEventIds.filter((x) => x !== ev.id)
+                                : [...assignedEventIds, ev.id];
+                              void saveAssignments(detail.id, next);
+                            }}
+                          />
+                        </div>
+                      );
+                    })}
+
+                    <div className="text-xs text-slate-500">
+                      Hinweis: Wenn du alle Events abwählst, ist das Formular automatisch{" "}
+                      <span className="font-semibold text-slate-700">Global</span>.
+                    </div>
+                  </div>
+                )}
+
+                <div className="text-xs text-slate-500">
+                  Archivierte Formulare können nicht sichtbar geschaltet werden.
                 </div>
               </div>
 

@@ -41,18 +41,14 @@ const ListFormsQuerySchema = z
 
     status: z.preprocess((v) => cleanEnum(v), z.enum(["DRAFT", "ACTIVE", "ARCHIVED", "ALL"]).default("ALL")),
 
-    /**
-     * DEPRECATED (TP7.10):
-     * - Old UI used `assigned` to filter relative to a context event.
-     * - New UX removed the assigned filter UI.
-     * - We keep this query param for backward compatibility, but IGNORE it.
-     */
-    assigned: z.preprocess((v) => cleanEnum(v), z.enum(["YES", "NO", "ALL"]).default("ALL")),
-
     sort: z.preprocess((v) => cleanEnum(v), z.enum(["updatedAt", "name"]).default("updatedAt")),
+
     dir: z.preprocess((v) => cleanEnum(v), z.enum(["asc", "desc"]).default("desc")),
 
-    // optional context event (for readiness + derived flags)
+    // deprecated (ignored): used by older UI versions
+    assigned: z.preprocess((v) => cleanEnum(v), z.enum(["YES", "NO", "ALL"]).default("ALL")).optional(),
+
+    // deprecated for list filtering; still used for readiness context selection
     eventId: z.preprocess(
       (v) => {
         const s = firstString(v);
@@ -71,30 +67,6 @@ const CreateFormSchema = z.object({
   config: z.unknown().optional(),
 });
 
-function prismaMetaTarget(e: Prisma.PrismaClientKnownRequestError): unknown {
-  const meta = e.meta;
-  if (meta && typeof meta === "object" && "target" in meta) {
-    return (meta as { target?: unknown }).target;
-  }
-  return undefined;
-}
-
-function mapPrismaUniqueConflict(
-  e: unknown
-): { status: number; code: string; message: string; details?: unknown } | null {
-  if (e instanceof Prisma.PrismaClientKnownRequestError) {
-    if (e.code === "P2002") {
-      return {
-        status: 409,
-        code: "UNIQUE_CONFLICT",
-        message: "Unique constraint violation.",
-        details: { target: prismaMetaTarget(e) },
-      };
-    }
-  }
-  return null;
-}
-
 function mapStatusToPrisma(s: ListStatus): FormStatus | undefined {
   if (s === "ALL") return undefined;
   return s as unknown as FormStatus;
@@ -104,30 +76,23 @@ function readinessForNoActiveEvent() {
   return {
     state: "NO_ACTIVE_EVENT" as const,
     headline: "Kein aktives Event",
-    text: "Aktiviere zuerst deine Messe unter Betrieb → Events. Danach kannst du Formulare aktiv schalten und die Sichtbarkeit setzen (Global oder Events).",
+    text: "Aktiviere zuerst deine Messe unter Betrieb → Events. Danach kannst du Formulare sichtbar schalten (Global oder Events).",
     primary: { label: "Event aktivieren", href: "/admin/events" },
     recommendedFormId: null as string | null,
   };
 }
 
-type ContextEvent = { id: string; name: string };
-
-function visibilityWhereForEvent(tenantId: string, eventId: string): Prisma.FormWhereInput {
-  // Mobile rule (MVP):
-  // visible if assigned to event OR global (no assignments at all)
-  return {
-    tenantId,
-    OR: [
-      { eventAssignments: { some: { tenantId, eventId } } },
-      { eventAssignments: { none: {} } },
-    ],
-  };
-}
-
-async function computeReadiness(tenantId: string, contextEvent: ContextEvent | null) {
+async function computeReadiness(tenantId: string, contextEvent: { id: string; name: string } | null) {
   if (!contextEvent) return readinessForNoActiveEvent();
 
-  const visibleWhere = visibilityWhereForEvent(tenantId, contextEvent.id);
+  const visibleWhere: Prisma.FormWhereInput = {
+    tenantId,
+    OR: [
+      { eventAssignments: { some: { tenantId, eventId: contextEvent.id } } },
+      { eventAssignments: { none: {} }, assignedEventId: null }, // global (join empty + legacy null)
+      { assignedEventId: contextEvent.id }, // legacy compat
+    ],
+  };
 
   const [anyVisible, activeVisibleCount, firstActiveVisible] = await Promise.all([
     prisma.form.findFirst({
@@ -149,7 +114,7 @@ async function computeReadiness(tenantId: string, contextEvent: ContextEvent | n
     return {
       state: "NO_ASSIGNED_FORM" as const,
       headline: "Noch kein Formular sichtbar",
-      text: `Aktuell ist kein Formular global oder für „${contextEvent.name}“ sichtbar. Öffne ein Formular und setze die Sichtbarkeit im Drawer (Global oder Event).`,
+      text: `Setze im Formular-Drawer die Sichtbarkeit (Global oder Event „${contextEvent.name}“).`,
       primary: { label: "Formular vorbereiten", href: "/admin/templates?intent=create" },
       recommendedFormId: null as string | null,
     };
@@ -159,7 +124,7 @@ async function computeReadiness(tenantId: string, contextEvent: ContextEvent | n
     return {
       state: "ASSIGNED_BUT_INACTIVE" as const,
       headline: "Fast bereit",
-      text: "Ein Formular ist sichtbar konfiguriert, aber noch nicht aktiv. Stelle den Status auf „Aktiv“, damit es in der App erscheint.",
+      text: "Ein Formular ist sichtbar, aber noch nicht aktiv. Stelle den Status auf „Aktiv“, damit es in der App erscheint.",
       primary: { label: "Formular aktivieren", href: `/admin/forms?open=${anyVisible.id}` },
       recommendedFormId: anyVisible.id,
     };
@@ -181,32 +146,21 @@ export async function GET(req: Request) {
     const { tenantId } = await requireAdminAuth(req);
     const query = await validateQuery(req, ListFormsQuerySchema);
 
-    // Deprecation notice (server-side only). No response shape changes.
-    if (process.env.NODE_ENV !== "production" && query.assigned !== "ALL") {
-      console.warn(`DEPRECATED query param ignored: assigned=${query.assigned}`);
-    }
-
+    // Active events list (used by drawer toggles + readiness context)
     const activeEvents = await prisma.event.findMany({
       where: { tenantId, status: "ACTIVE" },
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
       select: { id: true, name: true },
     });
 
-    let contextEvent: ContextEvent | null = null;
+    // Resolve readiness context event:
+    // - if eventId is given: must be among activeEvents (leak-safe => treat as none)
+    // - else default: most recently updated active event
+    let contextEvent = null as null | { id: string; name: string };
 
     if (query.eventId) {
       const found = activeEvents.find((e) => e.id === query.eventId);
-      if (!found) {
-        return jsonOk(req, {
-          activeEvents,
-          contextEvent: null,
-          activeEvent: null,
-          readiness: readinessForNoActiveEvent(),
-          forms: [],
-          items: [],
-        });
-      }
-      contextEvent = { id: found.id, name: found.name };
+      if (found) contextEvent = { id: found.id, name: found.name };
     } else if (activeEvents[0]) {
       contextEvent = { id: activeEvents[0].id, name: activeEvents[0].name };
     }
@@ -238,71 +192,63 @@ export async function GET(req: Request) {
         status: true,
         createdAt: true,
         updatedAt: true,
-        _count: { select: { fields: true, eventAssignments: true } },
+        assignedEventId: true, // legacy mirror only
+        _count: { select: { fields: true } },
       },
       take: 500,
     });
 
+    // Join-table counts for the returned forms
     const formIds = rows.map((r) => r.id);
-
-    const singleFormIds = rows.filter((r) => r._count.eventAssignments === 1).map((r) => r.id);
-
-    const singleAssignments = singleFormIds.length
+    const assigns = formIds.length
       ? await prisma.eventFormAssignment.findMany({
-          where: { tenantId, formId: { in: singleFormIds } },
+          where: { tenantId, formId: { in: formIds } },
           select: { formId: true, eventId: true },
-          take: singleFormIds.length,
+          take: 10_000,
         })
       : [];
 
-    const singleEventIdByFormId = new Map<string, string>();
-    for (const a of singleAssignments) singleEventIdByFormId.set(a.formId, a.eventId);
-
-    const assignedToContext = contextEvent?.id
-      ? await prisma.eventFormAssignment.findMany({
-          where: { tenantId, eventId: contextEvent.id, formId: { in: formIds } },
-          select: { formId: true },
-          take: 1000,
-        })
-      : [];
-
-    const assignedToContextSet = new Set<string>(assignedToContext.map((x) => x.formId));
+    const map = new Map<string, string[]>();
+    for (const a of assigns) {
+      const arr = map.get(a.formId) ?? [];
+      arr.push(a.eventId);
+      map.set(a.formId, arr);
+    }
 
     const items = rows.map((r) => {
-      const assignmentCount = r._count.eventAssignments;
-      const isGlobal = assignmentCount === 0;
-      const assignedToActiveEvent = contextEvent?.id ? isGlobal || assignedToContextSet.has(r.id) : false;
+      const evs = map.get(r.id) ?? [];
+      const assignmentCount = evs.length;
 
-      const derivedSingleEventId = assignmentCount === 1 ? singleEventIdByFormId.get(r.id) ?? null : null;
+      // for UI label: if exactly 1 assignment, expose that eventId; else null
+      const assignedEventId = assignmentCount === 1 ? evs[0] : null;
 
       return {
         id: r.id,
         name: r.name,
         description: r.description ?? null,
         status: r.status,
-        category: null as string | null,
         createdAt: r.createdAt,
         updatedAt: r.updatedAt,
         fieldsCount: r._count.fields,
 
         assignmentCount,
-        assignedEventId: derivedSingleEventId,
-        assignedToActiveEvent,
+        assignedEventId,
+
+        // backward compat fields (still returned but not authoritative):
+        legacyAssignedEventId: r.assignedEventId ?? null,
       };
     });
 
     return jsonOk(req, {
       activeEvents,
       contextEvent,
-      activeEvent: contextEvent,
+      activeEvent: contextEvent, // backward compat
       readiness,
       forms: items,
       items,
     });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
-    const conflict = mapPrismaUniqueConflict(e);
-    if (conflict) return jsonError(req, conflict.status, conflict.code, conflict.message, conflict.details);
     return jsonError(req, 500, "INTERNAL_ERROR", "Unexpected error.");
   }
 }
@@ -319,7 +265,7 @@ export async function POST(req: Request) {
         description: body.description,
         status: body.status ?? FormStatus.DRAFT,
         config: (body.config ?? undefined) as Prisma.InputJsonValue | undefined,
-        assignedEventId: null, // legacy mirror only; source of truth is join table
+        assignedEventId: null, // legacy mirror stays null by default
       },
       select: {
         id: true,
@@ -337,8 +283,6 @@ export async function POST(req: Request) {
     return jsonOk(req, created, { status: 201 });
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
-    const conflict = mapPrismaUniqueConflict(e);
-    if (conflict) return jsonError(req, conflict.status, conflict.code, conflict.message, conflict.details);
     return jsonError(req, 500, "INTERNAL_ERROR", "Unexpected error.");
   }
 }

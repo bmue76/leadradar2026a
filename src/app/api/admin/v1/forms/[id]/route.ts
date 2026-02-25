@@ -8,165 +8,129 @@ import { requireAdminAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
-const IdSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9]+$/i);
-
-function isPromiseLike<T>(v: unknown): v is Promise<T> {
-  return typeof v === "object" && v !== null && "then" in v && typeof (v as { then?: unknown }).then === "function";
+// Next.js 15+: params can be a Promise
+type CtxParams = { id?: string } | Promise<{ id?: string }>;
+async function readId(ctx: { params: CtxParams }): Promise<string> {
+  const p = (await Promise.resolve(ctx.params)) as { id?: string };
+  return String(p?.id || "").trim();
 }
 
-async function getParams<T extends Record<string, string>>(ctx: unknown): Promise<T> {
-  const params = (ctx as { params?: unknown })?.params;
-  if (isPromiseLike<T>(params)) return await params;
-  return params as T;
-}
-
-function toNullableJsonInput(
-  v: unknown | null | undefined
-): Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput | undefined {
-  if (v === undefined) return undefined; // don't update
-  if (v === null) return Prisma.DbNull; // clear to DB NULL
-  return v as Prisma.InputJsonValue;
-}
-
-const UpdateFormSchema = z
+const PatchSchema = z
   .object({
     name: z.string().trim().min(1).max(200).optional(),
     description: z.string().trim().max(2000).nullable().optional(),
-    config: z.unknown().nullable().optional(),
-
     status: z.nativeEnum(FormStatus).optional(),
+    config: z.unknown().optional(),
 
-    // Multi-ACTIVE:
-    // Explicitly assign to a specific event (or null to unassign).
-    setAssignedToEventId: IdSchema.nullable().optional(),
-
-    // Backward compat (deprecated):
-    // Only works if exactly 1 ACTIVE event exists, otherwise 400.
-    setAssignedToActiveEvent: z.boolean().optional(),
+    // Deprecated legacy input:
+    // - null => global (no assignments)
+    // - string => replace assignments to exactly this eventId
+    setAssignedToEventId: z.string().trim().min(1).max(64).nullable().optional(),
   })
-  .refine((d) => Object.keys(d).length > 0, { message: "No fields to update." });
+  .strict();
 
-async function loadSingleActiveEventForTenant(tenantId: string): Promise<{ id: string; name: string } | null> {
-  const active = await prisma.event.findMany({
-    where: { tenantId, status: "ACTIVE" },
-    orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-    select: { id: true, name: true },
-    take: 2,
-  });
-
-  if (active.length === 1) return { id: active[0].id, name: active[0].name };
-  return null;
-}
-
-export async function GET(req: Request, ctx: unknown) {
+export async function GET(req: Request, ctx: { params: CtxParams }) {
   try {
     const { tenantId } = await requireAdminAuth(req);
-    const { id } = await getParams<{ id: string }>(ctx);
+    const id = await readId(ctx);
+    if (!id) throw httpError(404, "NOT_FOUND", "Not found.");
 
-    if (!IdSchema.safeParse(id).success) throw httpError(404, "NOT_FOUND", "Not found.");
-
-    const form = await prisma.form.findFirst({
+    const row = await prisma.form.findFirst({
       where: { id, tenantId },
-      include: { fields: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] } },
-    });
-
-    if (!form) throw httpError(404, "NOT_FOUND", "Not found.");
-    return jsonOk(req, form);
-  } catch (e) {
-    if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
-    return jsonError(req, 500, "INTERNAL_ERROR", "Unexpected error.");
-  }
-}
-
-export async function PATCH(req: Request, ctx: unknown) {
-  try {
-    const { tenantId } = await requireAdminAuth(req);
-    const { id } = await getParams<{ id: string }>(ctx);
-
-    if (!IdSchema.safeParse(id).success) throw httpError(404, "NOT_FOUND", "Not found.");
-
-    const body = await validateBody(req, UpdateFormSchema);
-
-    const wantsArchive = body.status === FormStatus.ARCHIVED;
-
-    // Assignment guardrails:
-    // - archived => assignment removed
-    // - cannot assign an archived form
-    let assignEventId: string | null | undefined = undefined;
-
-    if (wantsArchive) {
-      assignEventId = null;
-    } else if (body.setAssignedToEventId !== undefined) {
-      const existing = await prisma.form.findFirst({
-        where: { id, tenantId },
-        select: { status: true },
-      });
-      if (!existing) throw httpError(404, "NOT_FOUND", "Not found.");
-      if (existing.status === FormStatus.ARCHIVED) {
-        throw httpError(400, "BAD_REQUEST", "Archivierte Formulare können nicht einem Event zugewiesen werden.");
-      }
-
-      if (body.setAssignedToEventId === null) {
-        assignEventId = null;
-      } else {
-        // Must be a tenant-owned event. We keep it strict to ACTIVE events for MVP readiness flow.
-        const ev = await prisma.event.findFirst({
-          where: { id: body.setAssignedToEventId, tenantId, status: "ACTIVE" },
-          select: { id: true },
-        });
-        if (!ev) throw httpError(404, "NOT_FOUND", "Not found.");
-        assignEventId = ev.id;
-      }
-    } else if (body.setAssignedToActiveEvent !== undefined) {
-      // Deprecated behavior:
-      // Only ok if exactly one ACTIVE event exists.
-      const existing = await prisma.form.findFirst({
-        where: { id, tenantId },
-        select: { status: true },
-      });
-      if (!existing) throw httpError(404, "NOT_FOUND", "Not found.");
-      if (existing.status === FormStatus.ARCHIVED) {
-        throw httpError(400, "BAD_REQUEST", "Archivierte Formulare können nicht einem Event zugewiesen werden.");
-      }
-
-      if (body.setAssignedToActiveEvent === false) {
-        assignEventId = null;
-      } else {
-        const single = await loadSingleActiveEventForTenant(tenantId);
-        if (!single) {
-          throw httpError(
-            400,
-            "AMBIGUOUS_ACTIVE_EVENT",
-            "Mehrere (oder keine) aktive Events. Bitte Event explizit wählen."
-          );
-        }
-        assignEventId = single.id;
-      }
-    }
-
-    const res = await prisma.form.updateMany({
-      where: { id, tenantId },
-      data: {
-        name: body.name,
-        description: body.description === undefined ? undefined : body.description,
-        config: toNullableJsonInput(body.config),
-
-        status: body.status,
-        assignedEventId: assignEventId,
+      select: {
+        id: true,
+        tenantId: true,
+        name: true,
+        description: true,
+        status: true,
+        config: true,
+        createdAt: true,
+        updatedAt: true,
+        assignedEventId: true, // legacy mirror (optional)
+        fields: { select: { id: true } },
       },
     });
 
-    if (res.count === 0) throw httpError(404, "NOT_FOUND", "Not found.");
-
-    const updated = await prisma.form.findFirst({
-      where: { id, tenantId },
-      include: { fields: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] } },
-    });
-
-    if (!updated) throw httpError(404, "NOT_FOUND", "Not found.");
-    return jsonOk(req, updated);
+    if (!row) throw httpError(404, "NOT_FOUND", "Not found.");
+    return jsonOk(req, row);
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
-    return jsonError(req, 500, "INTERNAL_ERROR", "Unexpected error.");
+    return jsonError(req, 500, "INTERNAL", "Unexpected error.");
+  }
+}
+
+export async function PATCH(req: Request, ctx: { params: CtxParams }) {
+  try {
+    const { tenantId } = await requireAdminAuth(req);
+    const id = await readId(ctx);
+    if (!id) throw httpError(404, "NOT_FOUND", "Not found.");
+
+    const body = await validateBody(req, PatchSchema);
+
+    const exists = await prisma.form.findFirst({ where: { id, tenantId }, select: { id: true } });
+    if (!exists) throw httpError(404, "NOT_FOUND", "Not found.");
+
+    const wantsLegacyAssign = Object.prototype.hasOwnProperty.call(body, "setAssignedToEventId");
+    const legacyEventId = (body.setAssignedToEventId ?? null) as string | null;
+
+    // IMPORTANT: assignedEventId is not part of FormUpdateInput (checked),
+    // but is allowed in FormUncheckedUpdateInput. We keep updates scalar-only.
+    const base: Prisma.FormUncheckedUpdateInput = {};
+
+    if (typeof body.name === "string") base.name = body.name;
+    if (Object.prototype.hasOwnProperty.call(body, "description")) base.description = body.description ?? null;
+    if (body.status) base.status = body.status;
+    if (Object.prototype.hasOwnProperty.call(body, "config")) base.config = body.config as Prisma.InputJsonValue;
+
+    if (wantsLegacyAssign) {
+      if (legacyEventId === null) {
+        const data: Prisma.FormUncheckedUpdateInput = { ...base, assignedEventId: null };
+
+        await prisma.$transaction([
+          prisma.eventFormAssignment.deleteMany({ where: { tenantId, formId: id } }),
+          prisma.form.update({ where: { id }, data }),
+        ]);
+      } else {
+        // Ensure event exists in tenant (status irrelevant here; UI can show "inaktiv")
+        const ev = await prisma.event.findFirst({ where: { id: legacyEventId, tenantId }, select: { id: true } });
+        if (!ev) throw httpError(404, "NOT_FOUND", "Not found.");
+
+        const data: Prisma.FormUncheckedUpdateInput = { ...base, assignedEventId: legacyEventId };
+
+        await prisma.$transaction([
+          prisma.eventFormAssignment.deleteMany({ where: { tenantId, formId: id } }),
+          prisma.eventFormAssignment.create({
+            data: { tenantId, formId: id, eventId: legacyEventId },
+            select: { formId: true },
+          }),
+          prisma.form.update({ where: { id }, data }),
+        ]);
+      }
+    } else {
+      // Normal patch (does not touch assignments)
+      await prisma.form.update({ where: { id }, data: base });
+    }
+
+    const out = await prisma.form.findFirst({
+      where: { id, tenantId },
+      select: {
+        id: true,
+        tenantId: true,
+        name: true,
+        description: true,
+        status: true,
+        config: true,
+        createdAt: true,
+        updatedAt: true,
+        assignedEventId: true,
+        fields: { select: { id: true } },
+      },
+    });
+
+    if (!out) throw httpError(404, "NOT_FOUND", "Not found.");
+    return jsonOk(req, out);
+  } catch (e) {
+    if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
+    return jsonError(req, 500, "INTERNAL", "Unexpected error.");
   }
 }
