@@ -1,8 +1,17 @@
 # Teilprojekt 8.3 (Light): Executive Messebericht — Struktur & Teaser (Pre-GoLive)
 
-Status: READY (nach Commit/Push)  
-Datum: 2026-02-26  
-Commit(s): TBD
+Stand: 2026-02-26  
+Status: DONE ✅ (Phase 1 / ONLINE-only)
+
+---
+
+## Titel + Status + Datum + Commit(s)
+
+**Titel:** TP 8.3 (Light) — Executive Messebericht (Beta) Teaser Screen  
+**Status:** DONE ✅  
+**Datum:** 2026-02-26 (Europe/Zurich)  
+**Commit(s):**
+- 299c7dc — feat(tp8.3): add reports nav + executive report teaser screen
 
 ---
 
@@ -10,7 +19,7 @@ Commit(s): TBD
 
 Vorbereitung der Struktur für den zukünftigen **Executive AI Messebericht (Level B Premium)** als **Premium-Teaser** in der Admin UI.
 
-Out of Scope (bewusst):
+**Explizit nicht im Scope (bewusst):**
 - Keine AI-Integration
 - Keine PDF-Engine
 - Keine DB-Erweiterung
@@ -18,35 +27,35 @@ Out of Scope (bewusst):
 - Kein Snapshot
 - Keine API / kein Backend
 
-In Scope:
+**In Scope:**
 - Navigation + neuer Screen + Premium-Teaser
-- Docs aktualisieren
+- Docs aktualisieren (04_ADMIN_UI.md + Teilprojekt-Dok)
 - typecheck/lint/build grün
 
 ---
 
 ## Umsetzung (Highlights)
 
-- Sidebar um **Reports** erweitert (eigene Rubrik, nicht unter Performance verschachtelt).
-- Statistik/Performance Nav-Label vereinheitlicht: **Performance** (Route bleibt `/admin/statistik`).
-- Neuer Screen `/admin/reports/executive` als ruhiger, glaubwürdiger Premium-Teaser:
-  - Hero mit Beta-Badge und klarer Subline
-  - Section “Was Sie erwartet” mit Bulletpoints
-  - Testphase-Callout mit einzigem CTA “Feedback geben” (mailto)
+- **Neue Rubrik „Reports“** in der Sidebar (nicht unter Performance/Statistik verschachtelt).
+- Neuer Screen **`/admin/reports/executive`** als ruhiger, glaubwürdiger Premium-Teaser:
+  - Hero mit Titel + **Beta** Badge + klarer Subline (Management-Report)
+  - Abschnitt **„Was Sie erwartet“** mit konkreten Bulletpoints (2–5 A4 / KPI / Ranking / Empfehlungen)
+  - Testphase-Callout mit **1 CTA**: „Feedback geben“ (mailto, kein Backend)
+- Naming-Polish: Statistik-Screen Headline auf **„Performance“** ausgerichtet (Route bleibt `/admin/statistik`).
 
 ---
 
 ## Dateien/Änderungen
 
 - `src/app/(admin)/admin/_components/SidebarNav.tsx`
-  - Neue Gruppe “Reports”
-  - “Statistik” → “Performance” (Label/UI)
+  - Neue Gruppe „Reports“
+  - Performance-Labeling im Sidebar-Bereich
 - `src/app/(admin)/admin/_components/icons.tsx`
   - Neues Icon: `IconReports`
 - `src/app/(admin)/admin/statistik/page.tsx`
-  - Titel: “Performance” (ruhig, ohne Route-Änderung)
+  - Titel: „Performance“ (ruhig, ohne Route-Änderung)
 - `src/app/(admin)/admin/reports/executive/page.tsx`
-  - Neuer Teaser-Screen
+  - Neuer Teaser-Screen „Executive Messebericht (Beta)“
 - `docs/LeadRadar2026A/04_ADMIN_UI.md`
   - Neuer Screen dokumentiert + Stand aktualisiert
 
@@ -54,39 +63,50 @@ In Scope:
 
 ## Akzeptanzkriterien – Check
 
-- [ ] Keine Type Errors (`npm run typecheck`)
-- [ ] Keine Lint Errors (`npm run lint`)
-- [ ] Build grün (`npm run build`)
-- [ ] Navigation konsistent (Reports eigenständig, Performance benannt)
-- [ ] UI wirkt Premium (ruhig, kein Fake-Generate)
-- [ ] Kein toter Code / keine Backend Calls
-- [ ] Docs aktualisiert
-- [ ] Commit gepusht
+- ✅ Keine Type Errors (`npm run typecheck`)
+- ✅ Keine Lint Errors (`npm run lint`)
+- ✅ Build grün (`npm run build`)
+- ✅ Navigation konsistent (Reports eigenständig, nicht unter Performance)
+- ✅ UI wirkt Premium (ruhig, kein Fake-Generate, keine ausgegrauten Controls)
+- ✅ Kein toter Code / keine Backend Calls
+- ✅ Docs aktualisiert
+- ✅ Commit gepusht
 
 ---
 
 ## Tests/Proof (reproduzierbar)
 
-Commands:
-- `npm run typecheck`
-- `npm run lint`
-- `npm run build`
+### Quality Gates
+```bash
+npm run typecheck
+npm run lint
+npm run build
+UI Proof (manuell)
 
-Manuell UI:
-1) `/admin` öffnen → Sidebar zeigt **Performance** und **Reports**
-2) Klick **Reports → Executive Messebericht (Beta)** → `/admin/reports/executive`
-3) CTA “Feedback geben” öffnet Mail-Client (mailto)
+/admin öffnen → Sidebar zeigt Reports
 
----
+Klick Reports → Executive Messebericht (Beta) → /admin/reports/executive
 
-## Offene Punkte/Risiken (P0/P1/…)
+CTA „Feedback geben“ öffnet Mail-Client (mailto)
 
-- P1: Mail-Adresse für Beta-Feedback final klären (derzeit `support@leadradar.ch` als Platzhalter).
-- P1: Beta-Positionierung mit Testgruppe validieren (Wording, Erwartungshaltung, “Wann kommt das?” Trigger).
+Offene Punkte/Risiken (P0/P1/…)
 
----
+P1: Mail-Adresse für Beta-Feedback final klären (derzeit support@leadradar.ch als Platzhalter).
 
-## Next Step
+P1: Sidebar-Polish: aktuell kann „Performance“ als Rubrik und Unterpunkt gleich benannt sein. Optional: Unterpunkt auf „Messe-Auswertung“ umbenennen (nur Label, keine Route-Änderung).
 
-- Testgruppen-Feedback auswerten (Verständlichkeit, erwartete Inhalte, Priorität).
-- Danach (separates TP, Level B): AI-Generierung + PDF-Engine + Usage Gate + Snapshot/Exports.
+P1: Testgruppen-Validierung: Erwartungshaltung prüfen („Wann kommt das?“ Trigger) und Bulletpoints ggf. nachschärfen.
+
+Next Step
+
+Testgruppen-Feedback auswerten (Verständlichkeit, erwartete Inhalte, Priorität).
+
+Danach (separates TP, Level B Premium):
+
+AI-Generierung (Executive Summary + Empfehlungen)
+
+PDF-Engine (2–5 Seiten)
+
+Usage Gate / Limits
+
+Snapshot/Exports + reproduzierbare Report-Generation
