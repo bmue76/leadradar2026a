@@ -529,6 +529,11 @@ model Lead {
   // TP 3.3 — Event tagging (optional, server-side)
   eventId String?
 
+  // TP 8.2 — KPI flags (Stats /admin/statistik)
+  capturedByDeviceId String?
+  hasNotes           Boolean @default(false)
+  isQualified        Boolean @default(false)
+
   // Idempotency (Mobile retry-safe)
   clientLeadId String
 
@@ -577,6 +582,8 @@ model Lead {
   @@unique([tenantId, clientLeadId])
   @@index([tenantId, formId, capturedAt])
   @@index([tenantId, eventId, capturedAt])
+  @@index([tenantId, eventId, isQualified, capturedAt])
+  @@index([tenantId, eventId, capturedByDeviceId, capturedAt])
   @@index([tenantId, contactEmail])
   @@index([tenantId, contactCompany])
 }
