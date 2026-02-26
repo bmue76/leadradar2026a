@@ -10,6 +10,7 @@ import {
   IconHome,
   IconLeads,
   IconOperations,
+  IconReports,
   IconSetup,
   IconStats,
 } from "./icons";
@@ -64,10 +65,16 @@ const NAV: NavGroup[] = [
     ],
   },
   {
-    key: "stats",
-    title: "Statistik",
+    key: "performance",
+    title: "Performance",
     Icon: IconStats,
-    items: [{ href: "/admin/statistik", label: "Statistik" }],
+    items: [{ href: "/admin/statistik", label: "Performance" }],
+  },
+  {
+    key: "reports",
+    title: "Reports",
+    Icon: IconReports,
+    items: [{ href: "/admin/reports/executive", label: "Executive Messebericht (Beta)" }],
   },
   {
     key: "billing",

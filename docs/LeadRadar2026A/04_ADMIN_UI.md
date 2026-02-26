@@ -1,17 +1,17 @@
 # LeadRadar2026A — Admin UI
 
-Stand: 2026-02-25  
+Stand: 2026-02-26
 Scope: Screen-by-screen, GoLive-ready
 
 ---
 
 ## /admin — Event Übersicht (TP 8.1)
 
-**Purpose**  
-/admin ist der erste Screen nach Login und bildet das operative Cockpit eines laufenden Events ab.  
+**Purpose**
+/admin ist der erste Screen nach Login und bildet das operative Cockpit eines laufenden Events ab.
 Kein Admin-Panel, kein Setup-Wizard, kein KPI-Dashboard.
 
-**Leitplanken (verbindlich)**  
+**Leitplanken (verbindlich)**
 - Pro Screen exakt **1 Primary Action**
 - Dominante Hauptinformation (Event + Leads heute)
 - Keine Status-Chip-Orgie, keine Quick-Action-Wolke, keine Checkliste
@@ -59,7 +59,7 @@ C) **Event läuft**
 
 ### Datenquellen / Aggregation (UI-only)
 
-TP 8.1 fügt **keine neuen Endpoints** hinzu.  
+TP 8.1 fügt **keine neuen Endpoints** hinzu.
 Aggregation erfolgt serverseitig im Page-Render via Prisma (read-only):
 
 - Active Event: latest Event mit status=ACTIVE (tenant-scoped)
@@ -85,10 +85,10 @@ Quality gates:
 
 ## /admin/statistik — Premium Messe Performance Center (TP 8.2)
 
-**Purpose**  
-Messeleiter öffnet /admin/statistik und erkennt sofort: Peak-Zeiten, Geräte-/Team-Performance, Lead-Qualität — optional live.
+**Purpose**
+Messeleiter öffnet /admin/statistik (Sidebar: **Performance**) und erkennt sofort: Peak-Zeiten, Geräte-/Team-Performance, Lead-Qualität — optional live.
 
-**Leitplanken (verbindlich)**  
+**Leitplanken (verbindlich)**
 - Apple-clean, ruhig, Premium SaaS
 - 1 Primary Action
 - Farbe nur funktional (Live/Pause/Error)
@@ -177,3 +177,49 @@ Quality gates:
 - npm run lint
 - npm run build
 
+---
+
+## /admin/reports/executive — Executive Messebericht (Beta) (TP 8.3 Light)
+
+**Purpose**
+Teaser-Screen für einen zukünftigen **Executive Management Report** (Level B Premium).
+In der Testphase soll die Testgruppe sofort verstehen: *„Das wird ein Management-Report für unsere Geschäftsleitung.“*
+
+**Leitplanken (verbindlich)**
+- Apple-clean, ruhig, Premium-Ankündigung
+- Keine AI-Integration, keine PDF-Engine, kein Backend
+- Kein Fake “Generieren”
+- Keine ausgegrauten Controls
+- Genau **1** CTA: Feedback geben
+
+### Struktur (Wireframe)
+
+1) **Hero**
+- Titel: Executive Messebericht
+- Badge: Beta
+- Subline: Management-Report mit Performance-Analyse, Geräte-Ranking und strategischen Empfehlungen
+
+2) **Was Sie erwartet**
+Bullets:
+- Mehrseitiger PDF-Bericht (2–5 A4 Seiten)
+- Executive Summary für Geschäftsleitung
+- Leads pro Stunde & Peak-Analyse
+- Geräte-Performance-Ranking
+- Interessen- & Qualitätsauswertung
+- Strategische Empfehlungen für zukünftige Engagements
+
+3) **Testphase Callout**
+- Ruhiger Hinweis: Feature in Vorbereitung
+- Frage: frühzeitig Zugriff als Testkunde?
+- CTA: **Feedback geben** (mailto)
+
+### Proof (manuell)
+
+1) Sidebar → Reports → Executive Messebericht (Beta)
+2) Route lädt ohne Fehler: `/admin/reports/executive`
+3) CTA öffnet Mail-Client (mailto)
+
+Quality gates:
+- npm run typecheck
+- npm run lint
+- npm run build

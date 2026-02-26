@@ -189,6 +189,40 @@ export function IconStats(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function IconReports(props: SVGProps<SVGSVGElement>) {
+  // Document / Report
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <path
+        d="M8 4.8h6.1l3.9 3.9V19.2A2.3 2.3 0 0 1 15.7 21.5H8A2.3 2.3 0 0 1 5.7 19.2V7.1A2.3 2.3 0 0 1 8 4.8Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M14.1 4.8v4.1H18"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M9 12.2h6"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path
+        d="M9 15.8h6"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        opacity="0.9"
+      />
+    </svg>
+  );
+}
+
 export function IconBilling(props: SVGProps<SVGSVGElement>) {
   // Credit card
   return (
