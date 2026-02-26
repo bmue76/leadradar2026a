@@ -1,6 +1,6 @@
 # LeadRadar2026A – API (Admin/Mobile/Platform)
 
-Stand: 2026-02-24  
+Stand: 2026-02-25  
 Prinzipien: tenant-scoped, leak-safe (falscher Tenant/ID => 404), Standard Responses + traceId, Zod-only Validation.
 
 ---
@@ -53,7 +53,7 @@ BAD_JSON (400) — invalid JSON parse
 
 UNAUTHORIZED (401) — fehlender/ungültiger Login (Admin) oder ApiKey (Mobile)
 
-TENANT_REQUIRED (401) — fehlender Tenant Context (x-tenant-slug) wo erforderlich
+TENANT_REQUIRED (401) — fehlender Tenant Context (z. B. x-tenant-slug) wo erforderlich
 
 NOT_FOUND (404) — leak-safe bei falschem Tenant/ID oder nicht sichtbaren Ressourcen
 
@@ -111,28 +111,13 @@ Response:
 GET /api/mobile/v1/branding
 
 Auth: x-api-key erforderlich
-Semantik:
+Semantik: Liefert Tenant Branding für Mobile (MVP: Logo).
+Rückgabe Mobile-friendly: logoDataUrl (data:...;base64,...) damit RN Image stabil rendert.
 
-Liefert Tenant Branding für Mobile (MVP: Logo)
-
-Rückgabe Mobile-friendly: logoDataUrl (data:...;base64,...) damit RN Image stabil rendern kann
-
-Response (Beispiel):
-
-{
-  "ok": true,
-  "data": {
-    "branding": { "hasLogo": true, "logoMime": "image/png", "logoSizeBytes": 12345, "logoUpdatedAt": "..." },
-    "logoDataUrl": "data:image/png;base64,..."
-  },
-  "traceId": "..."
-}
 GET /api/mobile/v1/events/active (TP7.10)
 
 Auth: x-api-key erforderlich
-Semantik:
-
-Liefert 0..n ACTIVE Events im Tenant-Kontext
+Semantik: Liefert 0..n ACTIVE Events im Tenant-Kontext.
 
 Mobile UX:
 
@@ -140,23 +125,12 @@ Mobile UX:
 
 1 => Auto-select → Formularauswahl
 
->1 => Event Picker → danach Formularauswahl
+1 => Event Picker → danach Formularauswahl
 
-Response:
-
-{
-  "ok": true,
-  "data": [
-    { "id": "evt_...", "name": "Swissbau 2026", "location": "Basel", "startsAt": "...", "endsAt": "...", "status": "ACTIVE" }
-  ],
-  "traceId": "..."
-}
 GET /api/mobile/v1/forms?eventId=<id> (TP7.10)
 
 Auth: x-api-key erforderlich
-Query:
-
-eventId (required)
+Query: eventId (required)
 
 Semantik (MVP):
 Liefert ACTIVE Forms, die für das ausgewählte Event sichtbar sind:
@@ -165,23 +139,10 @@ dem Event zugewiesen ODER
 
 global (keine Event-Zuweisungen vorhanden)
 
-Device↔Form Assignments werden nicht mehr gefiltert (MVP).
-
-Response:
-
-{
-  "ok": true,
-  "data": [
-    { "id": "frm_1", "name": "Visitor Lead", "description": "Basic visitor lead", "status": "ACTIVE" }
-  ],
-  "traceId": "..."
-}
 GET /api/mobile/v1/forms/:id?eventId=<id> (TP7.10)
 
 Auth: x-api-key erforderlich
-Query:
-
-eventId (required)
+Query: eventId (required)
 
 Semantik:
 
@@ -209,23 +170,20 @@ eventId required (selected event in Mobile)
 
 eventId muss im Tenant existieren und ACTIVE sein, sonst 409 EVENT_NOT_ACTIVE oder 404 NOT_FOUND (leak-safe)
 
-form muss ACTIVE und für das eventId sichtbar sein, sonst 404 leak-safe
+Form muss ACTIVE und für das eventId sichtbar sein, sonst 404 (leak-safe)
 
 Idempotent via (tenantId, clientLeadId) → bei Retry deduped=true
 
 Response:
 
-{
-  "ok": true,
-  "data": { "leadId": "lead_...", "deduped": false },
-  "traceId": "..."
-}
+{ "ok": true, "data": { "leadId": "lead_...", "deduped": false }, "traceId": "..." }
 Mobile API v1 — Lead Attachments (TP 3.5)
 
 POST /api/mobile/v1/leads/:id/attachments
 Auth: x-api-key erforderlich
 Leak-safe: 404 wenn Lead nicht im Tenant existiert
 Content-Type: multipart/form-data
+
 Form Fields:
 
 file (required)
@@ -239,8 +197,8 @@ max size: 6MB
 mime allowlist: image/jpeg, image/png, image/webp
 
 Mobile Provisioning (TP 3.0 / TP 7.8)
-
 POST /api/mobile/v1/provision/claim
+
 Auth: kein x-api-key (nur Provision Token)
 
 Semantik:
@@ -254,21 +212,16 @@ success => erstellt MobileApiKey + MobileDevice
 Admin API v1 (tenant-scoped, session protected)
 /api/admin/v1/tenants/current
 
-Semantik:
-
-Liefert Tenant-Metadaten (owner-only MVP)
+Semantik: Liefert Tenant-Metadaten (owner-only MVP)
 
 /api/admin/v1/tenants/current/logo
 
-Semantik:
-
-Tenant Logo Storage (DEV: .tmp_branding/...)
-
+Semantik: Tenant Logo Storage (DEV: .tmp_branding/...)
 Allowed: PNG/JPG/WebP
 
 Events (TP 3.3)
-
 GET /api/admin/v1/events
+
 Query:
 
 status (optional): DRAFT|ACTIVE|ARCHIVED
@@ -278,25 +231,27 @@ limit (optional, default 200, max 500)
 includeCounts (optional): true|1 → Items um boundDevicesCount
 
 PATCH /api/admin/v1/events/:id/status
+
 Body: { "status": "DRAFT" | "ACTIVE" | "ARCHIVED" }
+
 Guardrails (MVP):
 
-Max. 1 ACTIVE Event pro Tenant (kann in TP7.10 auch >1 sein; Mobile nutzt jetzt /events/active Liste)
+Max. 1 ACTIVE Event pro Tenant (kann in TP7.10 auch >1 sein; Mobile nutzt /events/active Liste)
 
 Auto-unbind Devices wenn ACTIVE wegfällt (falls device binding genutzt wird)
 
-Forms — List (TP7.10)
-
+Forms — List / Assignments (TP7.10)
 GET /api/admin/v1/forms
+
 Query:
 
-status=DRAFT|ACTIVE|ARCHIVED|ALL
+status = DRAFT|ACTIVE|ARCHIVED|ALL
 
 q (optional)
 
-sort=updatedAt|name
+sort = updatedAt|name
 
-dir=asc|desc
+dir = asc|desc
 
 assigned (deprecated, ignored)
 
@@ -308,14 +263,13 @@ assignmentCount (0 => Global, 1 => genau ein Event, >1 => Multi)
 
 assignedEventId (nur wenn assignmentCount===1, sonst null)
 
-Forms — Assignments (TP7.10)
-
 GET /api/admin/v1/forms/:id/assignments
+
 Response:
 
 { "ok": true, "data": { "eventIds": ["evt_1","evt_2"] }, "traceId": "..." }
-
 PUT /api/admin/v1/forms/:id/assignments
+
 Body:
 
 { "eventIds": ["evt_1","evt_2"] }
@@ -331,12 +285,101 @@ tenant-scoped + leak-safe: fremde formId/eventId => 404
 Leads – OCR Review (Business Card) — TP 4.11
 
 GET /api/admin/v1/leads/:id/ocr
+
 PATCH /api/admin/v1/leads/:id/ocr
+
 POST /api/admin/v1/leads/:id/ocr/apply
+
 (Details siehe TP 4.11 Doc / bestehende Implementierung)
 
 Exports (CSV) — TP 1.8 + TP 3.4
-
 POST /api/admin/v1/exports/csv
+
 Optional: eventId, formId, date range
 Leak-safe 404 bei falschem Tenant/ID
+
+Statistik — Messe Performance Center (TP 8.2)
+GET /api/admin/v1/statistics/events
+
+Semantik:
+
+Liefert Events für den Statistik-Screen (MVP: ACTIVE + ARCHIVED).
+
+tenant-scoped, leak-safe.
+
+Response:
+
+{
+  "ok": true,
+  "data": {
+    "events": [
+      { "id": "evt_...", "name": "Swissbau 2026", "status": "ACTIVE", "startsAt": "...", "endsAt": "..." }
+    ],
+    "generatedAt": "..."
+  },
+  "traceId": "..."
+}
+GET /api/admin/v1/statistics
+
+Polling-friendly (MVP):
+
+Cache-Control: no-store
+
+Response enthält generatedAt
+
+Standard Responses + traceId
+
+Query:
+
+eventId (required)
+
+from (ISO datetime, required)
+
+to (ISO datetime, required)
+
+compare = none|previous (default previous)
+
+includeDeleted = 0|1 (default 0)
+
+Semantik:
+
+Aggregiert serverseitig: Headline, Traffic by hour, Devices ranking, Top Interests, Top Forms, Lead-Qualität.
+
+Leak-safe: falscher Tenant / fremde eventId => 404 NOT_FOUND.
+
+Response (Beispiel, gekürzt):
+
+{
+  "ok": true,
+  "data": {
+    "generatedAt": "2026-02-25T20:12:03.120Z",
+    "event": { "id": "evt_...", "name": "Swissbau 2026", "status": "ACTIVE" },
+    "range": { "from": "...", "to": "...", "compareLabel": "" },
+    "headline": {
+      "leadsTotal": 128,
+      "deltaPct": 18.0,
+      "qualifiedPct": 32,
+      "devicesActiveCount": 4,
+      "peakHourLabel": "14–15 Uhr",
+      "liveAllowed": true
+    },
+    "traffic": { "byHour": [{ "hourStart": "...", "leads": 3, "leadsCompare": 2 }] },
+    "devices": { "ranking": [{ "deviceId": "dev_1", "label": "iPad Sales", "leadsTotal": 42, "leadsPerHourAvg": 3.5 }] },
+    "insights": {
+      "topInterests": [{ "label": "Produkt A", "count": 48 }],
+      "topForms": [{ "formId": "frm_1", "name": "Kontakt", "count": 73 }]
+    },
+    "quality": {
+      "cardPct": 61,
+      "notesPct": 24,
+      "qualifiedPct": 32,
+      "funnel": [
+        { "label": "Erfasst", "count": 128 },
+        { "label": "Mit Visitenkarte", "count": 78 },
+        { "label": "Qualifiziert", "count": 41 }
+      ]
+    }
+  },
+  "traceId": "..."
+}
+

@@ -1,7 +1,9 @@
 # LeadRadar2026A — Admin UI
 
-Stand: 2026-02-24  
+Stand: 2026-02-25  
 Scope: Screen-by-screen, GoLive-ready
+
+---
 
 ## /admin — Event Übersicht (TP 8.1)
 
@@ -10,10 +12,10 @@ Scope: Screen-by-screen, GoLive-ready
 Kein Admin-Panel, kein Setup-Wizard, kein KPI-Dashboard.
 
 **Leitplanken (verbindlich)**  
-- Pro Screen exakt **1 Primary Action**  
-- Dominante Hauptinformation (Event + Leads heute)  
-- Keine Status-Chip-Orgie, keine Quick-Action-Wolke, keine Checkliste  
-- Farbe nur funktional (Primary CTA / Status-Dot)  
+- Pro Screen exakt **1 Primary Action**
+- Dominante Hauptinformation (Event + Leads heute)
+- Keine Status-Chip-Orgie, keine Quick-Action-Wolke, keine Checkliste
+- Farbe nur funktional (Primary CTA / Status-Dot)
 - System spricht nur bei Problemen (Error State mit TraceId/Hint)
 
 ### Struktur (Wireframe)
@@ -61,7 +63,7 @@ TP 8.1 fügt **keine neuen Endpoints** hinzu.
 Aggregation erfolgt serverseitig im Page-Render via Prisma (read-only):
 
 - Active Event: latest Event mit status=ACTIVE (tenant-scoped)
-- Active Devices: delegate wird dynamisch über Prisma Client ermittelt (keyword "device"), Aktiv-Fenster 15min
+- Active Devices: Aktiv-Fenster 15min
 - Active Forms: forms status=ACTIVE
 - Leads heute: leads capturedAt in “today (Europe/Zurich)”, isDeleted=false
 - Visitenkarte: leadAttachments type=IMAGE heute
@@ -78,3 +80,100 @@ Quality gates:
 - npm run typecheck
 - npm run lint
 - npm run build
+
+---
+
+## /admin/statistik — Premium Messe Performance Center (TP 8.2)
+
+**Purpose**  
+Messeleiter öffnet /admin/statistik und erkennt sofort: Peak-Zeiten, Geräte-/Team-Performance, Lead-Qualität — optional live.
+
+**Leitplanken (verbindlich)**  
+- Apple-clean, ruhig, Premium SaaS
+- 1 Primary Action
+- Farbe nur funktional (Live/Pause/Error)
+- Keine KPI-Karten-Orgie
+- Kein Setup-Flow, kein Systemstatus-Rehash
+- tenant-scoped + leak-safe 404
+
+**Legacy Routing**
+- `/admin/stats` → Redirect auf `/admin/statistik` (Backwards Compatibility)
+
+### Struktur (Wireframe)
+
+1) **Executive Header (Above the fold)**
+- Event Name
+- Zeitraum-Selector: Heute | Gestern | Gesamte Messe | Custom
+- Dominante Zahl: `128 Leads`
+- Sekundärzeile: `+18% vs. gestern · 32% qualifiziert · 4 Geräte aktiv · Peak: 14–15 Uhr`
+- Rechts oben: Live Toggle **Live / Pausiert**
+- Primary CTA (MVP): **Leads öffnen** (deep link auf /admin/leads?eventId=…)
+
+2) **Statuszeile (unter Zeitraum)**
+- Live: `Aktualisiert vor 12s`
+- Refresh: `Aktualisiere …`
+- Error: `Live-Update fehlgeschlagen` + Button `Erneut versuchen`
+- darunter klein/grau: `TraceId: …`
+
+3) **Traffic Chart (Must-have)**
+- Leads pro Stunde (ruhiger Linienchart)
+- Akzentfarbe für Hauptserie
+- optional Vergleich (grau)
+
+4) **Performance pro Gerät**
+- Ranking-Liste: Gerät + Leads (optional kleine Zahl “Leads / Std.”)
+
+5) **Interessen / Formularanalyse**
+- Top Interessen (Top 8–12)
+- optional Top Formulare (Top 5)
+
+6) **Lead-Qualität**
+- % mit Visitenkarte
+- % mit Notizen
+- % qualifiziert
+- optional ruhiger Funnel: Erfasst → Mit Visitenkarte → Qualifiziert
+
+### Live Auto-Refresh (MVP Polling)
+
+- Polling Intervall: 30s
+- Nur 1 in-flight Request (kein Parallel-Polling)
+- Langsame Response → nächster Poll wird übersprungen
+- Tab nicht sichtbar → Auto-Pause
+- Fehler → Backoff (30s → 60s → 120s max) + Statusanzeige
+- Response enthält `generatedAt` + `traceId`
+- Keine heavy Client-Aggregation
+
+### States
+
+A) **Kein aktives Event / kein Event ausgewählt**
+- Hinweis + CTA “Event auswählen”
+
+B) **Event aktiv, keine Leads**
+- ruhiger Null-State (“Noch keine Leads im gewählten Zeitraum.”)
+
+C) **Event läuft**
+- volles Performance Center (Live optional)
+
+D) **Event archiviert**
+- read-only, Live disabled, Status “Pausiert”
+
+### Datenquellen / Endpoints
+
+- Events für Selector: `GET /api/admin/v1/statistics/events`
+- KPI Aggregation: `GET /api/admin/v1/statistics?eventId=...&from=...&to=...`
+
+### Proof (manuell + reproduzierbar)
+
+Manuell UI:
+1) /admin/statistik öffnen, Event wählen
+2) Toggle Live → Status: “Aktualisiere …” → “Aktualisiert vor 0s”
+3) Neue Leads erfassen → nach nächstem Poll aktualisiert Headline/Chart
+
+API Proof:
+- 2 Calls → `generatedAt` verändert sich, `x-trace-id` vorhanden
+
+Quality gates:
+- npm run typecheck
+- npm run lint
+- npm run build
+

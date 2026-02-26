@@ -1,12 +1,7 @@
-import { AdminPageHeader } from "../_components/AdminPageHeader";
+import { redirect } from "next/navigation";
 
-export default function StatsPage() {
-  return (
-    <div className="py-2">
-      <AdminPageHeader
-        title="Statistik"
-        hint="Hier findest du Kennzahlen und Auswertungen (MVP: Scaffold)."
-      />
-    </div>
-  );
+export const dynamic = "force-dynamic";
+
+export default function AdminStatsRedirectPage() {
+  redirect("/admin/statistik");
 }

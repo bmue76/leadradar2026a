@@ -67,7 +67,7 @@ const NAV: NavGroup[] = [
     key: "stats",
     title: "Statistik",
     Icon: IconStats,
-    items: [{ href: "/admin/stats", label: "Statistik" }],
+    items: [{ href: "/admin/statistik", label: "Statistik" }],
   },
   {
     key: "billing",
