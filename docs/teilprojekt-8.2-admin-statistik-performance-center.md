@@ -1,148 +1,156 @@
 # Teilprojekt 8.2 — /admin/statistik: Premium Messe Performance Center (Live Polling) + de-CH Microcopy
 
-Stand: 2026-02-25  
-Status: IN ARBEIT  
-Scope: Phase 1 (ONLINE-only) — kein Offline, kein AI Messebericht
+Stand: 2026-02-26  
+Status: DONE ✅ (Phase 1 / ONLINE-only)
+
+---
+
+## Titel + Status + Datum + Commit(s)
+
+**Titel:** TP 8.2 — /admin/statistik: Premium Messe Performance Center  
+**Status:** DONE ✅  
+**Datum:** 2026-02-26 (Europe/Zurich)  
+**Commit(s):**
+- a2b2962 — fix(tp8.2): route admin statistik + sidebar link + legacy stats redirect
+- 5039f6d — feat(tp8.2): admin statistik performance center + polling stats api
+
+---
 
 ## Ziel
 
-Premium Statistik-Screen unter **/admin/statistik** als **Messe Performance Center** für Messeleiter:
+Entwicklung eines Premium Screens unter **/admin/statistik** als **Messe Performance Center** für Messeleiter:
 
 - Performance messbar machen
 - Peak-Zeiten sichtbar machen
 - Geräte-/Team-Performance vergleichbar machen
 - Lead-Qualität transparent machen
-- Live mitlaufen (MVP Polling)
+- Live mitlaufen können (MVP Polling)
 
 Nicht enthalten:
 - KPI-Karten-Orgie
-- Systemstatus/Setup-Logik
-- AI Messebericht (Phase 2)
+- Setup-Logik / Systemstatus-Rehash
+- AI Messebericht (explizit nicht Teil von TP 8.2)
 
-## UX/Design Leitplanken
+Hinweis (Naming): In der Sidebar wird der Bereich inzwischen als **Performance** geführt (UI-Labeling; Route bleibt `/admin/statistik`).
 
-- Apple-clean, ruhig, Premium SaaS
-- Struktur: SumUp / Klarheit: Square / Reduktion: Linear
-- 1 Primary Action pro Screen
-- Farbe nur funktional (Live/Pause/Error)
-- Keine Status-Chip-Orgie
-- Tenant-scope non-negotiable, leak-safe 404
+---
 
-## KPI-Datenpunkte (final)
+## Umsetzung (Highlights)
 
-### Executive Header
-- Event: name, status
-- Range: TODAY | YESTERDAY | EVENT_TOTAL | CUSTOM (+ from/to)
-- Dominant: leadsTotal
-- Secondary: deltaPct (+ compareLabel), qualifiedPct, devicesActiveCount, peakHourLabel
-- Live Control: Toggle Live/Pausiert
-- Statuszeile: “Aktualisiert vor …” / “Aktualisiere …” / “Live-Update fehlgeschlagen” + Retry + TraceId
+- **Neuer Screen `/admin/statistik`** mit Executive Header (Event, Range Selector, dominanter KPI), ruhiger Struktur und de-CH Microcopy.
+- **Live Auto-Refresh Mode (MVP Polling)**:
+  - 30s Intervall
+  - nur 1 in-flight Request
+  - Tab hidden ⇒ Auto-Pause
+  - Fehler ⇒ Statusanzeige + Retry (Backoff vorbereitet via Poll-Intervall-Logik)
+  - Statuszeile: „Aktualisiere …“ / „Aktualisiert vor …s“ / „Live-Update fehlgeschlagen“ + TraceId
+- **Serverseitige Aggregation** (kein heavy Client-Aggregation):
+  - Headline: leadsTotal, deltaPct (vs previous window), qualifiedPct, devicesActiveCount, peakHourLabel
+  - Traffic: Leads pro Stunde (optional Vergleich)
+  - Geräte-Ranking (inkl. Leads/Std. als sekundäre Zahl)
+  - Top Interessen (generisches Extract aus SINGLE/MULTI_SELECT Feldern)
+  - Top Formulare
+  - Lead-Qualität: % Visitenkarte, % Notizen, % qualifiziert + ruhiger Funnel
+- **Tenant-scope non-negotiable**: Admin API tenant-scoped, leak-safe 404 bei falschem Tenant/Event.
+- **Routing Cleanup**:
+  - Legacy `/admin/stats` redirectet sauber auf `/admin/statistik`.
+  - Sidebar-Link auf `/admin/statistik` umgestellt.
 
-### Traffic
-- Leads pro Stunde (ruhiger Linienchart)
-- optional Vergleich “gestern” (nur wenn sinnvoll)
+---
 
-### Geräte-Performance
-- Ranking: deviceLabel + leadsTotal (optional leadsPerHourAvg klein)
+## Dateien/Änderungen
 
-### Interessen/Formularanalyse
-- TopInterests: label + count (Top 8–12)
-- optional TopForms (Top 5)
+### DB
+- `prisma/schema.prisma`
+  - Lead KPI Felder ergänzt:
+    - `capturedByDeviceId String?`
+    - `hasNotes Boolean @default(false)`
+    - `isQualified Boolean @default(false)`
+  - Indizes ergänzt:
+    - `@@index([tenantId, eventId, capturedByDeviceId, capturedAt])`
+    - `@@index([tenantId, eventId, isQualified, capturedAt])`
+- `prisma/migrations/20260225212845_tp8_2_admin_statistik_kpis/`
 
-### Lead-Qualität
-- cardPct, notesPct, qualifiedPct
-- optional Funnel: Erfasst → Mit Visitenkarte → Qualifiziert
+### API
+- `src/app/api/admin/v1/statistics/_repo.ts`
+- `src/app/api/admin/v1/statistics/route.ts`
+- `src/app/api/admin/v1/statistics/events/route.ts`
 
-## States
+### UI
+- `src/app/(admin)/admin/statistik/page.tsx`
+- `src/app/(admin)/admin/statistik/StatistikClient.tsx`
+- `src/app/(admin)/admin/statistik/_components/Segmented.tsx`
+- `src/app/(admin)/admin/statistik/_components/LineChart.tsx`
 
-A) Kein aktives Event
-- Hinweis + CTA “Event auswählen”
+### Routing / Navigation
+- `src/app/(admin)/admin/stats/page.tsx` (Redirect → `/admin/statistik`)
+- `src/app/(admin)/admin/_components/SidebarNav.tsx` (Link umgestellt)
 
-B) Event aktiv, keine Leads
-- ruhiger Null-State
+### Docs
+- `docs/LeadRadar2026A/03_API.md` (Statistik Endpoints ergänzt)
+- `docs/LeadRadar2026A/04_ADMIN_UI.md` (Screen Spec `/admin/statistik` ergänzt)
 
-C) Event läuft
-- volles Performance Center
+### Proof Script
+- `scripts/proof-tp8.2-statistics.sh`
 
-D) Event archiviert
-- read-only, kein Live
+---
 
-## Live Auto-Refresh (MVP Polling)
+## Akzeptanzkriterien – Check
 
-- Intervall: 30s
-- Nur 1 in-flight Request (Mutex)
-- Langsame Response → nächster Poll wird übersprungen
-- Tab hidden → Auto-Pause
-- Error → Backoff (30s → 60s → 120s max) + Statusanzeige
-- Response enthält generatedAt + traceId
-- No heavy Client-Aggregation
+- ✅ Apple-clean, ruhig, Premium SaaS Layout (keine KPI-Orgie)
+- ✅ 1 Primary Action pro Screen (MVP: „Leads öffnen“)
+- ✅ Live Mode via Polling (30s), robust (1 inflight, tab hidden pause)
+- ✅ Statuszeile + Retry + TraceId (de-CH Microcopy)
+- ✅ Tenant-scoped, leak-safe 404 geprüft via Policy (event tenant-bound)
+- ✅ Archivierte Events: read-only, Live disabled
+- ✅ Docs (03_API.md, 04_ADMIN_UI.md) committed
+- ✅ Legacy `/admin/stats` → `/admin/statistik` Redirect
+- ✅ Commits gepusht: a2b2962 + 5039f6d
 
-## API Contract (MVP: 1 Endpoint)
+---
 
-GET /api/admin/v1/statistics
+## Tests/Proof (reproduzierbar)
 
-Query:
-- eventId (required)
-- range = today|yesterday|event|custom
-- from/to (required if custom)
-- compare = none|previous (default previous)
+### Quality Gates
+```bash
+npm run typecheck
+npm run lint
+npm run build
+API Proof (Polling-ready + traceId)
+TENANT_SLUG=atlex EVENT_ID="evt_XXXX" ./scripts/proof-tp8.2-statistics.sh
 
-Response (jsonOk):
-- generatedAt
-- event {id,name,status}
-- range {key,from,to,compareLabel}
-- headline {leadsTotal, deltaPct?, qualifiedPct, devicesActiveCount, peakHourLabel, liveAllowed}
-- traffic.byHour[{hourStart,leads,leadsCompare?}]
-- devices.ranking[{deviceId,label,leadsTotal,leadsPerHourAvg?}]
-- insights.topInterests[{label,count}]
-- insights.topForms[{formId,name,count}] (optional)
-- quality {cardPct,notesPct,qualifiedPct,funnel?}
-- traceId (body) + x-trace-id (header)
+Erwartung:
 
-Errors:
-- 404 NOT_FOUND leak-safe bei falschem tenant/event
-- Standard jsonError
+Response enthält data.generatedAt
 
-## DB/Index Plan (MVP)
+Header enthält x-trace-id
 
-Ziel: schnelle Aggregation nach tenantId+eventId+capturedAt.
+2 Calls ⇒ generatedAt verändert sich
 
-Leads:
-- flags: hasBusinessCard, hasNotes, isQualified (Write-time gepflegt)
-- Indizes:
-  - (tenantId,eventId,capturedAt)
-  - (tenantId,eventId,capturedByDeviceId,capturedAt)
-  - (tenantId,eventId,formId,capturedAt)
+UI Proof (manuell sichtbar)
 
-Interests (empfohlen):
-- neue Tabelle LeadInterest (tenantId,eventId,leadId,label,createdAt)
-- Indizes:
-  - (tenantId,eventId,createdAt)
-  - (tenantId,eventId,label)
+/admin/statistik öffnen
 
-## Umsetzungsschritte (Prozess)
+Event auswählen
 
-1) DB: Prisma Schema + Migration + Indizes
-2) Aggregation: Repo/Queries (serverseitig)
-3) API: Route + Zod validateQuery + jsonOk/jsonError + traceId
-4) UI: /admin/statistik Screen + Live Control + States + de-CH Microcopy
-5) Tests/Proof: Polling nachvollziehbar, Leak-safe 404, manuelle UI-Checks
-6) Docs: 03_API.md + 04_ADMIN_UI.md + Schlussrapport
-7) Commit/Push
+Toggle Live:
 
-## Proof (reproduzierbar)
+Status: „Aktualisiere …“ → „Aktualisiert vor 0s“
 
-- curl: generatedAt & x-trace-id vorhanden, 2 Calls → generatedAt neu
-- UI: Live Toggle → “Aktualisiere …” → “Aktualisiert vor 0s”
-- Datenänderung → nächste Poll-Runde aktualisiert KPI/Chart
-- Leak-safe: fremde eventId → 404
+In anderem Tab/Mobile neue Leads erfassen
 
-## DoD
+Nach nächstem Poll: Headline/Chart aktualisiert
 
-- npm run typecheck → 0
-- npm run lint → 0
-- npm run build → grün (wenn relevant)
-- Polling robust (1 inflight, backoff, tab hidden pause)
-- States getestet (A–D)
-- Docs committed
-- git status clean
+Offene Punkte/Risiken (P0/P1/…)
+
+P1: “Top Interessen” generisch aus Select/MultiSelect Feldern extrahiert — für stark custom Forms ggf. später feinjustieren (Exclusions, Label-Mapping).
+
+P1: Quality-Flags sind DB-Felder, aktuell zusätzlich mit Fallback über meta/values. Langfristig Write-time konsequent setzen (Phase 2/Refactor).
+
+Next Step
+
+TP 8.3 (Light) umgesetzt: Reports → Executive Messebericht (Beta) als Premium-Teaser (ohne AI/PDF/Backend).
+
+Optional TP (Polish): Range-Compare Regeln (“heute/gestern/event/custom”), bessere Event-Auswahl UX, optional Vergleich-Switch + “Last updated” UX.
+
+Optional: serverseitige Normalisierung für “Top Interessen” (LeadInterest Tabelle), falls Performance/Genauigkeit später kritisch wird.
