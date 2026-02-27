@@ -11,24 +11,98 @@ import { putBinaryFile, deleteFileIfExists } from "@/lib/storage";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const MAX_BYTES = 6 * 1024 * 1024; // 6MB
-const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/webp"]);
+const MB = 1024 * 1024;
+
+const MAX_BYTES_BY_MIME: Record<string, number> = {
+  // Images
+  "image/jpeg": 6 * MB,
+  "image/png": 6 * MB,
+  "image/webp": 6 * MB,
+
+  // PDF
+  "application/pdf": 12 * MB,
+
+  // Audio (voice notes)
+  "audio/mpeg": 12 * MB, // mp3
+  "audio/mp4": 12 * MB, // m4a (commonly reported as audio/mp4)
+  "audio/x-m4a": 12 * MB,
+  "audio/aac": 12 * MB,
+  "audio/wav": 12 * MB,
+  "audio/webm": 12 * MB,
+  "audio/ogg": 12 * MB,
+  "audio/opus": 12 * MB,
+  "audio/3gpp": 12 * MB, // 3gp
+};
+
+const ALLOWED_MIME = new Set(Object.keys(MAX_BYTES_BY_MIME));
 
 const TypeSchema = z
   .string()
   .trim()
   .optional()
-  .transform((v) => (v && v.length ? v : "BUSINESS_CARD_IMAGE"))
+  .transform((v) => (v && v.length ? v : undefined))
   .refine(
-    (v) => v === "BUSINESS_CARD_IMAGE" || v === "OTHER" || v === "IMAGE" || v === "PDF",
+    (v) =>
+      v === undefined ||
+      v === "BUSINESS_CARD_IMAGE" ||
+      v === "OTHER" ||
+      v === "IMAGE" ||
+      v === "PDF",
     "Invalid attachment type.",
   );
+
+function maxBytesForMime(mime: string): number | null {
+  return MAX_BYTES_BY_MIME[mime] ?? null;
+}
+
+function mimeFromFilename(filename: string): string | null {
+  const lower = String(filename ?? "").trim().toLowerCase();
+  if (!lower) return null;
+  const ext = lower.split(".").pop() ?? "";
+  if (!ext) return null;
+
+  const map: Record<string, string> = {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    webp: "image/webp",
+    pdf: "application/pdf",
+    mp3: "audio/mpeg",
+    m4a: "audio/mp4",
+    aac: "audio/aac",
+    wav: "audio/wav",
+    webm: "audio/webm",
+    ogg: "audio/ogg",
+    opus: "audio/opus",
+    "3gp": "audio/3gpp",
+  };
+
+  const mime = map[ext];
+  if (!mime) return null;
+  return ALLOWED_MIME.has(mime) ? mime : null;
+}
 
 function extFromMime(mime: string): string | null {
   if (mime === "image/jpeg") return "jpg";
   if (mime === "image/png") return "png";
   if (mime === "image/webp") return "webp";
+  if (mime === "application/pdf") return "pdf";
+  if (mime === "audio/mpeg") return "mp3";
+  if (mime === "audio/mp4" || mime === "audio/x-m4a") return "m4a";
+  if (mime === "audio/aac") return "aac";
+  if (mime === "audio/wav") return "wav";
+  if (mime === "audio/webm") return "webm";
+  if (mime === "audio/ogg") return "ogg";
+  if (mime === "audio/opus") return "opus";
+  if (mime === "audio/3gpp") return "3gp";
   return null;
+}
+
+function inferTypeFromMime(mime: string): AttachmentType {
+  if (mime.startsWith("image/")) return "BUSINESS_CARD_IMAGE";
+  if (mime === "application/pdf") return "PDF";
+  if (mime.startsWith("audio/")) return "OTHER";
+  return "OTHER";
 }
 
 function safeFilename(name: string, fallback: string): string {
@@ -70,10 +144,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       return jsonError(req, 400, "INVALID_BODY", "Invalid request body.", typeParsed.error.flatten());
     }
 
-    const mimeType = String(fileVal.type || "").toLowerCase();
+    let mimeType = String(fileVal.type || "").trim().toLowerCase();
+    if (!mimeType) {
+      const inferred = mimeFromFilename(fileVal.name);
+      if (inferred) mimeType = inferred;
+    }
+
     if (!ALLOWED_MIME.has(mimeType)) {
       return jsonError(req, 415, "UNSUPPORTED_MEDIA_TYPE", "Unsupported mimeType.", {
-        mimeType,
+        mimeType: mimeType || "(empty)",
         allowed: Array.from(ALLOWED_MIME),
       });
     }
@@ -82,10 +161,20 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
       return jsonError(req, 400, "INVALID_BODY", "Invalid request body.", { file: ["Empty file."] });
     }
-    if (sizeBytes > MAX_BYTES) {
+
+    const maxBytes = maxBytesForMime(mimeType);
+    if (!maxBytes) {
+      return jsonError(req, 415, "UNSUPPORTED_MEDIA_TYPE", "Unsupported mimeType.", {
+        mimeType,
+        allowed: Array.from(ALLOWED_MIME),
+      });
+    }
+
+    if (sizeBytes > maxBytes) {
       return jsonError(req, 413, "BODY_TOO_LARGE", "Request body too large.", {
-        maxBytes: MAX_BYTES,
+        maxBytes,
         sizeBytes,
+        mimeType,
       });
     }
 
@@ -96,11 +185,31 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       });
     }
 
+    const inferredType = inferTypeFromMime(mimeType);
+    const effectiveType = (typeParsed.data as AttachmentType | undefined) ?? inferredType;
+
+    // Optional consistency check: PDF type must be application/pdf, images must be image/*
+    if (effectiveType === "PDF" && mimeType !== "application/pdf") {
+      return jsonError(req, 400, "INVALID_BODY", "Invalid request body.", {
+        type: ["Type PDF requires mimeType application/pdf."],
+        mimeType,
+      });
+    }
+    if (
+      (effectiveType === "BUSINESS_CARD_IMAGE" || effectiveType === "IMAGE") &&
+      !mimeType.startsWith("image/")
+    ) {
+      return jsonError(req, 400, "INVALID_BODY", "Invalid request body.", {
+        type: ["Image type requires an image/* mimeType."],
+        mimeType,
+      });
+    }
+
     const created = await prisma.leadAttachment.create({
       data: {
         tenantId: auth.tenantId,
         leadId: lead.id,
-        type: (typeParsed.data as AttachmentType) ?? "BUSINESS_CARD_IMAGE",
+        type: effectiveType,
         filename: safeFilename(fileVal.name, `attachment.${ext}`),
         mimeType,
         sizeBytes: Math.trunc(sizeBytes),
