@@ -1,8 +1,11 @@
 # Teilprojekt 9.1: Mobile Foundations (Android zuerst) — Settings + API Client + Tenant Header + Healthcheck
 
-**Status:** DONE (nach Merge der Commits unten)  
+**Status:** DONE  
 **Datum:** 2026-02-27 (Europe/Zurich)  
-**Commit(s):** TODO (nach Commit ergänzen)
+**Commit(s):**
+- 07c40ca — chore(tp9.1): add expo-clipboard dependency
+- 45de23e — fix(tp9.1): make settings screen scrollable
+- 92f1c29 — feat(tp9.1): mobile settings + api client + healthcheck foundation
 
 ---
 
@@ -16,16 +19,16 @@ Technisches Mobile-Fundament (ONLINE-only) für GoLive-ready:
 ---
 
 ## Umsetzung (Highlights)
-- **Settings Store** (`appSettings.ts`) als zentrale Source of Truth für:
+- **Settings Store** (`appSettings.ts`) als zentrale Source of Truth:
   - persisted `baseUrl` + `tenantSlug` (SecureStore)
   - stable `deviceUid` (einmalige UUID, persisted)
   - DEV-only Fallback auf `.env` Base URL (klar gekennzeichnet)
 - **apiFetch** erweitert:
-  - injiziert automatisch `x-tenant-slug` (für `/api/*` Calls)
+  - injiziert automatisch `x-tenant-slug` für `/api/*`
   - Timeout (AbortController)
   - robustes Parsing (Text → JSON safe)
   - konsistente Errors für UI inkl. `traceId` (Body + `x-trace-id`)
-- **Settings UI** neu:
+- **Settings UI**:
   - Base URL + Tenant editierbar & speicherbar
   - Device UID read-only + Copy-to-Clipboard
   - Healthcheck Button gegen `/api/platform/v1/health`
@@ -34,66 +37,56 @@ Technisches Mobile-Fundament (ONLINE-only) für GoLive-ready:
 
 ## Dateien/Änderungen
 Mobile:
-- `apps/mobile/app/settings.tsx` (UI + Healthcheck + Persistenz)
-- `apps/mobile/src/lib/appSettings.ts` (Settings Store neu)
-- `apps/mobile/src/lib/api.ts` (apiFetch: tenant header + timeout + traceId)
-- `apps/mobile/src/lib/mobileApi.ts` (BaseUrl an Settings gebunden)
-- `apps/mobile/src/offline/*` (Phase-2 Types Skeleton)
+- `apps/mobile/app/settings.tsx`
+- `apps/mobile/src/lib/appSettings.ts`
+- `apps/mobile/src/lib/api.ts`
+- `apps/mobile/src/lib/mobileApi.ts`
+- `apps/mobile/src/offline/outboxTypes.ts`
+- `apps/mobile/src/offline/index.ts`
 
 Docs:
 - `docs/teilprojekt-9.1-mobile-foundations.md`
-- `docs/LeadRadar2026A/00_INDEX.md`
-- `docs/LeadRadar2026A/05_RELEASE_TESTS.md`
+- `docs/LeadRadar2026A/05_RELEASE_TESTS.md` (Manual Smoke ergänzt)
+- `docs/LeadRadar2026A/00_INDEX.md` (Link ergänzt)
+- `docs/LeadRadar2026A/tp9.1-schlussrapport-mobile-foundations.md`
 
 ---
 
 ## Akzeptanzkriterien – Check
-- [ ] Android Emulator + reales Android Device:
-  - [ ] Settings speichern → Neustart → Werte bleiben
-  - [ ] deviceUid bleibt stabil und ist copybar
-- [ ] Jeder API Call setzt `x-tenant-slug` (sichtbar in Debug/Logs; enforced für `/api/*`)
-- [ ] Healthcheck:
-  - [ ] success bei korrekter baseUrl/tenantSlug
-  - [ ] error bei falscher baseUrl, inkl. message + traceId + Retry
-- [ ] Code Quality:
-  - [ ] `npm run typecheck` → 0 Errors
-  - [ ] `npm run lint` → 0 Errors (Warnings ok)
-  - [ ] `npm run build` → grün (falls relevant)
-- [ ] Docs aktualisiert + Schlussrapport committed
+- [x] Android Emulator + reales Android Device:
+  - [x] Settings speichern → Neustart → Werte bleiben
+  - [x] deviceUid bleibt stabil und ist copybar
+- [x] Jeder `/api/*` Call setzt `x-tenant-slug` (enforced)
+- [x] Healthcheck:
+  - [x] success bei korrekter baseUrl/tenantSlug
+  - [x] error bei falscher baseUrl, inkl. message + Retry (traceId bei Netzwerkfehlern ggf. nicht verfügbar)
+- [x] Code Quality:
+  - [x] `npm run typecheck` → 0 Errors
+  - [x] `npm run lint` → 0 Errors (Warnings ok)
+  - [x] `npm run build` → grün (falls relevant)
+- [x] Docs aktualisiert + Schlussrapport committed
 
 ---
 
 ## Tests/Proof (reproduzierbar)
 ```bash
 cd apps/mobile
-npx expo start -c
+npx expo start --dev-client -c
+```
 
-Flow:
+**Flow (real device):**
+1) Einstellungen → Base URL + Tenant setzen → **Speichern**
+2) Device UID → **Kopieren** → Paste extern (Beweis)
+3) „Verbindung testen“ → **Verbunden**
+4) Base URL absichtlich falsch → „Verbindung testen“ → Error + Retry
+5) App kill/restart → Werte + deviceUid bleiben gleich
 
-Einstellungen öffnen
+---
 
-Base URL + Tenant setzen → Speichern
+## Offene Punkte/Risiken (P0/P1/…)
+- P1: `mobileApi.ts` perspektivisch vollständig auf `apiFetch()` konsolidieren (Single Source of Truth).
 
-„Verbindung testen“:
+---
 
-Success → „Verbunden“ + Trace-ID
-
-Fehlerfall:
-
-Base URL absichtlich falsch → „Verbindung testen“
-
-Error → Message + Trace-ID sichtbar + Retry
-
-App killen + neu starten:
-
-Base URL / Tenant / deviceUid sind weiterhin da
-
-Offene Punkte/Risiken (P0/P1/…)
-
-P1: Langfristig mobileApi.ts komplett in apiFetch() konsolidieren (aktueller Stand: kompatibel, aber parallel).
-
-P1: Optional: Settings in UI mit „Ungültig“-Inline Validation (heute: Save-Guard + Hinweis).
-
-Next Step
-
-TP 9.2: Activation/Lizenz Gate (auf Basis von Settings + apiFetch)
+## Next Step
+- TP 9.2: Activation/Lizenz Gate (auf Basis von Settings + apiFetch, leak-safe / tenant-scoped)
