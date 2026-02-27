@@ -272,3 +272,58 @@ Quality gates:
 | Reports | Executive Bericht |
 | Lizenzen | Abrechnung |
 | Einstellungen | Organisation |
+
+---
+
+## Screen: Organisation (TP 8.5)
+
+### Ziel
+Ein zentraler, strategischer Organisationsbereich als strukturelle Basis des Mandanten:
+Transparenz, Verantwortlichkeit, Premium SaaS-Wirkung – ohne Overengineering.
+
+### Struktur
+- /admin/organisation — Übersicht (Hub)
+- /admin/organisation/mandant — Mandant (read-only)
+- /admin/organisation/transfer — Mandant übertragen (Beta-Scaffold)
+
+### Navigationsposition
+- Hauptnavigation: **Organisation**
+- Footer: **nur noch „Abmelden“**
+- Keine Utility-Links im Footer (GoLive-clean).
+
+### Abgrenzung zu Abrechnung
+- Organisationsdaten sind **read-only** (Mandant, Owner, Aggregation).
+- Rechnungsdaten bleiben unter **Abrechnung → Firma & Belege** (keine Doppelung).
+
+### MVP: Single Owner
+- Pro Mandant genau eine verantwortliche Person (Tenant Owner).
+- Keine Benutzerverwaltung im MVP.
+
+### Transfer (Beta-Scaffold)
+- Teaser/Struktur vorhanden, kein echter Flow.
+- Copy erklärt: Owner-Übertragung, irreversibel, Rechteübergang.
+
+---
+
+## Screen: Organisation (TP 8.5)
+
+### Ziel
+Organisation als zentraler, strategischer Bereich zur Darstellung von Mandantenstruktur und Verantwortlichkeit.
+MVP: Single-Tenant-Owner (eine verantwortliche Person pro Mandant). Read-only, keine Edit-Forms.
+
+### Struktur
+- **/admin/organisation** — Übersicht (Hub)
+- **/admin/organisation/mandant** — Mandant (read-only Details)
+- **/admin/organisation/transfer** — Mandant übertragen (Beta-Scaffold)
+
+### Navigationsposition
+- **Hauptnavigation:** Organisation
+- **Footer:** ausschließlich **Abmelden** (keine Utility-Links)
+
+### Abgrenzung zu Abrechnung
+- Organisationsscreen zeigt nur read-only Mandant/Owner + Aggregation (aktive Lizenzen).
+- Rechnungs- und Belegdaten bleiben unter **Abrechnung → Firma & Belege** (keine Doppelung).
+
+### Transfer (Beta-Scaffold)
+- Kein echter Flow im MVP.
+- Sauberer Teaser inkl. Erklärung (irreversibel, Rechteübergang) + CTA „Für Testphase vormerken“.
