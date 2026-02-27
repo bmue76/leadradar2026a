@@ -3,8 +3,8 @@ Status: DONE
 Datum: 2026-02-27
 
 ## Commit(s)
-- <COMMIT_HASH_1>
-- <COMMIT_HASH_2>
+- d98aafaa78a7551399992e50a27e32d020fb9d83
+- 
 
 ## Ziel
 Implementierung eines klar strukturierten Organisationsbereichs (Hub + Mandant + Transfer-Teaser),
