@@ -11,25 +11,6 @@ type AdminShellProps = {
   children: ReactNode;
 };
 
-function IconSettingsNice(props: React.SVGProps<SVGSVGElement>) {
-  // Sliders / controls – cleaner than a dense gear
-  return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
-      <path d="M4 7h10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      <path d="M18 7h2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      <path d="M14 7a2 2 0 1 1 0 .01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-
-      <path d="M4 12h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      <path d="M14 12h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      <path d="M10 12a2 2 0 1 1 0 .01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-
-      <path d="M4 17h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      <path d="M20 17h0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      <path d="M18 17a2 2 0 1 1 0 .01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 export function AdminShell({ children }: AdminShellProps) {
   return (
     <div className="min-h-screen bg-white text-slate-900">
@@ -82,17 +63,9 @@ export function AdminShell({ children }: AdminShellProps) {
               <SidebarNav />
             </div>
 
-            {/* Sticky bottom: Organisation + Logout + Footer */}
+            {/* Sticky bottom: ONLY Logout + Footer (no Organisation link here anymore) */}
             <div className="mt-auto border-t border-slate-200 px-3 py-3">
-              <Link
-                href="/admin/settings"
-                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
-              >
-                <IconSettingsNice className="size-4 text-slate-600" />
-                <span>Organisation</span>
-              </Link>
-
-              <div className="mt-1">
+              <div>
                 <SidebarLogoutButton />
               </div>
 

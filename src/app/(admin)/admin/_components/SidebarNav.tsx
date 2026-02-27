@@ -27,6 +27,27 @@ type NavGroup = {
   items: NavItem[];
 };
 
+function IconOrganisation(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <path
+        d="M6.5 20V6.8A2.3 2.3 0 0 1 8.8 4.5H14a2.3 2.3 0 0 1 2.3 2.3V20"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+      <path d="M5 20h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path
+        d="M9 8.5h2.4M9 12h2.4M9 15.5h2.4"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        opacity="0.85"
+      />
+    </svg>
+  );
+}
+
 const NAV: NavGroup[] = [
   {
     key: "start",
@@ -46,7 +67,7 @@ const NAV: NavGroup[] = [
   },
   {
     // TP7.4: “Betrieb” → “Einsatz” → TP8.4: “Messen”
-    key: "einsatz",
+    key: "messen",
     title: "Messen",
     Icon: IconOperations,
     items: [
@@ -79,6 +100,16 @@ const NAV: NavGroup[] = [
     items: [
       { href: "/admin/licenses", label: "Lizenzübersicht", exact: true },
       { href: "/admin/billing/accounting", label: "Firma & Belege" },
+    ],
+  },
+  {
+    key: "org",
+    title: "Organisation",
+    Icon: IconOrganisation,
+    items: [
+      { href: "/admin/organisation", label: "Übersicht", exact: true },
+      { href: "/admin/organisation/mandant", label: "Mandant" },
+      { href: "/admin/organisation/transfer", label: "Mandant übertragen" },
     ],
   },
 ];
