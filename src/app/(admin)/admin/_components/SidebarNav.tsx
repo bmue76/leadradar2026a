@@ -68,7 +68,7 @@ const NAV: NavGroup[] = [
     title: "Auswertung",
     Icon: IconStats,
     items: [
-      { href: "/admin/statistik", label: "Live Performance" },
+      { href: "/admin/statistik", label: "Performance" },
       { href: "/admin/reports/executive", label: "Executive Bericht (Beta)" },
     ],
   },
@@ -182,10 +182,7 @@ export function SidebarNav() {
               />
             </button>
 
-            <div
-              id={`nav-group-${group.key}`}
-              className={["mt-1", isOpen ? "block" : "hidden"].join(" ")}
-            >
+            <div id={`nav-group-${group.key}`} className={["mt-1", isOpen ? "block" : "hidden"].join(" ")}>
               <div className="relative ml-6 border-l border-slate-200 pl-5">
                 <div className="flex flex-col gap-1 py-1">
                   {group.items.map((item) => {

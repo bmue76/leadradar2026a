@@ -11,11 +11,11 @@ function LoadingCard() {
 
 export default function Page() {
   return (
-    <div className="mx-auto w-full max-w-6xl px-6 py-6">
+    <div className="mx-auto w-full max-w-5xl px-6 py-6">
       <header className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">Lizenzübersicht</h1>
         <p className="mt-1 text-sm text-slate-600">
-          Device-Lizenzen: Status pro Gerät und Historie aller Käufe/Aktivierungen.
+          Device-Lizenzen pro Gerät – inkl. Käufe und Aktivierungen.
         </p>
       </header>
 

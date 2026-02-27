@@ -5,9 +5,7 @@ export default function ExecutiveReportPage() {
     <div className="mx-auto w-full max-w-5xl px-6 py-6">
       <header className="mb-6">
         <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">
-            Executive Bericht
-          </h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">Executive Bericht</h1>
 
           <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700">
             Beta
@@ -15,7 +13,7 @@ export default function ExecutiveReportPage() {
         </div>
 
         <p className="mt-2 text-sm text-slate-600">
-          Automatisch generierter Management-Report mit Live-Performance-Analyse, Geräte-Ranking und strategischen Handlungsempfehlungen.
+          Automatisch generierter Management-Report mit Performance-Analyse, Geräte-Ranking und strategischen Handlungsempfehlungen.
         </p>
       </header>
 
@@ -41,9 +39,7 @@ export default function ExecutiveReportPage() {
 
       <section className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-6">
         <div className="text-sm font-medium text-slate-900">Dieses Feature befindet sich in Vorbereitung.</div>
-        <div className="mt-1 text-sm text-slate-600">
-          Möchten Sie als Testkunde frühzeitig Zugriff erhalten?
-        </div>
+        <div className="mt-1 text-sm text-slate-600">Möchten Sie als Testkunde frühzeitig Zugriff erhalten?</div>
 
         <div className="mt-4">
           <a

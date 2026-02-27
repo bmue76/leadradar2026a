@@ -250,7 +250,7 @@ Quality gates:
   - Exporte
 
 - **Auswertung**
-  - Live Performance
+  - Performance
   - Executive Bericht (Beta)
 
 - **Abrechnung**
@@ -268,7 +268,7 @@ Quality gates:
 | Setup | Vorbereitung |
 | Einsatz | Messen |
 | Events | Messen & Events |
-| Performance | Live Performance |
+| Performance | Performance |
 | Reports | Executive Bericht |
 | Lizenzen | Abrechnung |
 | Einstellungen | Organisation |

@@ -38,7 +38,7 @@ Strukturelle und begriffliche Bereinigung der Admin-Navigation vor GoLive:
 - Exporte (/admin/exports)
 
 **Auswertung**
-- Live Performance (/admin/statistik)
+- Performance (/admin/statistik)
 - Executive Bericht (Beta) (/admin/reports/executive)
 
 **Abrechnung**
@@ -56,7 +56,7 @@ Strukturelle und begriffliche Bereinigung der Admin-Navigation vor GoLive:
 | Setup | Vorbereitung |
 | Einsatz | Messen |
 | Events | Messen & Events |
-| Performance | Live Performance |
+| Performance | Performance |
 | Reports | Executive Bericht |
 | Lizenzen | Abrechnung |
 | Einstellungen | Organisation |
@@ -100,7 +100,7 @@ UI Smoke:
 - Vorbereitung → Vorlagen/Formulare/Branding
 - Messen → Messen & Events / Geräte
 - Leads → Leads / Exporte
-- Auswertung → Live Performance / Executive Bericht (Beta)
+- Auswertung → Performance / Executive Bericht (Beta)
 - Abrechnung → Lizenzübersicht / Firma & Belege
 - Organisation (sticky) → /admin/settings
 
