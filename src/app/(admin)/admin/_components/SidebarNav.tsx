@@ -10,7 +10,6 @@ import {
   IconHome,
   IconLeads,
   IconOperations,
-  IconReports,
   IconSetup,
   IconStats,
 } from "./icons";
@@ -31,13 +30,13 @@ type NavGroup = {
 const NAV: NavGroup[] = [
   {
     key: "start",
-    title: "Start",
+    title: "Übersicht",
     Icon: IconHome,
     items: [{ href: "/admin", label: "Übersicht", exact: true }],
   },
   {
     key: "setup",
-    title: "Setup",
+    title: "Vorbereitung",
     Icon: IconSetup,
     items: [
       { href: "/admin/templates", label: "Vorlagen" },
@@ -46,12 +45,12 @@ const NAV: NavGroup[] = [
     ],
   },
   {
-    // TP7.4: “Betrieb” → “Einsatz”
+    // TP7.4: “Betrieb” → “Einsatz” → TP8.4: “Messen”
     key: "einsatz",
-    title: "Einsatz",
+    title: "Messen",
     Icon: IconOperations,
     items: [
-      { href: "/admin/events", label: "Events" },
+      { href: "/admin/events", label: "Messen & Events" },
       { href: "/admin/devices", label: "Geräte" },
     ],
   },
@@ -65,23 +64,20 @@ const NAV: NavGroup[] = [
     ],
   },
   {
-    key: "performance",
-    title: "Performance",
+    key: "auswertung",
+    title: "Auswertung",
     Icon: IconStats,
-    items: [{ href: "/admin/statistik", label: "Messe-Auswertung" }],
-  },
-  {
-    key: "reports",
-    title: "Reports",
-    Icon: IconReports,
-    items: [{ href: "/admin/reports/executive", label: "Executive Messebericht (Beta)" }],
+    items: [
+      { href: "/admin/statistik", label: "Live Performance" },
+      { href: "/admin/reports/executive", label: "Executive Bericht (Beta)" },
+    ],
   },
   {
     key: "billing",
-    title: "Lizenzen",
+    title: "Abrechnung",
     Icon: IconBilling,
     items: [
-      { href: "/admin/licenses", label: "Übersicht", exact: true },
+      { href: "/admin/licenses", label: "Lizenzübersicht", exact: true },
       { href: "/admin/billing/accounting", label: "Firma & Belege" },
     ],
   },

@@ -16,10 +16,10 @@ export default function StatistikPage() {
     <div className="mx-auto w-full max-w-5xl px-6 py-6">
       <header className="mb-6">
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">Performance</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">Live Performance</h1>
         </div>
         <p className="mt-1 text-sm text-slate-600">
-          Messe Performance Center für Peak-Zeiten, Geräte-Performance und Lead-Qualität.
+          Live Performance Center für Peak-Zeiten, Geräte-Performance und Lead-Qualität.
         </p>
       </header>
 

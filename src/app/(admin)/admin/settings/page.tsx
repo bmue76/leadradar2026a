@@ -4,8 +4,8 @@ export default function SettingsPage() {
   return (
     <div className="py-2">
       <AdminPageHeader
-        title="Einstellungen"
-        hint="Zentrale Einstellungen für Konto, Mandant und Benutzer (MVP: Scaffold)."
+        title="Organisation"
+        hint="Konto, Firma und Benutzer verwalten (MVP: Scaffold)."
       />
     </div>
   );

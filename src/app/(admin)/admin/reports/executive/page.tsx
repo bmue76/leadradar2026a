@@ -1,12 +1,12 @@
 export default function ExecutiveReportPage() {
-  const subject = encodeURIComponent("LeadRadar – Executive Messebericht (Beta) Feedback");
+  const subject = encodeURIComponent("LeadRadar – Executive Bericht (Beta) Feedback");
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-6">
       <header className="mb-6">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">
-            Executive Messebericht
+            Executive Bericht
           </h1>
 
           <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700">
@@ -15,7 +15,7 @@ export default function ExecutiveReportPage() {
         </div>
 
         <p className="mt-2 text-sm text-slate-600">
-          Automatisch generierter Management-Report mit Performance-Analyse, Geräte-Ranking und strategischen Handlungsempfehlungen.
+          Automatisch generierter Management-Report mit Live-Performance-Analyse, Geräte-Ranking und strategischen Handlungsempfehlungen.
         </p>
       </header>
 
@@ -27,7 +27,7 @@ export default function ExecutiveReportPage() {
             "Mehrseitiger PDF-Bericht (2–5 A4 Seiten)",
             "Executive Summary für Geschäftsleitung",
             "Leads pro Stunde & Peak-Analyse",
-            "Geräte-Performance-Ranking",
+            "Geräte-Ranking (Team/Stand)",
             "Interessen- & Qualitätsauswertung",
             "Strategische Empfehlungen für zukünftige Engagements",
           ].map((t) => (

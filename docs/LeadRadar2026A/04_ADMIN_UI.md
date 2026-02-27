@@ -223,3 +223,52 @@ Quality gates:
 - npm run typecheck
 - npm run lint
 - npm run build
+
+---
+
+## Admin Navigation (GoLive) — TP 8.4
+
+**Prinzip:** Kundenzentriert, chronologisch, geschäftsorientiert.  
+**Wichtig:** URLs bleiben unverändert (Label-/IA-Refactoring only).
+
+### Hauptnavigation
+
+- **Übersicht**
+  - Übersicht
+
+- **Vorbereitung**
+  - Vorlagen
+  - Formulare
+  - Branding
+
+- **Messen**
+  - Messen & Events
+  - Geräte
+
+- **Leads**
+  - Leads
+  - Exporte
+
+- **Auswertung**
+  - Live Performance
+  - Executive Bericht (Beta)
+
+- **Abrechnung**
+  - Lizenzübersicht
+  - Firma & Belege
+
+- **Organisation** (sticky)
+  - Organisation
+
+### Begrifflichkeit (Alt → Neu)
+
+| Alt | Neu |
+|---|---|
+| Start | Übersicht |
+| Setup | Vorbereitung |
+| Einsatz | Messen |
+| Events | Messen & Events |
+| Performance | Live Performance |
+| Reports | Executive Bericht |
+| Lizenzen | Abrechnung |
+| Einstellungen | Organisation |
