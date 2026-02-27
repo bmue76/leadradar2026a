@@ -186,7 +186,7 @@ export default function Settings() {
   }, []);
 
   return (
-    <ScreenScaffold title="Einstellungen" scroll={false} showPoweredBy>
+    <ScreenScaffold title="Einstellungen" scroll={true} showPoweredBy>
       <View style={{ gap: 12 }}>
         <View style={styles.card}>
           <Text style={styles.h2}>Server</Text>
