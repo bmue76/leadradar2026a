@@ -1,4 +1,4 @@
-import { API_BASE_URL, requireBaseUrl } from "./mobileConfig";
+import { getAppSettings, normalizeTenantSlug } from "./appSettings";
 
 export type JsonOk<T> = { ok: true; data: T; traceId: string };
 export type JsonErr = {
@@ -34,6 +34,13 @@ export class ApiError extends Error {
   }
 }
 
+function networkHint(url: string) {
+  if (url.includes("localhost") || url.includes("127.0.0.1")) {
+    return "Base URL zeigt auf localhost. Android erreicht das nicht. Nutze z.B. http://<LAN-IP>:3000";
+  }
+  return "Host/Netz/Firewall prüfen. Teste die Base URL im Android-Browser.";
+}
+
 async function readJsonSafe(res: Response): Promise<unknown> {
   const text = await res.text();
   if (!text.trim()) return undefined;
@@ -50,48 +57,67 @@ function pickTraceId(res: Response, body: unknown): string | undefined {
   return res.headers.get("x-trace-id") || tid || undefined;
 }
 
-function networkHint(url: string) {
-  if (url.includes("localhost") || url.includes("127.0.0.1")) {
-    return "Base URL zeigt auf localhost. Android erreicht das nicht. Gerät: http://<LAN-IP>:3000";
-  }
-  return "Host/Netz/Firewall prüfen. Teste die Base URL im Android-Browser.";
-}
-
-async function fetchWithDiagnostics(input: RequestInfo, init?: RequestInit): Promise<Response> {
-  try {
-    return await fetch(input, init);
-  } catch (e: unknown) {
-    const url = typeof input === "string" ? input : "(request)";
-    const msg = e instanceof Error ? e.message : String(e);
+async function resolveBaseUrl(): Promise<string> {
+  const s = await getAppSettings();
+  if (!s.effectiveBaseUrl) {
     throw new ApiError({
       status: 0,
-      code: "NETWORK_ERROR",
-      message: "Network request failed",
-      details: {
-        url,
-        baseUrl: API_BASE_URL || "(not set)",
-        hint: networkHint(String(url)),
-        rawError: msg,
-      },
+      code: "BASE_URL_REQUIRED",
+      message: "Base URL fehlt. Bitte in den Einstellungen setzen.",
+      details: { action: "open_settings" },
     });
+  }
+  return s.effectiveBaseUrl;
+}
+
+async function fetchWithDiagnostics(url: string, init: RequestInit, timeoutMs = 10_000): Promise<Response> {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const code = msg.toLowerCase().includes("abort") ? "TIMEOUT" : "NETWORK_ERROR";
+    throw new ApiError({
+      status: 0,
+      code,
+      message: code === "TIMEOUT" ? "Zeitüberschreitung (Timeout)." : "Network request failed",
+      details: { url, hint: networkHint(url), rawError: msg },
+    });
+  } finally {
+    clearTimeout(t);
   }
 }
 
 export async function redeemProvisioning(tenantSlug: string, code: string): Promise<ProvisionRedeemResponse> {
-  requireBaseUrl();
-  const url = `${API_BASE_URL}/api/mobile/v1/provisioning/redeem`;
+  const baseUrl = await resolveBaseUrl();
+  const url = `${baseUrl}/api/mobile/v1/provisioning/redeem`;
 
-  const t = (tenantSlug || "").trim().toLowerCase();
+  const t = normalizeTenantSlug(tenantSlug);
   const c = (code || "").replace(/\s+/g, "").trim().toUpperCase();
 
-  const res = await fetchWithDiagnostics(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "x-tenant-slug": t,
+  if (!t) {
+    throw new ApiError({
+      status: 0,
+      code: "TENANT_REQUIRED",
+      message: "Tenant ist ungültig. Bitte in den Einstellungen prüfen.",
+      details: { field: "tenantSlug" },
+    });
+  }
+
+  const res = await fetchWithDiagnostics(
+    url,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "x-tenant-slug": t,
+      },
+      body: JSON.stringify({ tenantSlug: t, code: c }),
     },
-    body: JSON.stringify({ tenantSlug: t, code: c }),
-  });
+    12_000
+  );
 
   const body = await readJsonSafe(res);
   const traceId = pickTraceId(res, body);
@@ -113,19 +139,19 @@ export async function redeemProvisioning(tenantSlug: string, code: string): Prom
 }
 
 export async function fetchLicense(args: { apiKey: string; tenantSlug?: string | null }): Promise<LicenseResponse> {
-  requireBaseUrl();
-  const url = `${API_BASE_URL}/api/mobile/v1/license`;
+  const baseUrl = await resolveBaseUrl();
+  const url = `${baseUrl}/api/mobile/v1/license`;
 
   const apiKey = (args.apiKey || "").trim();
+  const t = args.tenantSlug ? normalizeTenantSlug(args.tenantSlug) : (await getAppSettings()).tenantSlug;
 
   const headers: Record<string, string> = {
     "x-api-key": apiKey,
     authorization: `Bearer ${apiKey}`,
   };
+  if (t) headers["x-tenant-slug"] = t;
 
-  if (args.tenantSlug) headers["x-tenant-slug"] = args.tenantSlug;
-
-  const res = await fetchWithDiagnostics(url, { method: "GET", headers });
+  const res = await fetchWithDiagnostics(url, { method: "GET", headers }, 12_000);
   const body = await readJsonSafe(res);
   const traceId = pickTraceId(res, body);
 
@@ -141,7 +167,7 @@ export async function fetchLicense(args: { apiKey: string; tenantSlug?: string |
       traceId,
       details: {
         url,
-        tenantSlug: args.tenantSlug || null,
+        tenantSlug: t || null,
         apiKeyMasked: apiKey ? `${apiKey.slice(0, 4)}…${apiKey.slice(-4)}` : null,
         serverDetails: err?.details,
       },

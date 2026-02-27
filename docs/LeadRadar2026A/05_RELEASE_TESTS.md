@@ -223,3 +223,40 @@ smoke:all gegen Prod (nur wenn Smoke-Accounts + Policies sauber)
    - Token erzeugen, per Mail senden (kommt an)
    - Redeem (API) liefert ApiKey
    - `/api/mobile/v1/license` liefert korrekt `{isActive, endsAt, type}`
+
+---
+
+## TP 9.1 — Mobile Foundations Smoke (Manual)
+
+**Ziel:** Settings Persistenz + Healthcheck + TraceId Anzeige (Android).
+
+```bash
+cd apps/mobile
+npx expo start -c
+
+Einstellungen öffnen
+
+Base URL setzen (z.B. https://leadradar.ch
+ oder DEV: http://<LAN-IP>:3000)
+
+Tenant setzen (z.B. atlex)
+
+Speichern
+
+Verbindung testen
+
+Button „Verbindung testen“ → Success: „Verbunden“
+
+Trace-ID sichtbar (wenn vorhanden)
+
+Fehlerfall
+
+Base URL absichtlich falsch setzen
+
+„Verbindung testen“ → Error + Trace-ID sichtbar + Retry
+
+Persistenz
+
+App killen/neu starten
+
+Base URL / Tenant / Device UID bleiben gleich

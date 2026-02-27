@@ -1,6 +1,6 @@
 # LeadRadar2026A — Doku Index
 
-Stand: 2026-02-05  
+Stand: 2026-02-05
 Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
 
 ## Navigation
@@ -29,13 +29,13 @@ Ziel: GoLive-ready Rebuild, screen-by-screen, testgetrieben, dokumentiert.
 - docs/teilprojekt-5.4-betrieb-devices-billing-credits-coupons-hardblock.md
 - docs/teilprojekt-5.6-betrieb-events-ui-active-overview.md
 
-- **Teilprojekt 5.7** — Betrieb: Leads Admin UI (Liste + Drawer) inkl. Review/Notes  
+- **Teilprojekt 5.7** — Betrieb: Leads Admin UI (Liste + Drawer) inkl. Review/Notes
   → `docs/teilprojekt-5.7-betrieb-leads-admin-ui-drawer-review-notes.md`
 
-- **Teilprojekt 5.8** — Betrieb: Exports (CSV) Admin UI + Export Jobs (Liste/Status) + Filter (Active Event)  
+- **Teilprojekt 5.8** — Betrieb: Exports (CSV) Admin UI + Export Jobs (Liste/Status) + Filter (Active Event)
   → `docs/teilprojekt-5.8-betrieb-exports-csv-ui-jobs.md`
 
-- **Teilprojekt 5.9** — Betrieb: Integration-Polish (Leads → Exports Prefill) + Busy/State Cleanup (ONLINE-only)  
+- **Teilprojekt 5.9** — Betrieb: Integration-Polish (Leads → Exports Prefill) + Busy/State Cleanup (ONLINE-only)
   → `docs/teilprojekt-5.9-betrieb-integration-polish-leads-to-exports.md`
 
 ## Teilprojekte
@@ -62,6 +62,9 @@ TP 6.6 — Mobile Branding Provider + Cleanup (nur eine Source of Truth) + Admin
 
 - teilprojekt-7.3-branding-billing-accounting.md — TP7.3 Branding/Billing Split
 
-- **TP 7.4 — Betrieb: Events & Geräte — UX Upgrade**  
-  Doku: `docs/LeadRadar2026A/teilprojekt-7.4-ops-events-devices-ux-upgrade.md`  
+- **TP 7.4 — Betrieb: Events & Geräte — UX Upgrade**
+  Doku: `docs/LeadRadar2026A/teilprojekt-7.4-ops-events-devices-ux-upgrade.md`
   Schlussrapport: `docs/LeadRadar2026A/tp7.4-schlussrapport-ops-events-devices-ux.md`
+
+- **TP 9.1 — Mobile Foundations (Android zuerst)**
+  → `docs/teilprojekt-9.1-mobile-foundations.md`

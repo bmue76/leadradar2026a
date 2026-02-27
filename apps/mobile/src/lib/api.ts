@@ -1,8 +1,8 @@
-import { getApiBaseUrl } from "./env";
 import { getApiKey } from "./auth";
+import { getAppSettings } from "./appSettings";
 
 /**
- * Standard contract:
+ * Standard contract (Backend):
  * { ok: true, data: ..., traceId }
  * { ok: false, error: { code, message, details }, traceId }
  */
@@ -19,10 +19,11 @@ export type ApiResult<T> = ApiOk<T> | ApiErr;
 
 export type ApiFetchArgs = {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
-  path: string; // can be absolute or relative
+  path: string; // absolute or relative
   body?: unknown;
   headers?: Record<string, string>;
   apiKey?: string | null; // optional override (default: from storage)
+  timeoutMs?: number;
 };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -40,18 +41,39 @@ function joinUrl(base: string, path: string): string {
   return `${b}${p}`;
 }
 
-async function safeReadJson(res: Response): Promise<unknown> {
-  const ct = res.headers.get("content-type") || "";
-  if (!ct.includes("application/json")) return undefined;
+function networkHint(url: string) {
+  if (url.includes("localhost") || url.includes("127.0.0.1")) {
+    return "Base URL zeigt auf localhost. Android erreicht das nicht. Nutze z.B. http://<LAN-IP>:3000";
+  }
+  return "Host/Netz/Firewall prüfen. Teste die Base URL im Android-Browser.";
+}
+
+async function readTextSafe(res: Response): Promise<string> {
   try {
-    return await res.json();
+    return await res.text();
   } catch {
-    return undefined;
+    return "";
   }
 }
 
+function parseJsonFromText(text: string): unknown {
+  const t = (text ?? "").trim();
+  if (!t) return undefined;
+  try {
+    return JSON.parse(t);
+  } catch {
+    return { raw: t };
+  }
+}
+
+function pickTraceId(res: Response, payload: unknown): string | undefined {
+  const hdr = res.headers.get("x-trace-id") || undefined;
+  if (hdr) return hdr;
+  return isRecord(payload) ? (pickString(payload.traceId) ?? undefined) : undefined;
+}
+
 function toApiErr(res: Response, payload: unknown): ApiErr {
-  const traceId = res.headers.get("x-trace-id") ?? (isRecord(payload) ? pickString(payload.traceId) ?? undefined : undefined);
+  const traceId = pickTraceId(res, payload);
 
   if (isRecord(payload) && payload.ok === false) {
     const errObj = isRecord(payload.error) ? payload.error : null;
@@ -65,33 +87,83 @@ function toApiErr(res: Response, payload: unknown): ApiErr {
     };
   }
 
-  return {
-    ok: false,
-    status: res.status,
-    message: `HTTP ${res.status}`,
-    traceId: traceId ?? undefined,
-  };
+  return { ok: false, status: res.status, message: `HTTP ${res.status}`, traceId };
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 /**
  * Generic fetch helper (Mobile).
+ * - Injects x-tenant-slug from Settings (required for /api/* relative paths)
+ * - Injects x-api-key / Authorization (optional)
+ * - Timeout + robust JSON parsing
+ * - Extracts traceId from body + x-trace-id
  */
 export function apiFetch<T = unknown>(path: string): Promise<ApiResult<T>>;
 export function apiFetch<T = unknown>(args: ApiFetchArgs): Promise<ApiResult<T>>;
 export async function apiFetch<T = unknown>(arg: string | ApiFetchArgs): Promise<ApiResult<T>> {
-  const base = getApiBaseUrl();
-
   const args: ApiFetchArgs = typeof arg === "string" ? { path: arg } : arg;
 
   const method = args.method ?? "GET";
-  const url = joinUrl(base, args.path);
+  const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : 10_000;
 
-  const key = args.apiKey === undefined ? await getApiKey() : args.apiKey;
+  const settings = await getAppSettings();
+  const needsBaseUrl = !/^https?:\/\//i.test(args.path);
+  const base = settings.effectiveBaseUrl;
+
+  if (needsBaseUrl && !base) {
+    return {
+      ok: false,
+      status: 0,
+      code: "BASE_URL_REQUIRED",
+      message: "Base URL fehlt. Bitte in den Einstellungen setzen.",
+      details: { action: "open_settings" },
+    };
+  }
+
+  const url = needsBaseUrl ? joinUrl(base as string, args.path) : args.path;
+
+  // Enforce tenant header for first-party API calls (relative /api/*)
+  const isFirstPartyApi = needsBaseUrl && (args.path.startsWith("/api/") || args.path.startsWith("api/"));
+  const tenantSlugFromSettings = settings.tenantSlug;
+
   const headers: Record<string, string> = {
     Accept: "application/json",
     ...(args.headers ?? {}),
   };
-  if (key && key.trim()) headers["x-api-key"] = key.trim();
+
+  if (isFirstPartyApi) {
+    const existingTenant = headers["x-tenant-slug"]?.trim() || "";
+    const tenant = existingTenant || (tenantSlugFromSettings ?? "");
+    if (!tenant) {
+      return {
+        ok: false,
+        status: 0,
+        code: "TENANT_REQUIRED",
+        message: "Tenant fehlt. Bitte in den Einstellungen setzen.",
+        details: { header: "x-tenant-slug", action: "open_settings" },
+      };
+    }
+    headers["x-tenant-slug"] = tenant;
+  } else if (tenantSlugFromSettings && !headers["x-tenant-slug"]) {
+    // Best-effort for non-first-party URLs
+    headers["x-tenant-slug"] = tenantSlugFromSettings;
+  }
+
+  const key = args.apiKey === undefined ? await getApiKey() : args.apiKey;
+  if (key && key.trim()) {
+    headers["x-api-key"] = key.trim();
+    headers["authorization"] = `Bearer ${key.trim()}`;
+  }
 
   let body: BodyInit | undefined = undefined;
 
@@ -105,21 +177,31 @@ export async function apiFetch<T = unknown>(arg: string | ApiFetchArgs): Promise
 
   let res: Response;
   try {
-    res = await fetch(url, { method, headers, body });
+    res = await fetchWithTimeout(url, { method, headers, body }, timeoutMs);
   } catch (e) {
-    return { ok: false, message: e instanceof Error ? e.message : "Network error." };
+    const msg = e instanceof Error ? e.message : "Network error.";
+    const code = msg.toLowerCase().includes("abort") ? "TIMEOUT" : "NETWORK_ERROR";
+    return {
+      ok: false,
+      status: 0,
+      code,
+      message: code === "TIMEOUT" ? "Zeitüberschreitung (Timeout)." : "Keine Verbindung möglich.",
+      details: { url, hint: networkHint(url), rawError: msg },
+    };
   }
 
-  const payload = await safeReadJson(res);
+  const text = await readTextSafe(res);
+  const payload = parseJsonFromText(text);
+  const traceId = pickTraceId(res, payload);
 
   if (!res.ok) return toApiErr(res, payload);
 
   // Prefer server response shape (ok/data), but accept plain JSON too.
   if (isRecord(payload) && payload.ok === true && "data" in payload) {
-    return { ok: true, data: (payload.data as T), traceId: pickString(payload.traceId) ?? undefined };
+    return { ok: true, data: (payload.data as T), traceId: pickString(payload.traceId) ?? traceId };
   }
 
-  return { ok: true, data: (payload as T) };
+  return { ok: true, data: (payload as T), traceId };
 }
 
 /* ---------------------------
@@ -173,10 +255,7 @@ export type UploadLeadAttachmentData = { attachmentId: string };
 export async function uploadLeadAttachment(args: LegacyUploadLeadAttachmentArgs): Promise<ApiResult<UploadLeadAttachmentData>> {
   const fd = new FormData();
   // RN file part:
-  fd.append(
-    "file",
-    { uri: args.fileUri, name: args.fileName, type: args.mimeType } as unknown as Blob,
-  );
+  fd.append("file", { uri: args.fileUri, name: args.fileName, type: args.mimeType } as unknown as Blob);
   if (args.type) fd.append("type", args.type);
 
   const res = await apiFetch<unknown>({
@@ -184,6 +263,7 @@ export async function uploadLeadAttachment(args: LegacyUploadLeadAttachmentArgs)
     path: `/api/mobile/v1/leads/${encodeURIComponent(args.leadId)}/attachments`,
     apiKey: args.apiKey,
     body: fd,
+    timeoutMs: 30_000,
   });
 
   if (!res.ok) return res;
@@ -238,12 +318,10 @@ export async function patchLeadContact(args: {
   leadId: string;
   payload: Record<string, unknown>;
 }): Promise<ApiResult<Record<string, unknown>>> {
-  const res = await apiFetch<Record<string, unknown>>({
+  return await apiFetch<Record<string, unknown>>({
     method: "PATCH",
     path: `/api/mobile/v1/leads/${encodeURIComponent(args.leadId)}/contact`,
     apiKey: args.apiKey,
     body: args.payload,
   });
-
-  return res;
 }
