@@ -10,7 +10,7 @@ const K_DEVICE_UID = "lr_deviceUid";
 export type AppSettings = {
   /** Explicit user-configured baseUrl (normalized). Null if not configured. */
   baseUrl: string | null;
-  /** Tenant slug (normalized). Null if not configured. */
+  /** Konto-Kürzel (tenantSlug) (normalized). Null if not configured. */
   tenantSlug: string | null;
   /** Stable client-side device UID (generated once, persisted). */
   deviceUid: string;

@@ -14,7 +14,7 @@ export const UI = {
 
   tenantToTitleGap: 10,
 
-  // Tenant logo sizing (responsive via clamp in AppHeader)
+  // Konto-Logo Sizing (responsive via clamp in AppHeader)
   // Ziel: nicht zu klein auf grossen Geräten, nicht zu breit auf kleinen Geräten
   logoHeight: 36,          // ~ +30% vs 28 (dein Feedback “zu klein”)
   logoWidthRatio: 0.62,    // Anteil der Content-Breite (nach Padding)
