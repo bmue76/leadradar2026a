@@ -260,3 +260,16 @@ Persistenz
 App killen/neu starten
 
 Base URL / Tenant / Device UID bleiben gleich
+
+## Mobile Smoke: Activation (TP 9.2)
+
+Voraussetzungen:
+- Mobile Settings: baseUrl + tenantSlug korrekt
+- Backend erreichbar (Healthcheck)
+
+Steps (real device, Android):
+1) App starten → **Activation Screen** erscheint (wenn nicht aktiv)
+2) Ungültiger Code → Error + Retry (traceId sichtbar wenn Server reached)
+3) Gültiger Code → Success → Redirect `/forms`
+4) App kill/restart → bleibt aktiv (SecureStore Persistenz)
+5) Optional: falls `expiresAt` geliefert → bei Expiry Gate greift → Hinweis + Activation

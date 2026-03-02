@@ -68,3 +68,7 @@ TP 6.6 — Mobile Branding Provider + Cleanup (nur eine Source of Truth) + Admin
 
 - **TP 9.1 — Mobile Foundations (Android zuerst)**
   → `docs/teilprojekt-9.1-mobile-foundations.md`
+
+## Teilprojekte (Mobile)
+
+- [TP 9.2 – Mobile Activation Gate](../teilprojekt-9.2-mobile-activation.md)
