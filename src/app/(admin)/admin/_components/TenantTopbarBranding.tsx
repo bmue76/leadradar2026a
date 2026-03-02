@@ -13,11 +13,11 @@ type BrandingGetDto = { tenant: TenantDto; profile: ProfileDto | null };
 const BRANDING_UPDATED_EVENT = "lr_tenant_branding_updated";
 
 function pickTenantDisplayName(dto: BrandingGetDto | null): string {
-  if (!dto) return "Tenant";
+  if (!dto) return "Konto";
   const t = dto.tenant;
   const p = dto.profile;
-  const display = p?.displayName || p?.legalName || t?.name || "Tenant";
-  return typeof display === "string" && display.trim().length ? display.trim() : "Tenant";
+  const display = p?.displayName || p?.legalName || t?.name || "Konto";
+  return typeof display === "string" && display.trim().length ? display.trim() : "Konto";
 }
 
 async function fetchLogoVersionTag(): Promise<string | null> {
@@ -36,7 +36,7 @@ async function fetchLogoVersionTag(): Promise<string | null> {
 
 export function TenantTopbarBranding() {
   const [loading, setLoading] = useState(true);
-  const [tenantName, setTenantName] = useState<string>("Tenant");
+  const [tenantName, setTenantName] = useState<string>("Konto");
 
   const [logoOk, setLogoOk] = useState(false);
   const [logoTag, setLogoTag] = useState<string | null>(null);

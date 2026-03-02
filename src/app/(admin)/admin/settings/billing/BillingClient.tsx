@@ -422,7 +422,7 @@ export default function BillingClient() {
           <div className="lr-panel">
             <div className="lr-panelHeader">
               <div>
-                <div className="lr-h2">Tenant Admin übertragen</div>
+                <div className="lr-h2">Konto-Inhaber übertragen</div>
                 <div className="lr-muted mt-1">
                   MVP: Platzhalter. Der eigentliche Transfer (Owner-Wechsel) kommt als eigenes Teilprojekt.
                 </div>
@@ -431,7 +431,7 @@ export default function BillingClient() {
 
             <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
               <div className="text-sm text-slate-700">
-                Bei Mitarbeiteraustritt muss der Tenant-Owner übertragen werden können (z.B. auf einen neuen Admin).
+                Bei Mitarbeiteraustritt muss der Konto-Inhaber übertragen werden können (z.B. auf einen neuen Admin).
               </div>
               <div className="lr-actions">
                 <button className="lr-btnSecondary" type="button" disabled>

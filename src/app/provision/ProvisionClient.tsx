@@ -89,7 +89,7 @@ export default function ProvisionClient({ tenant, code }: { tenant: string; code
             {tenant && code ? (
               <>
                 <div className="mt-3 rounded-2xl bg-slate-50 p-4">
-                  <div className="text-xs font-semibold text-slate-500">Tenant</div>
+                  <div className="text-xs font-semibold text-slate-500">Konto-Kürzel</div>
                   <div className="mt-1 font-mono text-sm text-slate-900">{tenant}</div>
 
                   <div className="mt-4 text-xs font-semibold text-slate-500">Code</div>

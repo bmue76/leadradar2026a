@@ -429,7 +429,7 @@ export default function AccountingClient() {
           </section>
 
           <section className="lr-panel">
-            <h2 className="lr-h2">Tenant-Inhaber</h2>
+            <h2 className="lr-h2">Konto-Inhaber</h2>
             <p className="mt-1 lr-muted">Übergabe/Übertragung (z.B. Mitarbeiteraustritt) kommt als eigener Flow (TP7.4+). MVP: Owner-only.</p>
           </section>
 

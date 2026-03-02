@@ -59,7 +59,7 @@ export default function MandantTransferPage() {
 
       <Card title="Was bedeutet „Übertragen“?">
         <ul className="list-disc space-y-2 pl-5 text-sm text-muted-foreground">
-          <li>Übertragung des Tenant-Owners auf eine neue Person.</li>
+          <li>Übertragung des Konto-Inhaber auf eine neue Person.</li>
           <li>Alle Rechte gehen an die neue Person über.</li>
           <li>Nicht rückgängig machbar.</li>
         </ul>

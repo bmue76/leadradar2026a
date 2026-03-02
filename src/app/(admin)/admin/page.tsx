@@ -85,7 +85,7 @@ export default async function AdminHomePage() {
         </header>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-6">
-          <div className="text-sm font-medium text-slate-900">Tenant context required</div>
+          <div className="text-sm font-medium text-slate-900">Konto-Kontext erforderlich</div>
           <div className="mt-1 text-sm text-slate-600">
             Missing <code className="rounded bg-slate-100 px-1">x-tenant-id</code> /{" "}
             <code className="rounded bg-slate-100 px-1">x-tenant-slug</code> in headers or cookies.

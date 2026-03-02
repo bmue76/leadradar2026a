@@ -538,7 +538,7 @@ export default function BrandingSettingsClient() {
         <p className="lr-muted">Logo und Akzentfarbe – für App &amp; Admin.</p>
         {tenant?.name ? (
           <div className="mt-2">
-            <span className="lr-chip lr-chipAccent" title="Aktueller Tenant">
+            <span className="lr-chip lr-chipAccent" title="Aktuelles Konto">
               {tenant.name}
             </span>
           </div>

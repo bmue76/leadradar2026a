@@ -587,7 +587,7 @@ export default function CaptureClient() {
       </div>
 
       <div className="mb-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
-        <div className="mb-2 text-sm font-medium text-neutral-900">Tenant (optional, DEV Override)</div>
+        <div className="mb-2 text-sm font-medium text-neutral-900">Konto-Kürzel (optional, DEV Override)</div>
         <div className="flex items-center gap-2">
           <input
             className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
@@ -606,7 +606,7 @@ export default function CaptureClient() {
           </button>
         </div>
         <div className="mt-2 text-xs text-neutral-600">
-          Leer lassen = Session-Tenant. Ausfüllen = sendet <span className="font-mono">x-tenant-slug</span>.
+          Leer lassen = Session-Konto. Ausfüllen = sendet <span className="font-mono">x-tenant-slug</span>.
         </div>
       </div>
 

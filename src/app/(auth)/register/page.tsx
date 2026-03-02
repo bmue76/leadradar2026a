@@ -5,7 +5,7 @@ export default function Page() {
   return (
     <AuthShell
       title="Registrierung"
-      subtitle="Erstelle deinen Mandanten (Tenant) und bestätige danach deine E-Mail."
+      subtitle="Erstelle dein Konto und bestätige danach deine E-Mail."
     >
       <RegisterForm />
     </AuthShell>

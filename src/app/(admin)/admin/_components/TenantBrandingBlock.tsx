@@ -16,7 +16,7 @@ const BRANDING_UPDATED_EVENT = "lr_tenant_branding_updated";
 
 export default function TenantBrandingBlock() {
   const [loading, setLoading] = useState(true);
-  const [name, setName] = useState<string>("Tenant");
+  const [name, setName] = useState<string>("Konto");
   const [logoOk, setLogoOk] = useState<boolean>(true);
 
   // IMPORTANT: do NOT use Date.now() in initial state (SSR hydration mismatch)
@@ -40,7 +40,7 @@ export default function TenantBrandingBlock() {
 
       const t = json.data.tenant;
       const p = json.data.profile;
-      const display = p?.displayName || p?.legalName || t?.name || "Tenant";
+      const display = p?.displayName || p?.legalName || t?.name || "Konto";
       setName(display);
 
       setLoading(false);

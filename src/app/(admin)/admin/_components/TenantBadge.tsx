@@ -33,7 +33,7 @@ export default function TenantBadge({
       ? `${state.tenant.name} (${state.tenant.slug})`
       : state.kind === "loading"
         ? "Loading tenant…"
-        : "Tenant error";
+        : "Konto-Fehler";
 
   const load = React.useCallback(async () => {
     setState({ kind: "loading" });
@@ -46,7 +46,7 @@ export default function TenantBadge({
     if (!res.ok) {
       setState({
         kind: "error",
-        message: res.message || "Tenant konnte nicht geladen werden.",
+        message: res.message || "Konto konnte nicht geladen werden.",
         traceId: res.traceId,
       });
       return;
@@ -56,7 +56,7 @@ export default function TenantBadge({
     if (!tenant) {
       setState({
         kind: "error",
-        message: "Tenant konnte nicht geladen werden (fehlende Daten).",
+        message: "Konto konnte nicht geladen werden (fehlende Daten).",
         traceId: res.traceId,
       });
       return;
@@ -83,7 +83,7 @@ export default function TenantBadge({
           background: "rgba(255,255,255,1)",
         }}
       >
-        <Spinner label="Tenant" />
+        <Spinner label="Konto" />
       </div>
     );
   }
@@ -92,7 +92,7 @@ export default function TenantBadge({
     return (
       <div style={{ minWidth: 280 }} title={title}>
         <ErrorBox
-          title="Tenant konnte nicht geladen werden"
+          title="Konto konnte nicht geladen werden"
           message={state.message}
           traceId={state.traceId}
           onRetry={load}

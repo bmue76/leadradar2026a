@@ -171,7 +171,7 @@ export default function OrganisationHubClient() {
                     <dd className="text-right font-semibold text-slate-900">{data.tenant.slug}</dd>
                   </div>
                   <div className="flex items-start justify-between gap-6">
-                    <dt className="text-slate-500">Tenant Owner</dt>
+                    <dt className="text-slate-500">Konto-Inhaber</dt>
                     <dd className="text-right font-semibold text-slate-900">
                       {data.owner.name ? `${data.owner.name} · ` : ""}
                       {data.owner.email}

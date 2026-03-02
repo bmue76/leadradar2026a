@@ -70,7 +70,7 @@ function fmtDt(iso: string): string {
 }
 
 function labelScope(s: ExportScope): string {
-  return s === "ACTIVE_EVENT" ? "Aktives Event" : "Alle (Tenant)";
+  return s === "ACTIVE_EVENT" ? "Aktives Event" : "Alle (Konto)";
 }
 function labelLeadStatus(s: LeadStatusFilter): string {
   if (s === "NEW") return "Nur neue";
@@ -335,7 +335,7 @@ export default function ExportsScreenClient({ initialDefaults, eventsLinkHref }:
               disabled={creating}
             >
               <option value="ACTIVE_EVENT">Aktives Event</option>
-              <option value="ALL">Alle (Tenant)</option>
+              <option value="ALL">Alle (Konto)</option>
             </select>
           </label>
 
