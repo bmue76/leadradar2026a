@@ -1,94 +1,64 @@
-// apps/mobile/app/_layout.tsx
-import React, { useMemo } from "react";
-import { Tabs } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import React, { useEffect, useMemo } from "react";
+import { ActivityIndicator, Text, View } from "react-native";
+import { Stack, useRouter, useSegments } from "expo-router";
 
-import { UI } from "../src/ui/tokens";
-import { BrandingProvider, useTenantBranding } from "../src/ui/useTenantBranding";
+import { LicenseGateProvider, useLicenseGate } from "../src/lib/useLicenseGate";
 
-function TabsShell() {
-  const insets = useSafeAreaInsets();
-
-  const tabBarHeight = UI.tabBarBaseHeight + Math.max(insets.bottom, UI.tabBarPadBottomMin);
-
-  const { state } = useTenantBranding();
-
-  const activeTint = useMemo(() => {
-    if (state.status === "ready" && state.accentColor) return state.accentColor;
-    return UI.accent;
-  }, [state]);
-
+function Splash() {
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: activeTint,
-        tabBarInactiveTintColor: "rgba(17,24,39,0.45)",
-        tabBarStyle: {
-          height: tabBarHeight,
-          paddingTop: UI.tabBarPadTop,
-          paddingBottom: Math.max(insets.bottom, UI.tabBarPadBottomMin),
-          backgroundColor: UI.bg,
-          borderTopColor: UI.border,
-        },
-        tabBarItemStyle: {
-          flex: 1,
-        },
-        tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: "700",
-        },
-      }}
-    >
-      {/* Visible Tabs */}
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: "Home",
-          tabBarIcon: ({ color, size }) => <Ionicons name="home-outline" size={size} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="forms"
-        options={{
-          title: "Formulare",
-          tabBarIcon: ({ color, size }) => <Ionicons name="document-text-outline" size={size} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="leads"
-        options={{
-          title: "Leads",
-          tabBarIcon: ({ color, size }) => <Ionicons name="people-outline" size={size} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="stats"
-        options={{
-          title: "Stats",
-          tabBarIcon: ({ color, size }) => <Ionicons name="stats-chart-outline" size={size} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: "Settings",
-          tabBarIcon: ({ color, size }) => <Ionicons name="settings-outline" size={size} color={color} />,
-        }}
-      />
-
-      {/* Hidden Routes */}
-      <Tabs.Screen name="provision" options={{ href: null }} />
-      <Tabs.Screen name="forms/[id]" options={{ href: null }} />
-    </Tabs>
+    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <ActivityIndicator />
+      <Text style={{ marginTop: 12, opacity: 0.7 }}>LeadRadar wird gestartet …</Text>
+    </View>
   );
+}
+
+/**
+ * Global Gate:
+ * - Ohne aktive Lizenz: Redirect -> /activate
+ * - Settings bleibt immer erreichbar (damit baseUrl/tenantSlug korrigierbar ist)
+ * - Mit aktiver Lizenz: /activate wird verlassen -> /forms
+ */
+function GateAwareStack() {
+  const router = useRouter();
+  const segments = useSegments();
+  const { loading, derived } = useLicenseGate();
+
+  const routeInfo = useMemo(() => {
+    // Expo Router typing kann hier "never[]" inferieren -> wir normalisieren auf string[]
+    const segs = (Array.isArray(segments) ? (segments as unknown as string[]) : []) as string[];
+    const has = (name: string) => segs.includes(name);
+
+    const isSettings = has("settings");
+    const isActivate = has("activate") || has("license");
+    const isPublic = isSettings || isActivate;
+
+    return { isActivate, isPublic };
+  }, [segments]);
+
+  useEffect(() => {
+    if (loading) return;
+
+    if (!derived.active && !routeInfo.isPublic) {
+      router.replace("/activate");
+      return;
+    }
+
+    if (derived.active && routeInfo.isActivate) {
+      router.replace("/forms");
+      return;
+    }
+  }, [loading, derived.active, routeInfo.isPublic, routeInfo.isActivate, router]);
+
+  if (loading) return <Splash />;
+
+  return <Stack screenOptions={{ headerShown: false }} />;
 }
 
 export default function RootLayout() {
   return (
-    <BrandingProvider>
-      <TabsShell />
-    </BrandingProvider>
+    <LicenseGateProvider>
+      <GateAwareStack />
+    </LicenseGateProvider>
   );
 }
