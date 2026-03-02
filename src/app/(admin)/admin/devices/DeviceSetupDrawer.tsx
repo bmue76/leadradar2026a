@@ -148,10 +148,6 @@ export default function DeviceSetupDrawer({
     }
   }, [deviceId]);
 
-  /**
-   * Create-or-return active code (plaintext only returned here).
-   * NOTE: We sometimes call this silently (e.g. auto-create after NO_ACTIVE_TOKEN).
-   */
   const createOrReturnInternal = useCallback(
     async (opts: { setBusyFlag: boolean; notice?: string | null }): Promise<ProvisionCreateResp | null> => {
       if (opts.notice) setEmailNotice(opts.notice);
@@ -220,7 +216,11 @@ export default function DeviceSetupDrawer({
   }, [deviceId, loadStatus]);
 
   const sendProvisionMailOnce = useCallback(
-    async (to: string): Promise<{ ok: true; mode: "SMTP" | "LOGGED_ONLY" } | { ok: false; code?: string; message: string; traceId?: string }> => {
+    async (
+      to: string
+    ): Promise<
+      { ok: true; mode: "SMTP" | "LOGGED_ONLY" } | { ok: false; code?: string; message: string; traceId?: string }
+    > => {
       try {
         const res = await fetch(`/api/admin/v1/devices/${deviceId}/provisioning/resend`, {
           method: "POST",
@@ -248,10 +248,6 @@ export default function DeviceSetupDrawer({
     [deviceId]
   );
 
-  /**
-   * UX: strict backend (resend requires active code), but UI auto-recovers:
-   * - If resend returns NO_ACTIVE_TOKEN => create code => retry resend once
-   */
   const resend = useCallback(async () => {
     const to = email.trim();
     if (!to) return;
@@ -261,12 +257,10 @@ export default function DeviceSetupDrawer({
     setTraceId(null);
     setEmailNotice(null);
 
-    // Attempt #1
     setEmailNotice("Sende E-Mail …");
     const first = await sendProvisionMailOnce(to);
 
     if (!first.ok) {
-      // Special case: no active code => auto-create + retry
       if (first.code === "NO_ACTIVE_TOKEN") {
         setEmailNotice("Kein aktiver Code vorhanden – erstelle neuen Code …");
         const created = await createOrReturnInternal({ setBusyFlag: false, notice: null });
@@ -289,17 +283,12 @@ export default function DeviceSetupDrawer({
         }
 
         setEmail("");
-        if (second.mode === "SMTP") {
-          setEmailNotice("E-Mail wurde versendet.");
-        } else {
-          setEmailNotice("E-Mail wurde nur geloggt (SMTP nicht aktiv).");
-        }
+        setEmailNotice(second.mode === "SMTP" ? "E-Mail wurde versendet." : "E-Mail wurde nur geloggt (SMTP nicht aktiv).");
         window.setTimeout(() => setEmailNotice(null), 3500);
         setBusy(null);
         return;
       }
 
-      // Default error path
       setErr(first.message);
       if (first.traceId) setTraceId(first.traceId);
       setEmailNotice(null);
@@ -307,13 +296,8 @@ export default function DeviceSetupDrawer({
       return;
     }
 
-    // Success #1
     setEmail("");
-    if (first.mode === "SMTP") {
-      setEmailNotice("E-Mail wurde versendet.");
-    } else {
-      setEmailNotice("E-Mail wurde nur geloggt (SMTP nicht aktiv).");
-    }
+    setEmailNotice(first.mode === "SMTP" ? "E-Mail wurde versendet." : "E-Mail wurde nur geloggt (SMTP nicht aktiv).");
     window.setTimeout(() => setEmailNotice(null), 3500);
     setBusy(null);
   }, [email, sendProvisionMailOnce, createOrReturnInternal]);
@@ -374,7 +358,6 @@ export default function DeviceSetupDrawer({
             </div>
           ) : null}
 
-          {/* License */}
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex items-center justify-between">
               <div className="text-sm font-semibold text-slate-900">Lizenz</div>
@@ -391,7 +374,6 @@ export default function DeviceSetupDrawer({
             </div>
           </div>
 
-          {/* Code Meta */}
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex items-center justify-between gap-3">
               <div className="text-sm font-semibold text-slate-900">Aktivierungscode</div>
@@ -412,7 +394,6 @@ export default function DeviceSetupDrawer({
             </div>
           </div>
 
-          {/* QR + Code */}
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="text-sm font-semibold text-slate-900">QR / Code</div>
 
@@ -442,7 +423,6 @@ export default function DeviceSetupDrawer({
             )}
           </div>
 
-          {/* Email */}
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="text-sm font-semibold text-slate-900">Per E-Mail senden</div>
             <div className="mt-2 flex gap-2">
@@ -452,7 +432,12 @@ export default function DeviceSetupDrawer({
                 placeholder="email@firma.ch"
                 className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
               />
-              <DrawerButton label={busy === "email" ? "Sende…" : "Senden"} kind="primary" onClick={() => void resend()} disabled={busy !== null || !email.trim()} />
+              <DrawerButton
+                label={busy === "email" ? "Sende…" : "Senden"}
+                kind="primary"
+                onClick={() => void resend()}
+                disabled={busy !== null || !email.trim()}
+              />
             </div>
 
             {emailNotice ? (

@@ -128,7 +128,7 @@ function buildHtml(opts: {
             <div style="flex:1;min-width:240px;${card}padding:14px 16px;">
               <div style="${label}">Gerät</div>
               <div style="margin-top:6px;font-size:15px;color:#0f172a;font-weight:800;">${opts.deviceName}</div>
-              <div style="margin-top:8px;font-size:12px;color:#64748b;">Tenant: <span style="font-weight:800;color:#0f172a;">${opts.tenantSlug}</span></div>
+              <div style="margin-top:8px;font-size:12px;color:#64748b;">Konto-Kürzel: <span style="font-weight:800;color:#0f172a;">${opts.tenantSlug}</span></div>
             </div>
 
             <div style="flex:1;min-width:240px;${card}padding:14px 16px;">
@@ -156,6 +156,9 @@ function buildHtml(opts: {
 
               <div style="${text}margin-top:10px;color:#64748b;">
                 In der App: <b>Gerät aktivieren</b> → Code einfügen → <b>Aktivieren</b>.
+              </div>
+              <div style="margin-top:8px;font-size:12px;color:#64748b;">
+                „Code kopieren“ öffnet eine Seite mit Copy-Button im Browser.
               </div>
             </div>
           </div>
@@ -216,7 +219,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const text =
     `LeadRadar – Gerät aktivieren\n\n` +
     `Gerät: ${device.name}\n` +
-    `Tenant: ${tenant.tenantSlug}\n` +
+    `Konto-Kürzel: ${tenant.tenantSlug}\n` +
     `Aktivierungscode: ${code}\n` +
     `Gültig bis: ${expiresLabel}\n\n` +
     `Code kopieren (Browser):\n${copyUrl}\n\n` +
