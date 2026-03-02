@@ -239,7 +239,7 @@
 }
 
 /* Push tenant logo to the far right of the left cluster (visual right-aligned) */
-.topbarLeft :global([aria-label="Tenant logo"]) {
+.topbarLeft :global([aria-label="Konto-Logo"]) {
   order: 50;
   margin-left: auto;
 }

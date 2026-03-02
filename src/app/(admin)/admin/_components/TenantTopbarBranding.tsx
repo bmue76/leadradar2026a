@@ -87,13 +87,13 @@ export function TenantTopbarBranding() {
 
   return (
     <div className="flex items-center justify-between gap-4">
-      {/* Tenant Name: same visual weight as title "LeadRadar Admin" */}
+      {/* Konto-Name: same visual weight as title "LeadRadar Admin" */}
       <div className="min-w-0">
         <div className="truncate text-base font-semibold text-slate-900">{loading ? "…" : tenantName}</div>
       </div>
 
       {/* Logo: bigger, no frame, right aligned (content aligned via AdminShell wrapper) */}
-      <div className="flex h-9 w-[190px] items-center justify-end" aria-label="Tenant Logo">
+      <div className="flex h-9 w-[190px] items-center justify-end" aria-label="Konto-Logo">
         {logoOk ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
