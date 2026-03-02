@@ -68,7 +68,7 @@ export function ScreenScaffold(props: ScreenScaffoldProps) {
 
           {logoDataUri ? (
             // eslint-disable-next-line jsx-a11y/alt-text
-            <Image source={{ uri: logoDataUri }} style={styles.logo} resizeMode="contain" accessibilityLabel="Tenant Logo" />
+            <Image source={{ uri: logoDataUri }} style={styles.logo} resizeMode="contain" accessibilityLabel="Konto-Logo" />
           ) : (
             <View style={styles.logoPlaceholder} />
           )}

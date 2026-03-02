@@ -158,7 +158,7 @@ export default function ProvisionScreen() {
               </View>
             ) : (
               <View style={{ marginTop: 14 }}>
-                <Text style={styles.label}>Tenant</Text>
+                <Text style={styles.label}>Konto-Kürzel</Text>
                 <TextInput
                   value={tenantSlug}
                   onChangeText={(v) => setTenantSlug(normalizeTenant(v))}

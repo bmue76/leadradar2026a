@@ -106,7 +106,7 @@ export default function Settings() {
         return;
       }
       if (!t) {
-        setNote("Bitte einen gültigen Tenant eingeben (z.B. atlex).");
+        setNote("Bitte ein gültiges Konto-Kürzel eingeben (z.B. atlex).");
         return;
       }
 
@@ -203,7 +203,7 @@ export default function Settings() {
           />
           <Text style={styles.meta}>{baseUrlMeta}</Text>
 
-          <Text style={[styles.label, { marginTop: 10 }]}>Tenant (Slug)</Text>
+          <Text style={[styles.label, { marginTop: 10 }]}>Konto-Kürzel</Text>
           <TextInput
             value={tenantText}
             onChangeText={setTenantText}

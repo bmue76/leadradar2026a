@@ -149,7 +149,7 @@ export async function apiFetch<T = unknown>(arg: string | ApiFetchArgs): Promise
         ok: false,
         status: 0,
         code: "TENANT_REQUIRED",
-        message: "Tenant fehlt. Bitte in den Einstellungen setzen.",
+        message: "Konto-Kürzel fehlt. Bitte in den Einstellungen setzen.",
         details: { header: "x-tenant-slug", action: "open_settings" },
       };
     }

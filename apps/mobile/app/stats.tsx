@@ -76,7 +76,7 @@ export default function ConnectedStatus() {
           <View pointerEvents="none" style={[styles.glowB, { backgroundColor: ACCENT_HEX }]} />
 
           <View style={styles.row}>
-            <Text style={styles.k}>Tenant</Text>
+            <Text style={styles.k}>Konto-Kürzel</Text>
             <Text style={styles.v}>{auth?.tenantSlug || "—"}</Text>
           </View>
           <View style={styles.row}>

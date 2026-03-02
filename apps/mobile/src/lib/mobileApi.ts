@@ -101,7 +101,7 @@ export async function redeemProvisioning(tenantSlug: string, code: string): Prom
     throw new ApiError({
       status: 0,
       code: "TENANT_REQUIRED",
-      message: "Tenant ist ungültig. Bitte in den Einstellungen prüfen.",
+      message: "Konto-Kürzel ist ungültig. Bitte in den Einstellungen prüfen.",
       details: { field: "tenantSlug" },
     });
   }
