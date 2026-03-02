@@ -148,38 +148,57 @@ export default function DeviceSetupDrawer({
     }
   }, [deviceId]);
 
-  const createOrReturn = useCallback(async () => {
-    setBusy("create");
-    setErr(null);
-    setTraceId(null);
-    try {
-      const res = await fetch(`/api/admin/v1/devices/${deviceId}/provisioning`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      const json = (await res.json()) as ApiResp<ProvisionCreateResp>;
-      if (!json.ok) {
-        setErr(json.error.message);
-        setTraceId(json.traceId);
-        setToken(null);
-      } else {
+  /**
+   * Create-or-return active code (plaintext only returned here).
+   * NOTE: We sometimes call this silently (e.g. auto-create after NO_ACTIVE_TOKEN).
+   */
+  const createOrReturnInternal = useCallback(
+    async (opts: { setBusyFlag: boolean; notice?: string | null }): Promise<ProvisionCreateResp | null> => {
+      if (opts.notice) setEmailNotice(opts.notice);
+
+      if (opts.setBusyFlag) setBusy("create");
+      setErr(null);
+      setTraceId(null);
+
+      try {
+        const res = await fetch(`/api/admin/v1/devices/${deviceId}/provisioning`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        const json = (await res.json()) as ApiResp<ProvisionCreateResp>;
+        if (!json.ok) {
+          setErr(json.error.message);
+          setTraceId(json.traceId);
+          setToken(null);
+          return null;
+        }
+
         setToken(json.data);
         await loadStatus();
         onChangedRef.current?.();
+        return json.data;
+      } catch {
+        setErr("Netzwerkfehler.");
+        setToken(null);
+        return null;
+      } finally {
+        if (opts.setBusyFlag) setBusy(null);
       }
-    } catch {
-      setErr("Netzwerkfehler.");
-      setToken(null);
-    } finally {
-      setBusy(null);
-    }
-  }, [deviceId, loadStatus]);
+    },
+    [deviceId, loadStatus]
+  );
+
+  const createOrReturn = useCallback(async () => {
+    await createOrReturnInternal({ setBusyFlag: true, notice: null });
+  }, [createOrReturnInternal]);
 
   const rotate = useCallback(async () => {
     setBusy("rotate");
     setErr(null);
     setTraceId(null);
+    setEmailNotice(null);
+
     try {
       const res = await fetch(`/api/admin/v1/devices/${deviceId}/provisioning/rotate`, { method: "POST" });
       const json = (await res.json()) as ApiResp<ProvisionCreateResp>;
@@ -190,6 +209,8 @@ export default function DeviceSetupDrawer({
         setToken(json.data);
         await loadStatus();
         onChangedRef.current?.();
+        setEmailNotice("Neuer Aktivierungscode erstellt.");
+        window.setTimeout(() => setEmailNotice(null), 2500);
       }
     } catch {
       setErr("Netzwerkfehler.");
@@ -198,6 +219,39 @@ export default function DeviceSetupDrawer({
     }
   }, [deviceId, loadStatus]);
 
+  const sendProvisionMailOnce = useCallback(
+    async (to: string): Promise<{ ok: true; mode: "SMTP" | "LOGGED_ONLY" } | { ok: false; code?: string; message: string; traceId?: string }> => {
+      try {
+        const res = await fetch(`/api/admin/v1/devices/${deviceId}/provisioning/resend`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email: to }),
+        });
+
+        const json = (await res.json()) as ApiResp<{ sent: true; mode: string; smtp?: { configured: boolean; missing: string[] } }>;
+
+        if (!json.ok) {
+          return {
+            ok: false,
+            code: json.error.code,
+            message: json.error.message,
+            traceId: json.traceId,
+          };
+        }
+
+        const mode = json.data.mode === "SMTP" ? "SMTP" : "LOGGED_ONLY";
+        return { ok: true, mode };
+      } catch {
+        return { ok: false, message: "Netzwerkfehler." };
+      }
+    },
+    [deviceId]
+  );
+
+  /**
+   * UX: strict backend (resend requires active code), but UI auto-recovers:
+   * - If resend returns NO_ACTIVE_TOKEN => create code => retry resend once
+   */
   const resend = useCallback(async () => {
     const to = email.trim();
     if (!to) return;
@@ -207,38 +261,68 @@ export default function DeviceSetupDrawer({
     setTraceId(null);
     setEmailNotice(null);
 
-    try {
-      const res = await fetch(`/api/admin/v1/devices/${deviceId}/provisioning/resend`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email: to }),
-      });
+    // Attempt #1
+    setEmailNotice("Sende E-Mail …");
+    const first = await sendProvisionMailOnce(to);
 
-      const json = (await res.json()) as ApiResp<{ sent: true; mode: string; smtp?: { configured: boolean; missing: string[] } }>;
-      if (!json.ok) {
-        setErr(json.error.message);
-        setTraceId(json.traceId);
-      } else {
+    if (!first.ok) {
+      // Special case: no active code => auto-create + retry
+      if (first.code === "NO_ACTIVE_TOKEN") {
+        setEmailNotice("Kein aktiver Code vorhanden – erstelle neuen Code …");
+        const created = await createOrReturnInternal({ setBusyFlag: false, notice: null });
+
+        if (!created) {
+          setEmailNotice(null);
+          setBusy(null);
+          return;
+        }
+
+        setEmailNotice("Neuer Code erstellt – sende E-Mail …");
+        const second = await sendProvisionMailOnce(to);
+
+        if (!second.ok) {
+          setErr(second.message);
+          if (second.traceId) setTraceId(second.traceId);
+          setEmailNotice(null);
+          setBusy(null);
+          return;
+        }
+
         setEmail("");
-        if (json.data.mode === "SMTP") {
+        if (second.mode === "SMTP") {
           setEmailNotice("E-Mail wurde versendet.");
         } else {
-          const missing = json.data.smtp?.missing?.length ? ` (fehlend: ${json.data.smtp.missing.join(", ")})` : "";
-          setEmailNotice(`Nur geloggt – SMTP nicht aktiv${missing}.`);
+          setEmailNotice("E-Mail wurde nur geloggt (SMTP nicht aktiv).");
         }
+        window.setTimeout(() => setEmailNotice(null), 3500);
+        setBusy(null);
+        return;
       }
-    } catch {
-      setErr("Netzwerkfehler.");
-    } finally {
-      setBusy(null);
-    }
-  }, [deviceId, email]);
 
-  const copyToken = useCallback(async () => {
+      // Default error path
+      setErr(first.message);
+      if (first.traceId) setTraceId(first.traceId);
+      setEmailNotice(null);
+      setBusy(null);
+      return;
+    }
+
+    // Success #1
+    setEmail("");
+    if (first.mode === "SMTP") {
+      setEmailNotice("E-Mail wurde versendet.");
+    } else {
+      setEmailNotice("E-Mail wurde nur geloggt (SMTP nicht aktiv).");
+    }
+    window.setTimeout(() => setEmailNotice(null), 3500);
+    setBusy(null);
+  }, [email, sendProvisionMailOnce, createOrReturnInternal]);
+
+  const copyCode = useCallback(async () => {
     if (!token?.token) return;
     try {
       await navigator.clipboard.writeText(token.token);
-      setEmailNotice("Token kopiert.");
+      setEmailNotice("Code kopiert.");
       window.setTimeout(() => setEmailNotice(null), 2500);
     } catch {
       setEmailNotice("Copy fehlgeschlagen.");
@@ -290,7 +374,7 @@ export default function DeviceSetupDrawer({
             </div>
           ) : null}
 
-          {/* License (clear!) */}
+          {/* License */}
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex items-center justify-between">
               <div className="text-sm font-semibold text-slate-900">Lizenz</div>
@@ -307,10 +391,10 @@ export default function DeviceSetupDrawer({
             </div>
           </div>
 
-          {/* Provisioning Code Meta */}
+          {/* Code Meta */}
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex items-center justify-between gap-3">
-              <div className="text-sm font-semibold text-slate-900">Provisioning-Code</div>
+              <div className="text-sm font-semibold text-slate-900">Aktivierungscode</div>
               <DrawerButton label="Refresh" kind="secondary" onClick={() => void loadStatus()} disabled={busy !== null} />
             </div>
 
@@ -328,14 +412,18 @@ export default function DeviceSetupDrawer({
             </div>
           </div>
 
-          {/* QR + Token */}
+          {/* QR + Code */}
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-sm font-semibold text-slate-900">QR / Token</div>
+            <div className="text-sm font-semibold text-slate-900">QR / Code</div>
 
             {!token ? (
-              <div className="mt-3 text-sm text-slate-600">Lade Token…</div>
+              <div className="mt-3 text-sm text-slate-600">Lade Code…</div>
             ) : (
               <div className="mt-3 space-y-3">
+                <div className="text-xs text-slate-600">
+                  Konto-Kürzel: <span className="font-semibold text-slate-900">{token.tenantSlug}</span>
+                </div>
+
                 {qrUrl ? (
                   <div className="inline-block rounded-xl border border-slate-200 bg-white p-2">
                     <Image src={qrUrl} alt="QR" width={200} height={200} className="h-44 w-44" unoptimized />
@@ -346,7 +434,7 @@ export default function DeviceSetupDrawer({
 
                 <div className="flex items-center justify-between gap-2 rounded-xl bg-slate-50 p-2">
                   <div className="font-mono text-sm font-semibold text-slate-900">{token.token}</div>
-                  <DrawerButton label="Copy" kind="secondary" onClick={() => void copyToken()} disabled={busy !== null} />
+                  <DrawerButton label="Code kopieren" kind="secondary" onClick={() => void copyCode()} disabled={busy !== null} />
                 </div>
 
                 <div className="break-all text-xs text-slate-600">{token.qrPayload}</div>
@@ -364,7 +452,7 @@ export default function DeviceSetupDrawer({
                 placeholder="email@firma.ch"
                 className="h-9 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
               />
-              <DrawerButton label="Senden" kind="primary" onClick={() => void resend()} disabled={busy !== null || !email.trim()} />
+              <DrawerButton label={busy === "email" ? "Sende…" : "Senden"} kind="primary" onClick={() => void resend()} disabled={busy !== null || !email.trim()} />
             </div>
 
             {emailNotice ? (
@@ -375,7 +463,7 @@ export default function DeviceSetupDrawer({
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <DrawerButton label="Erneut senden (gleich)" kind="secondary" onClick={() => void createOrReturn()} disabled={busy !== null} />
+            <DrawerButton label="Code erneut anzeigen" kind="secondary" onClick={() => void createOrReturn()} disabled={busy !== null} />
             <DrawerButton label="Neuen Code erzeugen" kind="secondary" onClick={() => void rotate()} disabled={busy !== null} />
           </div>
         </div>
