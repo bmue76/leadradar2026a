@@ -93,18 +93,30 @@ export function useHomeData() {
 
       const tzOffsetMinutes = new Date().getTimezoneOffset();
 
-      const [evRes, formsRes, statsRes] = await Promise.all([
-        apiFetch({ method: "GET", path: "/api/mobile/v1/events/active" }),
-        apiFetch({ method: "GET", path: "/api/mobile/v1/forms" }),
-        apiFetch({
-          method: "GET",
-          path: `/api/mobile/v1/stats/me?range=today&tzOffsetMinutes=${encodeURIComponent(String(tzOffsetMinutes))}`,
-        }),
-      ]);
+      // Start stats request immediately (independent)
+      const statsPromise = apiFetch({
+        method: "GET",
+        path: `/api/mobile/v1/stats/me?range=today&tzOffsetMinutes=${encodeURIComponent(String(tzOffsetMinutes))}`,
+      });
 
+      // 1) Active event first (we need eventId for forms contract)
+      const evRes = await apiFetch({ method: "GET", path: "/api/mobile/v1/events/active" });
       const evData = unwrapOk<{ activeEvent: ActiveEvent | null }>(evRes as unknown);
-      const formsData = unwrapOk<AssignedForm[]>(formsRes as unknown);
+      const activeEvent = evData.activeEvent ?? null;
 
+      // 2) Forms ONLY if we have an active event id (backend requires eventId)
+      let forms: AssignedForm[] = [];
+      if (activeEvent?.id) {
+        const formsRes = await apiFetch({
+          method: "GET",
+          path: `/api/mobile/v1/forms?eventId=${encodeURIComponent(activeEvent.id)}`,
+        });
+        const formsData = unwrapOk<AssignedForm[]>(formsRes as unknown);
+        forms = Array.isArray(formsData) ? formsData : [];
+      }
+
+      // 3) Stats
+      const statsRes = await statsPromise;
       const statsRaw = unwrapOk<unknown>(statsRes as unknown);
       const statsObj = isRecord(statsRaw) ? statsRaw : {};
 
@@ -119,8 +131,8 @@ export function useHomeData() {
       };
 
       const payload = {
-        activeEvent: evData.activeEvent ?? null,
-        forms: Array.isArray(formsData) ? formsData : [],
+        activeEvent,
+        forms,
         stats,
       };
 
