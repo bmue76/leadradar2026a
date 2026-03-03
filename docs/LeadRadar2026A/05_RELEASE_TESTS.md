@@ -269,10 +269,11 @@ Voraussetzungen:
 
 Steps (real device, Android):
 1) App starten → **Activation Screen** erscheint (wenn nicht aktiv)
-2) Ungültiger Code → Error + Retry (traceId sichtbar wenn Server reached)
-3) Gültiger Code → Success → Redirect `/forms`
-4) App kill/restart → bleibt aktiv (SecureStore Persistenz)
-5) Optional: falls `expiresAt` geliefert → bei Expiry Gate greift → Hinweis + Activation
+2) Optional: **QR-Code scannen** → Code wird übernommen (Kamera-Permission erteilen)
+3) Ungültiger Code → Error + Retry (traceId sichtbar wenn Server reached)
+4) Gültiger Code → Success → Redirect `/forms`
+5) App kill/restart → bleibt aktiv (SecureStore Persistenz)
+6) Optional: falls `expiresAt` geliefert → bei Expiry Gate greift → Hinweis + Activation
 
 ## Mobile Smoke — TP 9.3 Forms
 
