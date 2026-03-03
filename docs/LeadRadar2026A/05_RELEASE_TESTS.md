@@ -273,3 +273,11 @@ Steps (real device, Android):
 3) Gültiger Code → Success → Redirect `/forms`
 4) App kill/restart → bleibt aktiv (SecureStore Persistenz)
 5) Optional: falls `expiresAt` geliefert → bei Expiry Gate greift → Hinweis + Activation
+
+## Mobile Smoke — TP 9.3 Forms
+
+- App öffnen → Gate
+- Aktivieren (wenn nötig) → Redirect /forms
+- /forms: Loading → List oder Empty
+- Tap auf Form → /forms/[id] (Detail-Placeholder zeigt formId/Name)
+- Errorfall: Base URL falsch → „Konnte … nicht laden“ + traceId (falls vorhanden)

@@ -1,24 +1,36 @@
 import * as SecureStore from "expo-secure-store";
+import { getStoredAuth, clearStoredAuth } from "./mobileStorage";
 
-const KEY = "leadradar.mobile.apiKey";
+const LEGACY_KEY = "leadradar.mobile.apiKey";
 
+/**
+ * Compatibility layer:
+ * - Some parts used legacy SecureStore key "leadradar.mobile.apiKey"
+ * - TP9.x stores auth also under mobileStorage (lr_apiKey)
+ *
+ * We read legacy first, then fall back to storedAuth.
+ */
 export async function getApiKey(): Promise<string | null> {
-  try {
-    const v = await SecureStore.getItemAsync(KEY);
-    return v ? v.trim() : null;
-  } catch {
-    return null;
-  }
+  const legacy = await SecureStore.getItemAsync(LEGACY_KEY);
+  if (legacy && legacy.trim()) return legacy.trim();
+
+  const stored = await getStoredAuth();
+  if (stored.apiKey && stored.apiKey.trim()) return stored.apiKey.trim();
+
+  return null;
 }
 
 export async function setApiKey(apiKey: string): Promise<void> {
-  await SecureStore.setItemAsync(KEY, apiKey.trim());
+  const k = (apiKey || "").trim();
+  if (!k) return;
+  await SecureStore.setItemAsync(LEGACY_KEY, k);
 }
 
+/**
+ * Clears apiKey everywhere we know about (legacy + stored auth bundle).
+ * This is used for "Neu aktivieren".
+ */
 export async function clearApiKey(): Promise<void> {
-  try {
-    await SecureStore.deleteItemAsync(KEY);
-  } catch {
-    // ignore
-  }
+  await SecureStore.deleteItemAsync(LEGACY_KEY);
+  await clearStoredAuth();
 }

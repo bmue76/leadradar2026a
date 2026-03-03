@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { router } from "expo-router";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
@@ -12,24 +12,19 @@ import { PoweredBy } from "../../src/ui/PoweredBy";
 import { UI } from "../../src/ui/tokens";
 import { useBranding } from "../../src/features/branding/useBranding";
 
-type FormSummary = {
-  id: string;
-  name?: string;
-  title?: string;
-  status?: string;
-};
-
 type JsonObject = Record<string, unknown>;
 
-type ApiErrorShape = {
-  code?: unknown;
-  message?: unknown;
-  details?: unknown;
-};
-
+type ApiErrorShape = { code?: unknown; message?: unknown; details?: unknown };
 type ApiRespShape =
   | { ok: true; data?: unknown; traceId?: unknown }
   | { ok: false; error?: ApiErrorShape; traceId?: unknown; status?: unknown; message?: unknown };
+
+type FormListItem = {
+  id: string;
+  name: string;
+  description: string | null;
+  status: string | null;
+};
 
 function isObject(v: unknown): v is JsonObject {
   return typeof v === "object" && v !== null;
@@ -39,36 +34,32 @@ function isApiResp(v: unknown): v is ApiRespShape {
   return isObject(v) && typeof (v as { ok?: unknown }).ok === "boolean";
 }
 
-function asFormSummary(v: unknown): FormSummary | null {
-  if (!isObject(v)) return null;
-  const id = v.id;
-  if (typeof id !== "string" || !id.trim()) return null;
-  const name = typeof v.name === "string" ? v.name : undefined;
-  const title = typeof v.title === "string" ? v.title : undefined;
-  const status = typeof v.status === "string" ? v.status : undefined;
-  return { id, name, title, status };
-}
+function parseForms(data: unknown): FormListItem[] {
+  const arr = Array.isArray(data) ? data : isObject(data) && Array.isArray(data.forms) ? (data.forms as unknown[]) : [];
+  const out: FormListItem[] = [];
 
-function labelForForm(f: FormSummary): string {
-  return f.name || f.title || f.id;
-}
+  for (const it of arr) {
+    if (!isObject(it)) continue;
+    const id = typeof it.id === "string" ? it.id.trim() : "";
+    if (!id) continue;
 
-function pickList(data: unknown): unknown[] {
-  if (Array.isArray(data)) return data;
-  if (isObject(data) && Array.isArray(data.forms)) return data.forms as unknown[];
-  if (isObject(data) && Array.isArray(data.items)) return data.items as unknown[];
-  return [];
+    const name = typeof it.name === "string" && it.name.trim() ? it.name.trim() : id;
+    const description = typeof it.description === "string" ? it.description : null;
+    const status = typeof it.status === "string" ? it.status : null;
+
+    out.push({ id, name, description, status });
+  }
+
+  return out;
 }
 
 function extractError(res: ApiRespShape): { status: number; code: string; message: string; traceId: string } {
   const traceId = typeof res.traceId === "string" ? res.traceId : "";
-
   const status = typeof (res as { status?: unknown }).status === "number" ? (res as { status: number }).status : 0;
 
   const err = (res as { error?: ApiErrorShape }).error;
   const code = err && typeof err.code === "string" ? err.code : "";
   const msgFromErr = err && typeof err.message === "string" ? err.message : "";
-
   const msgTop = typeof (res as { message?: unknown }).message === "string" ? (res as { message: string }).message : "";
 
   const message = msgFromErr || msgTop || "Request failed";
@@ -79,10 +70,13 @@ export default function FormsIndex() {
   const insets = useSafeAreaInsets();
   const { state: brandingState, branding } = useBranding();
 
-  const [items, setItems] = useState<FormSummary[]>([]);
+  const [items, setItems] = useState<FormListItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [errorText, setErrorText] = useState<string>("");
+
+  const [errorTitle, setErrorTitle] = useState<string>("");
+  const [errorDetail, setErrorDetail] = useState<string>("");
+
   const [eventId, setEventId] = useState<string | null>(null);
 
   const tenantName = brandingState.kind === "ready" ? branding.tenantName : null;
@@ -100,7 +94,8 @@ export default function FormsIndex() {
   }, []);
 
   const load = useCallback(async () => {
-    setErrorText("");
+    setErrorTitle("");
+    setErrorDetail("");
     setBusy(true);
 
     try {
@@ -124,8 +119,9 @@ export default function FormsIndex() {
       });
 
       if (!isApiResp(raw)) {
-        setErrorText("Ungültige API-Antwort (Shape).");
         setItems([]);
+        setErrorTitle("Konnte Formulare nicht laden.");
+        setErrorDetail("Ungültige API-Antwort (Shape).");
         return;
       }
 
@@ -148,14 +144,15 @@ export default function FormsIndex() {
           return;
         }
 
-        setErrorText(`HTTP ${status || "?"} — ${message}${traceId ? ` (traceId: ${traceId})` : ""}`);
         setItems([]);
+        setErrorTitle("Konnte Formulare nicht laden.");
+        setErrorDetail(
+          `HTTP ${status || "?"} — ${message}${traceId ? ` (traceId: ${traceId})` : ""}`
+        );
         return;
       }
 
-      const data = raw.data;
-      const rawList = pickList(data);
-      const list = rawList.map(asFormSummary).filter((x): x is FormSummary => x !== null);
+      const list = parseForms(raw.data);
       setItems(list);
     } finally {
       setBusy(false);
@@ -175,6 +172,8 @@ export default function FormsIndex() {
     }
   }, [load]);
 
+  const showLoading = busy && items.length === 0 && !errorTitle;
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <StatusBar style="dark" backgroundColor={UI.bg} />
@@ -182,18 +181,26 @@ export default function FormsIndex() {
 
       {eventId ? (
         <View style={[styles.eventHint, { paddingHorizontal: UI.padX }]}>
-          <Text style={styles.eventHintText}>Event: <Text style={styles.eventHintMono}>{eventId}</Text></Text>
+          <Text style={styles.eventHintText}>
+            Aktives Event: <Text style={styles.eventHintMono}>{eventId}</Text>
+          </Text>
           <Pressable onPress={goEventGate} style={styles.eventHintBtn}>
             <Text style={styles.eventHintBtnText}>Wechseln</Text>
           </Pressable>
         </View>
       ) : null}
 
-      {errorText ? (
+      {showLoading ? (
+        <View style={[styles.center, { paddingBottom: listPadBottom }]}>
+          <ActivityIndicator />
+          <Text style={styles.loadingText}>Formulare werden geladen …</Text>
+          <PoweredBy />
+        </View>
+      ) : errorTitle ? (
         <View style={[styles.body, { paddingBottom: listPadBottom }]}>
           <View style={styles.warnCard}>
-            <Text style={styles.warnTitle}>Hinweis</Text>
-            <Text style={styles.warnText}>{errorText}</Text>
+            <Text style={styles.warnTitle}>{errorTitle}</Text>
+            <Text style={styles.warnText}>{errorDetail || "Bitte nochmals versuchen."}</Text>
 
             <View style={styles.row}>
               <Pressable onPress={load} style={[styles.btn, styles.btnDark]}>
@@ -212,10 +219,10 @@ export default function FormsIndex() {
 
           <PoweredBy />
         </View>
-      ) : !errorText && !busy && items.length === 0 ? (
+      ) : !busy && items.length === 0 ? (
         <View style={[styles.body, { paddingBottom: listPadBottom }]}>
           <View style={styles.card}>
-            <Text style={styles.h2}>Keine Formulare sichtbar.</Text>
+            <Text style={styles.h2}>Keine Formulare verfügbar.</Text>
             <Text style={styles.p}>
               Dieses Event hat aktuell keine aktiven Formulare (Global oder Event-Zuweisung). Setze im Admin im Formular die Sichtbarkeit.
             </Text>
@@ -244,13 +251,16 @@ export default function FormsIndex() {
             <Pressable
               onPress={() => {
                 const eid = eventId ? encodeURIComponent(eventId) : "";
-                router.push(`/forms/${item.id}?eventId=${eid}`);
+                router.push(`/forms/${encodeURIComponent(item.id)}?eventId=${eid}`);
               }}
               style={styles.formCard}
             >
-              <Text style={styles.formTitle}>{labelForForm(item)}</Text>
-              <Text style={styles.formId}>{item.id}</Text>
-              {item.status ? <Text style={styles.formStatus}>Status: {item.status}</Text> : null}
+              <Text style={styles.formTitle}>{item.name}</Text>
+              {item.description ? <Text style={styles.formDesc} numberOfLines={2}>{item.description}</Text> : null}
+              <View style={styles.metaRow}>
+                <Text style={styles.formId}>{item.id}</Text>
+                {item.status ? <Text style={styles.formStatus}>{item.status}</Text> : null}
+              </View>
             </Pressable>
           )}
         />
@@ -261,6 +271,9 @@ export default function FormsIndex() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: UI.bg },
+
+  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10, paddingHorizontal: UI.padX },
+  loadingText: { opacity: 0.7, fontWeight: "800", color: UI.text },
 
   eventHint: { marginTop: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   eventHintText: { color: UI.text, opacity: 0.75, fontWeight: "800" },
@@ -314,7 +327,10 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     backgroundColor: UI.bg,
   },
-  formTitle: { fontWeight: "900", color: UI.text },
-  formId: { opacity: 0.7, marginTop: 4, fontFamily: "monospace", color: UI.text },
-  formStatus: { opacity: 0.75, marginTop: 4, color: UI.text },
+  formTitle: { fontWeight: "900", color: UI.text, marginBottom: 6 },
+  formDesc: { opacity: 0.8, color: UI.text, marginBottom: 10, lineHeight: 18 },
+  metaRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
+
+  formId: { opacity: 0.7, fontFamily: "monospace", color: UI.text, flex: 1 },
+  formStatus: { opacity: 0.8, fontWeight: "900", color: UI.text },
 });
