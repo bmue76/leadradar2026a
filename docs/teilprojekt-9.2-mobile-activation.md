@@ -1,133 +1,84 @@
-# Teilprojekt 9.2: Mobile Activation Gate — Lizenz/Provisioning aktivieren + State Persistenz + UI-Gate
+# Teilprojekt 9.2 — Mobile Activation Gate (Android zuerst) — QR Scan + Scroll Fix (MVP ONLINE-only)
 
-**Status:** DONE  
-**Datum:** 2026-03-02 (Europe/Zurich)  
-**Commit(s):**
-- <HASH_1> — feat(tp9.2): mobile activation gate + license state persistence
-- <HASH_2> — docs(tp9.2): document activation gate + release tests
-
----
+Titel + Status + Datum + Commit(s)  
+Teilprojekt: 9.2 — Mobile Activation Gate — QR Scan + Scroll Fix  
+Status: DONE  
+Datum: 2026-03-03 (Europe/Zurich)  
+Commit(s): f8d0880 (main → origin/main), 14bc03a (main → origin/main)
 
 ## Ziel
 
-GoLive-ready (Phase 1 ONLINE-only) Activation/Lizenz-Gate für die Mobile App:
+Activation Screen (Mobile) so verbessern, dass:
 
-- Activation Screen: Aktivierungscode eingeben/pasten + „Aktivieren“
-- Persistenz: Activation State + apiKey + expiresAt (falls verfügbar) in SecureStore
-- Global Gate (Router): ohne aktive Lizenz kein Zugriff auf geschützte Screens
-- Standard API Integration: jsonOk/jsonError + traceId sichtbar im Fehlerfall
-- Terminologie (User-facing): „Tenant“ → „Konto / Konto-Kürzel“ (technisch bleibt tenantSlug/x-tenant-slug)
-
----
+- Aktivierungscode kann **manuell** eingegeben werden **oder via QR-Code Scan**
+- Screen ist **scrollbar** und **keyboard-safe** (keine „fixierte“ Seite)
+- UX bleibt Apple-clean, de-CH Microcopy
+- DoD bleibt erfüllt: typecheck/lint grün
 
 ## Umsetzung (Highlights)
 
-### Mobile (apps/mobile)
+- Activation UI (`/activate`)
+  - ScrollView + KeyboardAvoiding + SafeArea: Screen nicht mehr fixiert
+  - QR-Code Scan via `expo-camera`:
+    - Permission Flow
+    - Fullscreen Scanner Overlay mit visuellem Rahmen
+    - QR-Inhalt wird robust geparst:
+      - URL mit `?code=` / `?activationCode=` etc. wird unterstützt
+      - oder Raw-Code wird übernommen
+  - Code kann weiterhin per Clipboard „Einfügen“ gesetzt werden
 
-- **Activation Flow**
-  - Redeem via `POST /api/mobile/v1/provisioning/redeem` mit `{ tenantSlug, code }`
-  - Persistiert `apiKey` und Metadaten lokal
-  - Optionaler Lizenzcheck via `GET /api/mobile/v1/license` zur Ableitung von `expiresAt` und aktiv/inaktiv
-
-- **State Persistenz**
-  - SecureStore: `status`, `apiKey`, `activatedAt`, `lastCheckedAt`, optional `expiresAt`
-  - App-Restart überlebt zuverlässig
-
-- **Router Gate**
-  - App Start → wenn nicht aktiv → `/activate`
-  - Wenn aktiv → normaler Flow (z.B. `/forms`)
-  - Settings bleibt erreichbar, um Base URL / Konto-Kürzel zu korrigieren
-
-- **Microcopy (de-CH)**
-  - „Konto-Kürzel“ statt „Tenant“
-  - klare States: idle/loading/success/error
-  - traceId bei Server-Errors sichtbar
-
-### Admin (UX-Polish, ohne Backend-Breaking)
-
-- E-Mail Template Provisioning (no-reply) Apple-clean: **Code kopieren**, QR, klare Option A/B.
-- Device Setup Drawer: bei `NO_ACTIVE_TOKEN` → UI erstellt automatisch neuen Code und sendet dann E-Mail (Backend bleibt strikt).
-
----
+- Release Tests
+  - Mobile Smoke: Activation (TP 9.2) um QR-Scan Step ergänzt
 
 ## Dateien/Änderungen
 
-Mobile:
-- `apps/mobile/app/_layout.tsx` (Gate/Redirect)
-- `apps/mobile/app/license.tsx` (Konto/Konto-Kürzel wording / Gate-Support)
-- `apps/mobile/src/lib/licenseState.ts` (Persistenz + Ableitungen)
-
-Docs:
-- `docs/teilprojekt-9.2-mobile-activation.md`
-- `docs/LeadRadar2026A/00_INDEX.md` (Link ergänzt)
-- `docs/LeadRadar2026A/05_RELEASE_TESTS.md` (Mobile Smoke erweitert)
-
-(Weitere UI-Wording/Polish Files je nach Commit-Set)
-
----
+- `apps/mobile/app/activate.tsx`
+  - Scroll/Keyboard-safe Layout
+  - QR Scanner (expo-camera) integriert
+- `apps/mobile/package.json`, `apps/mobile/package-lock.json`
+  - `expo-camera` hinzugefügt
+- `docs/LeadRadar2026A/05_RELEASE_TESTS.md`
+  - Mobile Smoke Activation: QR-Scan Step ergänzt
 
 ## Akzeptanzkriterien – Check
 
-- [x] Android Emulator + reales Android Device
-  - [x] Aktivierung mit gültigem Code → Success → Gate öffnet geschützten Bereich
-  - [x] Persistenz: App kill/restart → bleibt aktiv
-  - [x] Ungültiger Code → Error + Retry + traceId (wenn Server erreicht)
-  - [x] Expired/Inactive State: Gate greift und zeigt Hinweis (über /license abgeleitet)
-- [x] Router Gate: geschützte Screens ohne aktive Lizenz nicht erreichbar
-- [x] Code Quality:
-  - [x] `npm run typecheck` → 0 Errors
-  - [x] `npm run lint` → 0 Errors
-  - [x] `cd apps/mobile && npm run lint` → 0 Errors
-- [x] Docs + Index + Release Tests aktualisiert
-- [x] git status clean, commit/push, Hash im Rapport
-
----
+- ✅ App startet → Gate → Activation Screen sichtbar (wenn nicht aktiv)
+- ✅ QR-Scan vorhanden und übernimmt Code (Permission Flow ok)
+- ✅ Screen ist scrollbar (auch mit Keyboard) — kein „fixed“ Layout
+- ✅ Aktivierung funktioniert weiterhin (manuell + QR)
+- ✅ Code Quality:
+  - npm run typecheck → grün
+  - npm run lint → grün (Warnings ok)
+  - cd apps/mobile && npm run lint → grün
+- ✅ Docs aktualisiert
+- ✅ git status clean, Commits gepusht
 
 ## Tests/Proof (reproduzierbar)
 
-### Mobile Smoke
+### Dev Client (Native Module)
 ```bash
 cd apps/mobile
+npx expo install expo-camera
+npx expo run:android
 npx expo start --dev-client -c
+Manual Smoke (real device, Android)
 
-Flow (real device)
+App starten → Activation Screen
 
-Einstellungen: Base URL + Konto-Kürzel setzen → Speichern
+QR-Code scannen → Code wird übernommen
 
-App → Activation Screen erscheint (wenn nicht aktiv)
-
-Ungültiger Code → Error + traceId
-
-Gültiger Code → Success → Redirect
+Aktivieren → Redirect /forms
 
 App kill/restart → bleibt aktiv
 
-Backend Proof (Provisioning + E-Mail)
-TENANT_ID="..."
-TENANT_SLUG="demo"
-DEVICE_ID="..."
-EMAIL_TO="..."
+Fehlerfall: ungültiger Code → Error + Retry (traceId wenn Server reached)
 
-# 1) Code erstellen/holen
-curl -sS -X POST "http://localhost:3000/api/admin/v1/devices/$DEVICE_ID/provisioning" \
-  -H "content-type: application/json" \
-  -H "x-tenant-id: $TENANT_ID" \
-  -H "x-tenant-slug: $TENANT_SLUG"
+Offene Punkte/Risiken
 
-# 2) E-Mail senden (strict: nur wenn aktiver Code existiert)
-curl -sS -X POST "http://localhost:3000/api/admin/v1/devices/$DEVICE_ID/provisioning/resend" \
-  -H "content-type: application/json" \
-  -H "x-tenant-id: $TENANT_ID" \
-  -H "x-tenant-slug: $TENANT_SLUG" \
-  -d "{\"email\":\"$EMAIL_TO\"}"
-Offene Punkte / Risiken
+P1: QR-Formate: falls künftig andere QR-Payloads genutzt werden, Parser in extractCodeFromQr() erweitern.
 
-P1: Deep-Link Auto-Fill (QR scan → App übernimmt code/tenant automatisch) optionaler Komfort
-
-P1: Konsolidierung mobileApi.ts vs apiFetch() (Single Source of Truth)
-
-P1: „Tenant“ Terminologie technisch vs UI (bewusst getrennt)
+P1: Permissions: falls OEM-spezifische Kamera-Restriktionen auftreten, UX-Hint ergänzen.
 
 Next Step
 
-TP 9.3: Forms laden/anzeigen (nach Gate) + erste echte Screen-Flows
+TP 9.4 — Mobile Capture/Render (ONLINE-only) auf /forms/[id] finalisieren.
