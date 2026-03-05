@@ -1,64 +1,38 @@
-import React, { useEffect, useMemo } from "react";
-import { ActivityIndicator, Text, View } from "react-native";
-import { Stack, useRouter, useSegments } from "expo-router";
+import React from "react";
+import { Tabs } from "expo-router";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 
-import { LicenseGateProvider, useLicenseGate } from "../src/lib/useLicenseGate";
-
-function Splash() {
-  return (
-    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <ActivityIndicator />
-      <Text style={{ marginTop: 12, opacity: 0.7 }}>LeadRadar wird gestartet …</Text>
-    </View>
-  );
-}
+import { UI } from "../src/ui/tokens";
+import { LicenseGateProvider } from "../src/lib/useLicenseGate";
 
 /**
- * Global Gate:
- * - Ohne aktive Lizenz: Redirect -> /activate
- * - Settings bleibt immer erreichbar (damit baseUrl/tenantSlug korrigierbar ist)
- * - Mit aktiver Lizenz: /activate wird verlassen -> /forms
+ * Root Navigation (clean)
+ * - Visible Tabs: Start, Einsatz, Formulare, Lizenz, Setup
+ * - Hidden routes: provision/event-gate (reachable, but not in tab bar)
  */
-function GateAwareStack() {
-  const router = useRouter();
-  const segments = useSegments();
-  const { loading, derived } = useLicenseGate();
-
-  const routeInfo = useMemo(() => {
-    // Expo Router typing kann hier "never[]" inferieren -> wir normalisieren auf string[]
-    const segs = (Array.isArray(segments) ? (segments as unknown as string[]) : []) as string[];
-    const has = (name: string) => segs.includes(name);
-
-    const isSettings = has("settings");
-    const isActivate = has("activate") || has("license");
-    const isPublic = isSettings || isActivate;
-
-    return { isActivate, isPublic };
-  }, [segments]);
-
-  useEffect(() => {
-    if (loading) return;
-
-    if (!derived.active && !routeInfo.isPublic) {
-      router.replace("/activate");
-      return;
-    }
-
-    if (derived.active && routeInfo.isActivate) {
-      router.replace("/forms");
-      return;
-    }
-  }, [loading, derived.active, routeInfo.isPublic, routeInfo.isActivate, router]);
-
-  if (loading) return <Splash />;
-
-  return <Stack screenOptions={{ headerShown: false }} />;
-}
-
 export default function RootLayout() {
   return (
-    <LicenseGateProvider>
-      <GateAwareStack />
-    </LicenseGateProvider>
+    <SafeAreaProvider>
+      <LicenseGateProvider>
+        <Tabs
+          screenOptions={{
+            headerShown: false,
+            tabBarStyle: { backgroundColor: UI.bg, borderTopColor: UI.border },
+            tabBarActiveTintColor: UI.text,
+            tabBarInactiveTintColor: "rgba(0,0,0,0.45)",
+          }}
+        >
+          <Tabs.Screen name="index" options={{ title: "Start" }} />
+          <Tabs.Screen name="events" options={{ title: "Einsatz" }} />
+          <Tabs.Screen name="forms" options={{ title: "Formulare" }} />
+          <Tabs.Screen name="license" options={{ title: "Lizenz" }} />
+          <Tabs.Screen name="settings" options={{ title: "Setup" }} />
+
+          {/* Hidden utility routes */}
+          <Tabs.Screen name="provision" options={{ href: null, title: "Gerät aktivieren" }} />
+          <Tabs.Screen name="event-gate" options={{ href: null, title: "Event wählen" }} />
+        </Tabs>
+      </LicenseGateProvider>
+    </SafeAreaProvider>
   );
 }
