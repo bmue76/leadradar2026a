@@ -63,6 +63,7 @@ export async function GET(req: Request, ctx: { params: CtxParams }) {
         name: true,
         description: true,
         status: true,
+        config: true,
         fields: {
           where: { isActive: true },
           orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],

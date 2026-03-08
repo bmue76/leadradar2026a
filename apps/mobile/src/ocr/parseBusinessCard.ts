@@ -1,222 +1,225 @@
-import type { ContactSuggestions, ParseBusinessCardInput, ParseBusinessCardResult } from "./types";
+import type {
+  ContactSuggestions,
+  ParseBusinessCardInput,
+  ParseBusinessCardResult,
+} from "./types";
+
+function emptySuggestions(): ContactSuggestions {
+  return {
+    contactFirstName: "",
+    contactLastName: "",
+    contactCompany: "",
+    contactTitle: "",
+    contactEmail: "",
+    contactPhone: "",
+    contactMobile: "",
+    contactWebsite: "",
+    contactStreet: "",
+    contactZip: "",
+    contactCity: "",
+    contactCountry: "",
+  };
+}
 
 function cleanLine(s: string): string {
-  return s.replace(/\s+/g, " ").trim();
-}
-
-function uniq(arr: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const x of arr) {
-    const k = x.toLowerCase();
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(x);
-  }
-  return out;
-}
-
-function firstMatch(text: string, re: RegExp): string | null {
-  const m = text.match(re);
-  return m && m[0] ? m[0] : null;
-}
-
-function stripLabel(s: string): string {
   return s
-    .replace(/^(tel|phone|fon|direkt|direct|mobile|handy|mobil|mail|e-mail|email|web|website|www)\s*[:\-]\s*/i, "")
+    .replace(/\u00A0/g, " ")
+    .replace(/[|]/g, " ")
+    .replace(/\s{2,}/g, " ")
     .trim();
 }
 
-function looksLikeCompany(line: string): boolean {
-  return /\b(ag|gmbh|sa|sàrl|sarl|ltd|inc|llc|bv|nv|kg|ug|oy|ab|sas|srl|spa)\b/i.test(line);
+function normalizeWebsite(raw: string): string {
+  const v = raw.trim().replace(/[),.;]+$/g, "");
+  if (!v) return "";
+
+  if (/^https?:\/\//i.test(v)) return v;
+  if (/^www\./i.test(v)) return `https://${v}`;
+  if (/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(v)) return `https://${v}`;
+
+  return v;
 }
 
-function looksLikeName(line: string): boolean {
-  if (/\d/.test(line)) return false;
-  if (/@/.test(line)) return false;
-  if (/www\.|https?:\/\//i.test(line)) return false;
-  if (looksLikeCompany(line)) return false;
+function detectWebsite(rawText: string): string {
+  const txt = rawText || "";
 
-  const parts = line.split(/\s+/).filter(Boolean);
-  if (parts.length < 2 || parts.length > 4) return false;
+  const withProtocol = txt.match(/\bhttps?:\/\/[^\s<>"')]+/i)?.[0];
+  if (withProtocol) return normalizeWebsite(withProtocol);
 
-  // must contain at least 2 "capitalized" tokens
-  const caps = parts.filter((p) => /^[A-ZÄÖÜ]/.test(p));
-  return caps.length >= 2;
+  const withWww = txt.match(/\bwww\.[a-z0-9.-]+\.[a-z]{2,}(?:\/[^\s<>"')]*)?/i)?.[0];
+  if (withWww) return normalizeWebsite(withWww);
+
+  const bareDomain = txt.match(
+    /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:ch|com|net|org|io|co|de|at|fr|it|eu|biz|info|agency|app|tech|solutions|swiss)\b(?:\/[^\s<>"')]*)?/i
+  )?.[0];
+
+  if (bareDomain) return normalizeWebsite(bareDomain);
+
+  return "";
 }
 
-function splitName(line: string): { first?: string; last?: string } {
-  const parts = line.split(/\s+/).filter(Boolean);
-  if (parts.length < 2) return {};
-  const first = parts[0];
-  const last = parts.slice(1).join(" ");
-  return { first, last };
-}
-
-function pickTitle(lines: string[], nameIdx: number): string | null {
-  const after = lines.slice(nameIdx + 1, nameIdx + 4).map(cleanLine).filter(Boolean);
-  for (const l of after) {
-    if (/@/.test(l) || /\d/.test(l) || looksLikeCompany(l) || /www\.|https?:\/\//i.test(l)) continue;
-    // typical title keywords OR just a short line
-    if (/\b(ceo|cto|cfo|head|leiter|manager|director|sales|verkauf|marketing|projekt|engineer|berater|consultant)\b/i.test(l)) {
-      return l;
-    }
-    if (l.length <= 40) return l;
-  }
-  return null;
-}
-
-function normalizeUrl(s: string): string {
-  let t = s.trim();
-  t = t.replace(/[),.;]+$/g, "");
-  if (/^www\./i.test(t)) t = `https://${t}`;
-  return t;
+function detectEmail(rawText: string): string {
+  return rawText.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0]?.trim() ?? "";
 }
 
 function normalizePhone(raw: string): string {
-  // keep + and digits, but allow spaces
-  let t = raw.trim();
-  t = stripLabel(t);
-  // remove weird trailing punctuation
-  t = t.replace(/[),.;]+$/g, "");
-  // collapse spaces
-  t = t.replace(/\s+/g, " ");
-  return t;
+  const v = raw.trim().replace(/[^\d+()/ -]/g, "");
+  return v.replace(/\s{2,}/g, " ").trim();
 }
 
-function parseAddress(lines: string[]): Partial<ContactSuggestions> {
-  let street: string | null = null;
-  let zip: string | null = null;
-  let city: string | null = null;
-  let country: string | null = null;
+function detectPhones(rawText: string): { phone: string; mobile: string } {
+  const matches = rawText.match(/(?:\+?\d[\d ()/-]{5,}\d)/g) ?? [];
+  const cleaned = matches.map(normalizePhone).filter(Boolean);
 
-  for (const raw of lines) {
-    const l = cleanLine(raw);
-    if (!l) continue;
+  let phone = "";
+  let mobile = "";
 
-    // Country (simple)
-    if (!country && /\b(switzerland|schweiz|suisse|svizzera|ch)\b/i.test(l)) {
-      country = l;
+  for (const v of cleaned) {
+    const compact = v.replace(/[^\d+]/g, "");
+    if (!mobile && /^(\+?\d{6,})$/.test(compact) && /(79|78|77|76|75|74)\d{6}$/.test(compact.replace(/^\+41/, "0"))) {
+      mobile = v;
       continue;
     }
+    if (!phone) phone = v;
+  }
 
-    // Zip + city (Swiss/DE-like)
-    const mZip = l.match(/\b(\d{4,5})\s+([A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß\-\s]+)\b/);
-    if (!zip && mZip) {
-      zip = mZip[1];
-      city = cleanLine(mZip[2]);
-      continue;
-    }
+  return { phone, mobile };
+}
 
-    // Street + number
-    if (!street) {
-      const mStreet = l.match(/\b([A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß\-\.\s]+)\s+(\d+[A-Za-z]?)\b/);
-      if (mStreet && !/@/.test(l) && !/www\.|https?:\/\//i.test(l) && !looksLikeCompany(l)) {
-        street = cleanLine(`${mStreet[1]} ${mStreet[2]}`);
-        continue;
-      }
+function splitName(fullName: string): { first: string; last: string } {
+  const t = fullName.trim();
+  if (!t) return { first: "", last: "" };
+
+  const parts = t.split(/\s+/);
+  if (parts.length === 1) return { first: parts[0], last: "" };
+
+  return {
+    first: parts.slice(0, -1).join(" "),
+    last: parts.slice(-1).join(" "),
+  };
+}
+
+function detectName(lines: string[], email: string, company: string): { first: string; last: string } {
+  for (const line of lines.slice(0, 5)) {
+    const t = cleanLine(line);
+    if (!t) continue;
+    if (email && t.includes(email)) continue;
+    if (company && t.toLowerCase() === company.toLowerCase()) continue;
+    if (/\d/.test(t)) continue;
+    if (/^(tel|phone|mobile|email|mail|web|www|fax|address|adresse|strasse|street|www\.)/i.test(t)) continue;
+
+    const words = t.split(/\s+/);
+    if (words.length >= 2 && words.length <= 4) {
+      return splitName(t);
     }
   }
 
-  const out: Partial<ContactSuggestions> = {};
-  if (street) out.contactStreet = street;
-  if (zip) out.contactZip = zip;
-  if (city) out.contactCity = city;
-  if (country) out.contactCountry = country;
-  return out;
+  return { first: "", last: "" };
+}
+
+function detectCompany(lines: string[]): string {
+  for (const line of lines.slice(0, 8)) {
+    const t = cleanLine(line);
+    if (!t) continue;
+    if (/\d/.test(t)) continue;
+    if (/^(tel|phone|mobile|email|mail|web|www|fax|address|adresse|strasse|street)/i.test(t)) continue;
+    if (/\b(gmbh|ag|sa|sarl|llc|ltd|inc|group|solutions|consulting|systems|studio)\b/i.test(t)) {
+      return t;
+    }
+  }
+
+  for (const line of lines.slice(0, 4)) {
+    const t = cleanLine(line);
+    if (t && t.split(/\s+/).length <= 4) return t;
+  }
+
+  return "";
+}
+
+function detectTitle(lines: string[], company: string, firstName: string, lastName: string): string {
+  const fullName = `${firstName} ${lastName}`.trim().toLowerCase();
+
+  for (const line of lines.slice(0, 8)) {
+    const t = cleanLine(line);
+    if (!t) continue;
+    if (company && t.toLowerCase() === company.toLowerCase()) continue;
+    if (fullName && t.toLowerCase() === fullName) continue;
+    if (/\d/.test(t)) continue;
+    if (/^(tel|phone|mobile|email|mail|web|www|fax|address|adresse|strasse|street)/i.test(t)) continue;
+
+    if (/\b(sales|ceo|owner|director|manager|consultant|engineer|head|leiter|verkauf|marketing|geschäftsführer|inhaber|projektleiter|berater)\b/i.test(t)) {
+      return t;
+    }
+  }
+
+  return "";
+}
+
+function detectAddress(lines: string[]): Pick<ContactSuggestions, "contactStreet" | "contactZip" | "contactCity" | "contactCountry"> {
+  let contactStreet = "";
+  let contactZip = "";
+  let contactCity = "";
+  let contactCountry = "";
+
+  for (const line of lines) {
+    const t = cleanLine(line);
+    if (!t) continue;
+
+    if (!contactStreet && /\b(strasse|straße|street|road|weg|gasse|allee|avenue|platz)\b/i.test(t)) {
+      contactStreet = t;
+    }
+
+    if (!contactZip || !contactCity) {
+      const m = t.match(/\b(\d{4,5})\s+([A-Za-zÄÖÜäöüß .-]{2,})$/);
+      if (m) {
+        contactZip = contactZip || m[1].trim();
+        contactCity = contactCity || m[2].trim();
+      }
+    }
+
+    if (!contactCountry && /\b(switzerland|schweiz|deutschland|germany|france|austria|österreich|italy|italia)\b/i.test(t)) {
+      contactCountry = t.match(/\b(switzerland|schweiz|deutschland|germany|france|austria|österreich|italy|italia)\b/i)?.[0] ?? "";
+    }
+  }
+
+  return { contactStreet, contactZip, contactCity, contactCountry };
 }
 
 export function parseBusinessCard(input: ParseBusinessCardInput): ParseBusinessCardResult {
   const rawText = (input.rawText || "").trim();
-  const lines = uniq(
-    rawText
-      .split(/\r?\n/g)
-      .map(cleanLine)
-      .filter((x) => x.length > 0)
+  const lines = rawText
+    .split(/\r?\n/)
+    .map(cleanLine)
+    .filter(Boolean);
+
+  const suggestions = emptySuggestions();
+
+  suggestions.contactEmail = detectEmail(rawText);
+
+  const phones = detectPhones(rawText);
+  suggestions.contactPhone = phones.phone;
+  suggestions.contactMobile = phones.mobile;
+
+  suggestions.contactWebsite = detectWebsite(rawText);
+
+  suggestions.contactCompany = detectCompany(lines);
+
+  const name = detectName(lines, suggestions.contactEmail, suggestions.contactCompany);
+  suggestions.contactFirstName = name.first;
+  suggestions.contactLastName = name.last;
+
+  suggestions.contactTitle = detectTitle(
+    lines,
+    suggestions.contactCompany,
+    suggestions.contactFirstName,
+    suggestions.contactLastName
   );
 
-  const joined = lines.join("\n");
+  const address = detectAddress(lines);
+  suggestions.contactStreet = address.contactStreet;
+  suggestions.contactZip = address.contactZip;
+  suggestions.contactCity = address.contactCity;
+  suggestions.contactCountry = address.contactCountry;
 
-  const suggestions: ContactSuggestions = {};
-
-  // Email
-  const email = firstMatch(joined, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  if (email) suggestions.contactEmail = email;
-
-  // Website
-  const url = firstMatch(joined, /(https?:\/\/[^\s]+|www\.[^\s]+)/i);
-  if (url) suggestions.contactWebsite = normalizeUrl(url);
-
-  // Phones (per line to detect labels)
-  const phoneCandidates: Array<{ kind: "mobile" | "phone"; value: string }> = [];
-  for (const l0 of lines) {
-    const l = cleanLine(l0);
-    // looks like phone
-    const m = l.match(/(\+?\d[\d\s().-]{5,}\d)/);
-    if (!m) continue;
-
-    const v = normalizePhone(m[1]);
-    const lower = l.toLowerCase();
-
-    if (/\b(mobile|handy|mobil|cell)\b/.test(lower)) phoneCandidates.push({ kind: "mobile", value: v });
-    else if (/\b(tel|phone|fon|direkt|direct)\b/.test(lower)) phoneCandidates.push({ kind: "phone", value: v });
-    else phoneCandidates.push({ kind: "phone", value: v });
-  }
-
-  const mobile = phoneCandidates.find((x) => x.kind === "mobile")?.value;
-  const phone = phoneCandidates.find((x) => x.kind === "phone")?.value;
-
-  if (mobile) suggestions.contactMobile = mobile;
-  if (phone) suggestions.contactPhone = phone;
-
-  // Company
-  const companyLine = lines.find((l) => looksLikeCompany(l)) || null;
-  if (companyLine) suggestions.contactCompany = companyLine;
-
-  // Name (prefer top lines)
-  let nameIdx = -1;
-  for (let i = 0; i < Math.min(lines.length, 5); i++) {
-    if (looksLikeName(lines[i])) {
-      nameIdx = i;
-      break;
-    }
-  }
-  if (nameIdx >= 0) {
-    const { first, last } = splitName(lines[nameIdx]);
-    if (first) suggestions.contactFirstName = first;
-    if (last) suggestions.contactLastName = last;
-
-    const title = pickTitle(lines, nameIdx);
-    if (title) suggestions.contactTitle = title;
-  }
-
-  // If company missing, try pick a strong uppercase-ish line (fallback)
-  if (!suggestions.contactCompany) {
-    const fallback = lines.find((l) => l.length >= 3 && !/@/.test(l) && !/\d/.test(l) && /[A-ZÄÖÜ]{2,}/.test(l));
-    if (fallback && !looksLikeName(fallback)) suggestions.contactCompany = fallback;
-  }
-
-  // Address
-  Object.assign(suggestions, parseAddress(lines));
-
-  // Final cleanup
-  for (const k of Object.keys(suggestions) as (keyof ContactSuggestions)[]) {
-    const v = suggestions[k];
-    if (typeof v === "string") {
-      const t = cleanLine(stripLabel(v));
-      if (!t) delete suggestions[k];
-      else suggestions[k] = t;
-    }
-  }
-
-  return {
-    suggestions,
-    debug: {
-      lines,
-      picked: {
-        email: suggestions.contactEmail || "",
-        website: suggestions.contactWebsite || "",
-      },
-    },
-  };
+  return { suggestions };
 }

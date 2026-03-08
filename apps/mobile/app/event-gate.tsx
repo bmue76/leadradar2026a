@@ -1,247 +1,261 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Linking as RNLinking, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { router } from "expo-router";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
-import { useRouter } from "expo-router";
 
 import { apiFetch } from "../src/lib/api";
 import { clearApiKey, getApiKey } from "../src/lib/auth";
-import { getLastActiveEventId, setActiveEventId } from "../src/lib/eventStorage";
-import { useBranding } from "../src/features/branding/useBranding";
+import { getActiveEventId, setActiveEventId } from "../src/lib/eventStorage";
 import { AppHeader } from "../src/ui/AppHeader";
 import { PoweredBy } from "../src/ui/PoweredBy";
 import { UI } from "../src/ui/tokens";
-import { ADMIN_URL } from "../src/lib/mobileConfig";
+import { useBranding } from "../src/features/branding/useBranding";
 
 type JsonObject = Record<string, unknown>;
-type ApiErrorShape = { code?: unknown; message?: unknown; details?: unknown };
-type ApiRespShape =
-  | { ok: true; data?: unknown; traceId?: unknown }
-  | { ok: false; error?: ApiErrorShape; traceId?: unknown; status?: unknown; message?: unknown };
 
 type EventItem = {
   id: string;
   name: string;
-  status?: string;
-  location?: string | null;
   startsAt?: string | null;
   endsAt?: string | null;
+  location?: string | null;
 };
 
 function isObject(v: unknown): v is JsonObject {
   return typeof v === "object" && v !== null;
 }
-function isApiResp(v: unknown): v is ApiRespShape {
-  return isObject(v) && typeof (v as { ok?: unknown }).ok === "boolean";
+
+function pickString(v: unknown): string | null {
+  return typeof v === "string" && v.trim().length ? v.trim() : null;
 }
-function asString(v: unknown): string {
-  return typeof v === "string" ? v : "";
-}
-function asNullableString(v: unknown): string | null {
-  return typeof v === "string" ? v : null;
-}
-function extractError(res: ApiRespShape): { status: number; code: string; message: string; traceId: string } {
-  const traceId = typeof res.traceId === "string" ? res.traceId : "";
-  const status = typeof (res as { status?: unknown }).status === "number" ? (res as { status: number }).status : 0;
-  const err = (res as { error?: ApiErrorShape }).error;
-  const code = err && typeof err.code === "string" ? err.code : "";
-  const msgFromErr = err && typeof err.message === "string" ? err.message : "";
-  const msgTop = typeof (res as { message?: unknown }).message === "string" ? (res as { message: string }).message : "";
-  const message = msgFromErr || msgTop || "Request failed";
-  return { status, code, message, traceId };
-}
-function normalizeEvents(data: unknown): EventItem[] {
-  if (!Array.isArray(data)) return [];
+
+function parseEvents(data: unknown): EventItem[] {
+  const arr = Array.isArray(data)
+    ? data
+    : isObject(data) && Array.isArray(data.events)
+      ? (data.events as unknown[])
+      : isObject(data) && Array.isArray(data.items)
+        ? (data.items as unknown[])
+        : [];
+
   const out: EventItem[] = [];
-  for (const r of data) {
-    if (!isObject(r)) continue;
-    const id = asString(r.id).trim();
-    const name = asString(r.name).trim();
-    if (!id || !name) continue;
-    out.push({
-      id,
-      name,
-      status: asString(r.status) || undefined,
-      location: asNullableString(r.location),
-      startsAt: asNullableString(r.startsAt),
-      endsAt: asNullableString(r.endsAt),
-    });
+  for (const it of arr) {
+    if (!isObject(it)) continue;
+    const id = pickString(it.id);
+    if (!id) continue;
+
+    const name = pickString(it.name) ?? id;
+    const startsAt = typeof it.startsAt === "string" ? it.startsAt : null;
+    const endsAt = typeof it.endsAt === "string" ? it.endsAt : null;
+    const location = typeof it.location === "string" ? it.location : null;
+
+    out.push({ id, name, startsAt, endsAt, location });
   }
   return out;
 }
 
-type UiState =
-  | { kind: "loading" }
-  | { kind: "empty" }
-  | { kind: "ready"; events: EventItem[] }
-  | { kind: "error"; message: string; traceId?: string; code?: string; status?: number };
-
-export default function EventGateScreen() {
-  const router = useRouter();
+export default function EventGate() {
   const insets = useSafeAreaInsets();
   const { state: brandingState, branding } = useBranding();
 
   const tenantName = brandingState.kind === "ready" ? branding.tenantName : null;
   const logoDataUrl = brandingState.kind === "ready" ? branding.logoDataUrl : null;
 
-  const [state, setState] = useState<UiState>({ kind: "loading" });
+  const [items, setItems] = useState<EventItem[]>([]);
+  const [activeId, setActiveIdState] = useState<string | null>(null);
 
-  const padBottom = useMemo(() => UI.tabBarBaseHeight + Math.max(insets.bottom, 0) + 28, [insets.bottom]);
+  const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const goProvision = useCallback(async () => {
+  const [errorTitle, setErrorTitle] = useState("");
+  const [errorDetail, setErrorDetail] = useState("");
+  const [traceId, setTraceId] = useState<string>("");
+
+  const listPadBottom = useMemo(
+    () => UI.tabBarBaseHeight + Math.max(insets.bottom, 0) + 28,
+    [insets.bottom]
+  );
+
+  const reActivate = useCallback(async () => {
     await clearApiKey();
     router.replace("/provision");
-  }, [router]);
+  }, []);
 
-  const openAdmin = useCallback(async () => {
-    if (!ADMIN_URL) {
-      Alert.alert("Admin", "ADMIN_URL ist nicht gesetzt. Öffne das Admin im Browser.");
-      return;
-    }
-    try {
-      await RNLinking.openURL(ADMIN_URL);
-    } catch {
-      Alert.alert("Admin öffnen", "Konnte Admin-URL nicht öffnen.");
-    }
+  const goForms = useCallback((eventId: string) => {
+    router.replace(`/forms?eventId=${encodeURIComponent(eventId)}`);
   }, []);
 
   const load = useCallback(async () => {
-    setState({ kind: "loading" });
+    setErrorTitle("");
+    setErrorDetail("");
+    setTraceId("");
+    setBusy(true);
 
-    const key = await getApiKey();
-    if (!key) {
-      router.replace("/provision");
-      return;
-    }
-
-    const raw = await apiFetch({
-      method: "GET",
-      path: "/api/mobile/v1/events/active",
-      apiKey: key,
-    });
-
-    if (!isApiResp(raw)) {
-      setState({ kind: "error", message: "Ungültige API-Antwort (Shape)." });
-      return;
-    }
-
-    if (!raw.ok) {
-      const { status, code, message, traceId } = extractError(raw);
-
-      if (status === 402 || code === "PAYMENT_REQUIRED") {
-        router.replace("/license");
+    try {
+      const key = await getApiKey();
+      if (!key) {
+        router.replace("/provision");
         return;
       }
 
-      if (status === 401 || code === "INVALID_API_KEY") {
-        await goProvision();
+      const currentActiveId = await getActiveEventId();
+      if (currentActiveId) setActiveIdState(currentActiveId);
+
+      const res = await apiFetch<unknown>({
+        method: "GET",
+        path: "/api/mobile/v1/events/active",
+        apiKey: key,
+        timeoutMs: 25_000,
+      });
+
+      if (!res.ok) {
+        const status = res.status ?? 0;
+        const code = res.code ?? "";
+        const tid = res.traceId ?? "";
+
+        if (status === 402 || code === "PAYMENT_REQUIRED") {
+          router.replace("/license");
+          return;
+        }
+
+        if (status === 401 || code === "INVALID_API_KEY") {
+          await reActivate();
+          return;
+        }
+
+        setItems([]);
+        setErrorTitle("Konnte Events nicht laden.");
+        setErrorDetail(`${res.message || `HTTP ${status || "?"}`}${tid ? ` (traceId: ${tid})` : ""}`);
+        setTraceId(tid);
         return;
       }
 
-      setState({ kind: "error", message: `HTTP ${status || "?"} — ${message}`, traceId, code, status });
-      return;
+      const evs = parseEvents(res.data);
+      setItems(evs);
+
+      if (evs.length === 1) {
+        await setActiveEventId(evs[0].id);
+        setActiveIdState(evs[0].id);
+        goForms(evs[0].id);
+        return;
+      }
+
+      if (currentActiveId && evs.length > 0 && !evs.some((e) => e.id === currentActiveId)) {
+        setActiveIdState(null);
+      }
+    } finally {
+      setBusy(false);
     }
-
-    const events = normalizeEvents(raw.data);
-
-    if (events.length === 0) {
-      setState({ kind: "empty" });
-      return;
-    }
-
-    // 1 active event => auto-select
-    if (events.length === 1) {
-      await setActiveEventId(events[0].id);
-      router.replace("/forms");
-      return;
-    }
-
-    // >1 => picker (optionally preselect last)
-    const last = await getLastActiveEventId();
-    if (last && events.some((e) => e.id === last)) {
-      // MVP-lean: still show picker, but we can set as current selection hint in picker screen via lastActive store.
-      // (Picker reads lastActive from storage)
-    }
-
-    setState({ kind: "ready", events });
-    router.replace("/events");
-  }, [goProvision, router]);
+  }, [goForms, reActivate]);
 
   useEffect(() => {
-    const t = setTimeout(() => {
-      void load();
-    }, 0);
-    return () => clearTimeout(t);
+    void load();
   }, [load]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await load();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [load]);
+
+  const showLoading = busy && items.length === 0 && !errorTitle;
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <StatusBar style="dark" backgroundColor={UI.bg} />
       <AppHeader title="Event wählen" tenantName={tenantName} logoDataUrl={logoDataUrl} />
 
-      <View style={[styles.body, { paddingBottom: padBottom }]}>
-        {state.kind === "loading" ? (
-          <View style={styles.card}>
+      {showLoading ? (
+        <View style={[styles.center, { paddingBottom: listPadBottom }]}>
+          <ActivityIndicator />
+          <Text style={styles.loadingText}>Events werden geladen …</Text>
+          <PoweredBy />
+        </View>
+      ) : errorTitle ? (
+        <View style={[styles.body, { paddingBottom: listPadBottom }]}>
+          <View style={styles.warnCard}>
+            <Text style={styles.warnTitle}>{errorTitle}</Text>
+            <Text style={styles.warnText}>{errorDetail || "Bitte nochmals versuchen."}</Text>
+            {traceId ? <Text style={styles.mono}>traceId: {traceId}</Text> : null}
+
             <View style={styles.row}>
-              <ActivityIndicator />
-              <Text style={styles.p}>Lade aktive Events…</Text>
+              <Pressable onPress={load} style={[styles.btn, styles.btnDark]}>
+                <Text style={styles.btnDarkText}>Erneut versuchen</Text>
+              </Pressable>
+
+              <Pressable onPress={reActivate} style={[styles.btn, styles.btnGhost]}>
+                <Text style={styles.btnGhostText}>Neu aktivieren</Text>
+              </Pressable>
             </View>
           </View>
-        ) : null}
 
-        {state.kind === "empty" ? (
-          <>
-            <View style={styles.card}>
-              <Text style={styles.h2}>Keine aktive Messe</Text>
-              <Text style={styles.p}>Im Moment ist kein Event aktiv. Aktiviere ein Event im Admin unter „Events“.</Text>
+          <PoweredBy />
+        </View>
+      ) : !busy && items.length === 0 ? (
+        <View style={[styles.body, { paddingBottom: listPadBottom }]}>
+          <View style={styles.card}>
+            <Text style={styles.h2}>Keine aktiven Events.</Text>
+            <Text style={styles.p}>
+              Für dieses Konto sind aktuell keine aktiven Messen verfügbar. Bitte im Admin prüfen (Event aktiv).
+            </Text>
 
-              <View style={{ marginTop: 12, gap: 10 }}>
-                <Pressable onPress={load} style={[styles.btn, styles.btnDark]}>
-                  <Text style={styles.btnDarkText}>Erneut prüfen</Text>
-                </Pressable>
+            <View style={styles.row}>
+              <Pressable onPress={load} style={[styles.btn, styles.btnDark, { marginTop: 10 }]}>
+                <Text style={styles.btnDarkText}>Aktualisieren</Text>
+              </Pressable>
 
-                <Pressable onPress={openAdmin} style={[styles.btn, styles.btnAccent]}>
-                  <Text style={styles.btnAccentText}>Admin öffnen</Text>
-                </Pressable>
-
-                <Pressable onPress={goProvision} style={styles.btnGhost}>
-                  <Text style={styles.btnGhostText}>Neu aktivieren</Text>
-                </Pressable>
-              </View>
+              <Pressable onPress={reActivate} style={[styles.btn, styles.btnGhost, { marginTop: 10 }]}>
+                <Text style={styles.btnGhostText}>Neu aktivieren</Text>
+              </Pressable>
             </View>
-            <PoweredBy />
-          </>
-        ) : null}
+          </View>
 
-        {state.kind === "error" ? (
-          <>
-            <View style={styles.warnCard}>
-              <Text style={styles.warnTitle}>Hinweis</Text>
-              <Text style={styles.warnText}>{state.message}</Text>
-              {state.traceId ? <Text style={styles.warnMeta}>Trace: {state.traceId}</Text> : null}
-
-              <View style={[styles.row, { marginTop: 12 }]}>
-                <Pressable onPress={load} style={[styles.btnSmall, styles.btnDark]}>
-                  <Text style={styles.btnDarkText}>Retry</Text>
-                </Pressable>
-                <Pressable onPress={goProvision} style={[styles.btnSmall, styles.btnAccent]}>
-                  <Text style={styles.btnAccentText}>Neu aktivieren</Text>
-                </Pressable>
-              </View>
-            </View>
-            <PoweredBy />
-          </>
-        ) : null}
-
-        {/* state.kind === "ready" is transitional; we already router.replace("/events") */}
-      </View>
+          <PoweredBy />
+        </View>
+      ) : (
+        <FlatList
+          data={items}
+          keyExtractor={(it) => it.id}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          contentContainerStyle={[styles.list, { paddingBottom: listPadBottom }]}
+          ListFooterComponent={<PoweredBy />}
+          renderItem={({ item }) => {
+            const selected = item.id === activeId;
+            return (
+              <Pressable
+                onPress={async () => {
+                  await setActiveEventId(item.id);
+                  setActiveIdState(item.id);
+                  goForms(item.id);
+                }}
+                style={[styles.eventCard, selected ? styles.eventCardSelected : null]}
+              >
+                <Text style={[styles.eventTitle, selected ? styles.eventTitleSelected : null]}>{item.name}</Text>
+                <Text style={[styles.eventId, selected ? styles.eventIdSelected : null]}>{item.id}</Text>
+                {item.location ? (
+                  <Text style={[styles.meta, selected ? styles.metaSelected : null]}>{item.location}</Text>
+                ) : null}
+              </Pressable>
+            );
+          }}
+        />
+      )}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: UI.bg },
+
+  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10, paddingHorizontal: UI.padX },
+  loadingText: { opacity: 0.7, fontWeight: "800", color: UI.text },
+
   body: { paddingHorizontal: UI.padX, paddingTop: 14, gap: 12 },
+  list: { paddingHorizontal: UI.padX, paddingTop: 14 },
 
   card: {
     backgroundColor: UI.bg,
@@ -260,20 +274,43 @@ const styles = StyleSheet.create({
   },
   warnTitle: { fontWeight: "900", color: "rgba(153,27,27,0.95)" },
   warnText: { marginTop: 6, color: "rgba(153,27,27,0.95)" },
-  warnMeta: { marginTop: 6, opacity: 0.7, color: "rgba(153,27,27,0.95)", fontFamily: "monospace" },
+  mono: { marginTop: 8, fontFamily: "monospace", color: UI.text, opacity: 0.75 },
 
-  row: { flexDirection: "row", alignItems: "center", gap: 10 },
+  row: { flexDirection: "row", gap: 10, marginTop: 12 },
 
-  h2: { fontWeight: "900", color: UI.text, fontSize: 16 },
-  p: { marginTop: 6, opacity: 0.75, color: UI.text },
-
-  btn: { paddingVertical: 12, borderRadius: 14, alignItems: "center" },
-  btnSmall: { flex: 1, paddingVertical: 12, borderRadius: 14, alignItems: "center" },
+  btn: { flex: 1, paddingVertical: 12, borderRadius: 14, alignItems: "center" },
   btnDark: { backgroundColor: UI.text },
   btnDarkText: { color: "white", fontWeight: "900" },
-  btnAccent: { backgroundColor: UI.accent },
-  btnAccentText: { color: "white", fontWeight: "900" },
 
-  btnGhost: { height: 44, borderRadius: 14, alignItems: "center", justifyContent: "center" },
-  btnGhostText: { fontSize: 14, fontWeight: "900", color: "rgba(0,0,0,0.48)" },
+  btnGhost: {
+    backgroundColor: "rgba(0,0,0,0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.06)",
+  },
+  btnGhostText: { fontWeight: "900", color: "rgba(0,0,0,0.55)" },
+
+  h2: { fontWeight: "900", color: UI.text },
+  p: { marginTop: 6, opacity: 0.75, color: UI.text },
+
+  eventCard: {
+    padding: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: UI.border,
+    marginBottom: 10,
+    backgroundColor: UI.bg,
+  },
+  eventCardSelected: {
+    borderColor: UI.text,
+    backgroundColor: "rgba(17,24,39,0.04)",
+  },
+
+  eventTitle: { fontWeight: "900", color: UI.text, marginBottom: 6 },
+  eventTitleSelected: { color: UI.text },
+
+  eventId: { opacity: 0.7, fontFamily: "monospace", color: UI.text, marginBottom: 6 },
+  eventIdSelected: { opacity: 0.9 },
+
+  meta: { opacity: 0.8, color: UI.text },
+  metaSelected: { opacity: 0.95 },
 });

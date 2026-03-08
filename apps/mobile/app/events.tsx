@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { useRouter } from "expo-router";
@@ -30,15 +30,19 @@ type EventItem = {
 function isObject(v: unknown): v is JsonObject {
   return typeof v === "object" && v !== null;
 }
+
 function isApiResp(v: unknown): v is ApiRespShape {
   return isObject(v) && typeof (v as { ok?: unknown }).ok === "boolean";
 }
+
 function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
+
 function asNullableString(v: unknown): string | null {
   return typeof v === "string" ? v : null;
 }
+
 function extractError(res: ApiRespShape): { status: number; code: string; message: string; traceId: string } {
   const traceId = typeof res.traceId === "string" ? res.traceId : "";
   const status = typeof (res as { status?: unknown }).status === "number" ? (res as { status: number }).status : 0;
@@ -49,6 +53,7 @@ function extractError(res: ApiRespShape): { status: number; code: string; messag
   const message = msgFromErr || msgTop || "Request failed";
   return { status, code, message, traceId };
 }
+
 function normalizeEvents(data: unknown): EventItem[] {
   if (!Array.isArray(data)) return [];
   const out: EventItem[] = [];
@@ -73,7 +78,11 @@ function fmtDate(iso?: string | null): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString("de-CH", { year: "numeric", month: "2-digit", day: "2-digit" });
+  return d.toLocaleDateString("de-CH", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
 }
 
 export default function EventPickerScreen() {
@@ -88,10 +97,12 @@ export default function EventPickerScreen() {
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [errorText, setErrorText] = useState<string>("");
-
   const [lastId, setLastId] = useState<string | null>(null);
 
-  const listPadBottom = useMemo(() => UI.tabBarBaseHeight + Math.max(insets.bottom, 0) + 28, [insets.bottom]);
+  const listPadBottom = useMemo(
+    () => UI.tabBarBaseHeight + Math.max(insets.bottom, 0) + 28,
+    [insets.bottom]
+  );
 
   const reActivate = useCallback(async () => {
     await clearApiKey();
@@ -116,6 +127,7 @@ export default function EventPickerScreen() {
         method: "GET",
         path: "/api/mobile/v1/events/active",
         apiKey: key,
+        timeoutMs: 25_000,
       });
 
       if (!isApiResp(raw)) {
@@ -186,7 +198,10 @@ export default function EventPickerScreen() {
       <StatusBar style="dark" backgroundColor={UI.bg} />
       <AppHeader title="Event auswählen" tenantName={tenantName} logoDataUrl={logoDataUrl} />
 
-      <View style={[styles.body, { paddingBottom: listPadBottom }]}>
+      <ScrollView
+        contentContainerStyle={[styles.body, { paddingBottom: listPadBottom }]}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
         {errorText ? (
           <View style={styles.warnCard}>
             <Text style={styles.warnTitle}>Hinweis</Text>
@@ -255,12 +270,7 @@ export default function EventPickerScreen() {
         </View>
 
         <PoweredBy />
-      </View>
-
-      {/* Pull-to-refresh alternative (simple) */}
-      <View style={{ position: "absolute", left: -9999, top: -9999 }}>
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -287,10 +297,20 @@ const styles = StyleSheet.create({
   warnTitle: { fontWeight: "900", color: "rgba(153,27,27,0.95)" },
   warnText: { marginTop: 6, color: "rgba(153,27,27,0.95)" },
 
-  h2: { fontWeight: "900", color: UI.text, fontSize: 16 },
-  p: { marginTop: 6, opacity: 0.75, color: UI.text },
-
+  row: { flexDirection: "row", gap: 10, marginTop: 12 },
   loadingRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+
+  btn: { flex: 1, paddingVertical: 12, borderRadius: 14, alignItems: "center" },
+  btnWide: { paddingVertical: 12, borderRadius: 14, alignItems: "center" },
+
+  btnDark: { backgroundColor: UI.text },
+  btnDarkText: { color: "white", fontWeight: "900" },
+
+  btnAccent: { backgroundColor: UI.accent },
+  btnAccentText: { color: "white", fontWeight: "900" },
+
+  h2: { fontWeight: "900", color: UI.text },
+  p: { marginTop: 6, opacity: 0.75, color: UI.text },
 
   eventCard: {
     padding: 14,
@@ -299,28 +319,18 @@ const styles = StyleSheet.create({
     borderColor: UI.border,
     backgroundColor: UI.bg,
   },
-  eventTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 10 },
-  eventTitle: { fontWeight: "900", color: UI.text, flexShrink: 1 },
-  eventMeta: { marginTop: 6, opacity: 0.75, color: UI.text, fontWeight: "700" },
-  eventId: { opacity: 0.7, marginTop: 6, fontFamily: "monospace", color: UI.text },
+  eventTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
+  eventTitle: { fontWeight: "900", color: UI.text, flex: 1 },
+  eventMeta: { marginTop: 6, color: UI.text, opacity: 0.75 },
+  eventId: { marginTop: 8, fontFamily: "monospace", color: UI.text, opacity: 0.65 },
 
   pill: {
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.08)",
-    backgroundColor: "rgba(255,255,255,0.9)",
+    backgroundColor: "rgba(0,0,0,0.06)",
+    color: UI.text,
     fontWeight: "900",
-    fontSize: 12,
-    color: UI.accent,
+    overflow: "hidden",
   },
-
-  row: { flexDirection: "row", gap: 10, marginTop: 12 },
-  btn: { flex: 1, paddingVertical: 12, borderRadius: 14, alignItems: "center" },
-  btnWide: { paddingVertical: 12, borderRadius: 14, alignItems: "center" },
-  btnDark: { backgroundColor: UI.text },
-  btnDarkText: { color: "white", fontWeight: "900" },
-  btnAccent: { backgroundColor: UI.accent },
-  btnAccentText: { color: "white", fontWeight: "900" },
 });

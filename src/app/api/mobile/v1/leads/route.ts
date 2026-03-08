@@ -1,19 +1,52 @@
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { jsonError, jsonOk } from "@/lib/api";
-import { isHttpError, validateBody } from "@/lib/http";
+import { httpError, isHttpError, validateBody } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { requireMobileAuth } from "@/lib/mobileAuth";
 import { enforceRateLimit } from "@/lib/rateLimit";
 import { enforceMobileCaptureLicense } from "@/lib/billing/mobileCaptureGate";
 
-const BodySchema = z.object({
-  formId: z.string().min(1),
-  clientLeadId: z.string().min(1).max(200),
-  capturedAt: z.string().min(1),
-  values: z.record(z.string(), z.unknown()),
-  meta: z.record(z.string(), z.unknown()).optional(),
-});
+export const runtime = "nodejs";
+
+const BodySchema = z
+  .object({
+    clientLeadId: z.preprocess((v) => (typeof v === "string" ? v.trim() : ""), z.string().min(1).max(64)),
+    formId: z.preprocess((v) => (typeof v === "string" ? v.trim() : ""), z.string().min(1).max(64)),
+    capturedAt: z.preprocess((v) => (typeof v === "string" ? v.trim() : ""), z.string().min(1).max(64)),
+    eventId: z.preprocess((v) => (typeof v === "string" ? v.trim() : ""), z.string().min(1).max(64)),
+    values: z.record(z.string(), z.unknown()),
+    meta: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+function parseIsoDateOrThrow(v: string): Date {
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) {
+    throw httpError(400, "INVALID_BODY", "Invalid request body.", { capturedAt: "invalid_date" });
+  }
+  return d;
+}
+
+function pickPrismaCode(e: unknown): string | undefined {
+  // PrismaClientKnownRequestError has .code like "P2002"
+  if (!isRecord(e)) return undefined;
+  const code = e["code"];
+  return typeof code === "string" ? code : undefined;
+}
+
+function toJsonInput(v: unknown, fieldName: string): Prisma.InputJsonValue {
+  try {
+    // Remove undefined / functions; ensure strict JSON serializability
+    return JSON.parse(JSON.stringify(v)) as Prisma.InputJsonValue;
+  } catch {
+    throw httpError(400, "INVALID_BODY", "Invalid request body.", { [fieldName]: "not_json_serializable" });
+  }
+}
 
 export async function POST(req: Request) {
   try {
@@ -21,82 +54,89 @@ export async function POST(req: Request) {
 
     enforceRateLimit(`mobile:${auth.apiKeyId}`, { limit: 60, windowMs: 60_000 });
 
-    // Hardblock: Mobile Capture only
     await enforceMobileCaptureLicense(auth.tenantId);
 
-    const body = await validateBody(req, BodySchema, 1024 * 1024); // 1MB
-    const capturedAt = new Date(body.capturedAt);
-    if (Number.isNaN(capturedAt.getTime())) {
-      return jsonError(req, 400, "INVALID_BODY", "Invalid request body.", {
-        capturedAt: ["Invalid ISO datetime."],
-      });
-    }
+    // Ops telemetry (like events/active)
+    const now = new Date();
+    await prisma.mobileApiKey.update({ where: { id: auth.apiKeyId }, data: { lastUsedAt: now } });
+    await prisma.mobileDevice.update({ where: { id: auth.deviceId }, data: { lastSeenAt: now } });
 
-    // Multi-ACTIVE: capture context is per device (MobileDevice.activeEventId).
-    // If device not bound OR event not ACTIVE => leak-safe 404.
-    const device = await prisma.mobileDevice.findFirst({
-      where: { id: auth.deviceId, tenantId: auth.tenantId },
-      select: {
-        activeEventId: true,
-        activeEvent: { select: { id: true, status: true } },
-      },
+    const body = await validateBody(req, BodySchema);
+
+    const clientLeadId = body.clientLeadId;
+    const formId = body.formId;
+    const eventId = body.eventId;
+    const capturedAt = parseIsoDateOrThrow(body.capturedAt);
+
+    const valuesJson = toJsonInput(body.values, "values");
+    const metaObj = {
+      ...(isRecord(body.meta) ? body.meta : {}),
+      eventId,
+      capturedByDeviceId: auth.deviceId,
+    };
+    const metaJson = toJsonInput(metaObj, "meta");
+
+    // Validate event (tenant-scoped) must be ACTIVE
+    const ev = await prisma.event.findFirst({
+      where: { id: eventId, tenantId: auth.tenantId },
+      select: { id: true, status: true },
     });
+    if (!ev) throw httpError(404, "NOT_FOUND", "Not found.");
+    if (ev.status !== "ACTIVE") throw httpError(409, "EVENT_NOT_ACTIVE", "Event not active.");
 
-    if (!device?.activeEventId) {
-      return jsonError(req, 404, "NOT_FOUND", "Not found.");
-    }
-    if (!device.activeEvent || device.activeEvent.status !== "ACTIVE") {
-      return jsonError(req, 404, "NOT_FOUND", "Not found.");
-    }
-
-    const eventId = device.activeEventId;
-
-    // leak-safe: require assignment (and ACTIVE form) AND form assigned to this device event
-    const assignment = await prisma.mobileDeviceForm.findFirst({
+    // Visibility rule (same as form detail):
+    // assigned to event OR global
+    const form = await prisma.form.findFirst({
       where: {
+        id: formId,
         tenantId: auth.tenantId,
-        deviceId: auth.deviceId,
-        formId: body.formId,
-        form: { status: "ACTIVE", assignedEventId: eventId },
+        status: "ACTIVE",
+        OR: [
+          { eventAssignments: { some: { tenantId: auth.tenantId, eventId } } },
+          { eventAssignments: { none: {} } },
+        ],
       },
-      select: { formId: true },
+      select: { id: true },
     });
-    if (!assignment) {
-      return jsonError(req, 404, "NOT_FOUND", "Not found.");
-    }
+    if (!form) throw httpError(404, "NOT_FOUND", "Not found.");
 
     // Idempotency: (tenantId, clientLeadId)
     const existing = await prisma.lead.findFirst({
-      where: { tenantId: auth.tenantId, clientLeadId: body.clientLeadId },
+      where: { tenantId: auth.tenantId, clientLeadId },
       select: { id: true },
     });
-
     if (existing) {
       return jsonOk(req, { leadId: existing.id, deduped: true });
     }
 
-    const valuesJson = body.values as unknown as Prisma.InputJsonValue;
-    const metaJson = ({
-      ...(body.meta ?? {}),
-      source: "mobile",
-      mobileDeviceId: auth.deviceId,
-      mobileApiKeyPrefix: auth.apiKeyPrefix,
-    } as unknown) as Prisma.InputJsonValue;
+    try {
+      // IMPORTANT: store eventId on lead (Admin lists are often event-scoped)
+      const created = await prisma.lead.create({
+        data: {
+          tenantId: auth.tenantId,
+          formId,
+          eventId,
+          clientLeadId,
+          capturedAt,
+          values: valuesJson,
+          meta: metaJson,
+        },
+        select: { id: true },
+      });
 
-    const lead = await prisma.lead.create({
-      data: {
-        tenantId: auth.tenantId,
-        formId: body.formId,
-        clientLeadId: body.clientLeadId,
-        capturedAt,
-        values: valuesJson,
-        meta: metaJson,
-        eventId,
-      },
-      select: { id: true },
-    });
-
-    return jsonOk(req, { leadId: lead.id, deduped: false });
+      return jsonOk(req, { leadId: created.id, deduped: false });
+    } catch (e) {
+      // Race: unique constraint (P2002) => fetch existing and return deduped
+      if (pickPrismaCode(e) === "P2002") {
+        const again = await prisma.lead.findFirst({
+          where: { tenantId: auth.tenantId, clientLeadId },
+          select: { id: true },
+        });
+        if (again) return jsonOk(req, { leadId: again.id, deduped: true });
+        throw httpError(409, "KEY_CONFLICT", "Lead already exists.");
+      }
+      throw e;
+    }
   } catch (e) {
     if (isHttpError(e)) return jsonError(req, e.status, e.code, e.message, e.details);
     return jsonError(req, 500, "INTERNAL", "Unexpected error.");

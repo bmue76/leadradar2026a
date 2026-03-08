@@ -1,7 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import { apiFetch } from "./api";
+import { clearApiKey, setApiKey } from "./auth";
 import { getAppSettings, normalizeTenantSlug } from "./appSettings";
+import { clearStoredAuth, setStoredAuth } from "./mobileStorage";
 import { parseProvisionToken } from "./tokenParse";
 import { fetchLicense } from "./mobileApi";
 
@@ -92,7 +94,11 @@ export function LicenseGateProvider(props: { children: React.ReactNode }) {
   const derived = useMemo(() => deriveLicenseGate(state), [state]);
 
   const clear = useCallback(async () => {
-    await clearLicenseState();
+    await Promise.all([
+      clearLicenseState(),
+      clearStoredAuth(),
+      clearApiKey(),
+    ]);
     setState(null);
   }, []);
 
@@ -148,7 +154,11 @@ export function LicenseGateProvider(props: { children: React.ReactNode }) {
     const tenantSlug = normalizeTenantSlug(settings.tenantSlug);
 
     if (!tenantSlug) {
-      return { ok: false, code: "TENANT_REQUIRED", message: "Konto-Kürzel ist ungültig. Bitte in den Einstellungen prüfen." };
+      return {
+        ok: false,
+        code: "TENANT_REQUIRED",
+        message: "Konto-Kürzel ist ungültig. Bitte in den Einstellungen prüfen.",
+      };
     }
 
     try {
@@ -164,7 +174,8 @@ export function LicenseGateProvider(props: { children: React.ReactNode }) {
       const traceId = pickTraceId(res);
 
       if (isApiErr(res)) {
-        const msg = res.error.message ?? "Aktivierung fehlgeschlagen. Bitte prüfe den Code und versuche es erneut.";
+        const msg =
+          res.error.message ?? "Aktivierung fehlgeschlagen. Bitte prüfe den Code und versuche es erneut.";
         const errCode = typeof res.error.code === "string" ? res.error.code : undefined;
         return { ok: false, message: msg, code: errCode, traceId };
       }
@@ -176,11 +187,21 @@ export function LicenseGateProvider(props: { children: React.ReactNode }) {
       const data = res.data;
 
       const apiKey = pickString(data, "apiKey");
-      const deviceId = pickString(data, "deviceId");
+      const deviceId = pickString(data, "deviceId") ?? "";
 
       if (!apiKey) {
         return { ok: false, message: "Aktivierung fehlgeschlagen. Kein apiKey erhalten.", traceId };
       }
+
+      // Auth + mobile storage sofort synchronisieren
+      await Promise.all([
+        setApiKey(apiKey),
+        setStoredAuth({
+          tenantSlug,
+          apiKey,
+          deviceId,
+        }),
+      ]);
 
       // Optional: direkt Lizenzstatus prüfen, um expiresAt (endsAt) zu setzen
       let expiresAt: string | undefined;
@@ -189,7 +210,6 @@ export function LicenseGateProvider(props: { children: React.ReactNode }) {
         expiresAt = lic.endsAt ?? undefined;
 
         if (!lic.isActive) {
-          // Gate soll greifen -> INACTIVE speichern
           const nextInactive: LicenseStateV1 = {
             status: "INACTIVE",
             apiKey,
@@ -198,6 +218,7 @@ export function LicenseGateProvider(props: { children: React.ReactNode }) {
             lastCheckedAt: nowIso,
             expiresAt,
           };
+
           await saveLicenseState(nextInactive);
           setState(nextInactive);
 

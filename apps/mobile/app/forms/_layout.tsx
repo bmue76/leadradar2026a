@@ -3,11 +3,9 @@ import { Stack } from "expo-router";
 
 export default function FormsLayout() {
   return (
-    <Stack
-      screenOptions={{
-        headerShown: false,
-        animation: "fade",
-      }}
-    />
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="index" />
+      <Stack.Screen name="[id]" />
+    </Stack>
   );
 }

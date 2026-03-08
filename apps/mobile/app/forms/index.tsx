@@ -35,7 +35,12 @@ function isApiResp(v: unknown): v is ApiRespShape {
 }
 
 function parseForms(data: unknown): FormListItem[] {
-  const arr = Array.isArray(data) ? data : isObject(data) && Array.isArray(data.forms) ? (data.forms as unknown[]) : [];
+  const arr =
+    Array.isArray(data) ? data :
+    isObject(data) && Array.isArray(data.forms) ? (data.forms as unknown[]) :
+    isObject(data) && Array.isArray(data.items) ? (data.items as unknown[]) :
+    [];
+
   const out: FormListItem[] = [];
 
   for (const it of arr) {
@@ -138,7 +143,6 @@ export default function FormsIndex() {
           return;
         }
 
-        // Event not active / not found => event gate
         if (code === "EVENT_NOT_ACTIVE" || code === "NOT_FOUND") {
           router.replace("/event-gate");
           return;
@@ -146,9 +150,7 @@ export default function FormsIndex() {
 
         setItems([]);
         setErrorTitle("Konnte Formulare nicht laden.");
-        setErrorDetail(
-          `HTTP ${status || "?"} — ${message}${traceId ? ` (traceId: ${traceId})` : ""}`
-        );
+        setErrorDetail(`HTTP ${status || "?"} — ${message}${traceId ? ` (traceId: ${traceId})` : ""}`);
         return;
       }
 
@@ -204,7 +206,7 @@ export default function FormsIndex() {
 
             <View style={styles.row}>
               <Pressable onPress={load} style={[styles.btn, styles.btnDark]}>
-                <Text style={styles.btnDarkText}>Retry</Text>
+                <Text style={styles.btnDarkText}>Erneut versuchen</Text>
               </Pressable>
 
               <Pressable onPress={goEventGate} style={[styles.btn, styles.btnAccent]}>
@@ -224,7 +226,7 @@ export default function FormsIndex() {
           <View style={styles.card}>
             <Text style={styles.h2}>Keine Formulare verfügbar.</Text>
             <Text style={styles.p}>
-              Dieses Event hat aktuell keine aktiven Formulare (Global oder Event-Zuweisung). Setze im Admin im Formular die Sichtbarkeit.
+              Dieses Event hat aktuell keine aktiven Formulare (Global oder Event-Zuweisung). Prüfe im Admin: Formular ACTIVE + Sichtbarkeit/Assignment für dieses Event.
             </Text>
 
             <View style={styles.row}>
@@ -284,13 +286,7 @@ const styles = StyleSheet.create({
   body: { paddingHorizontal: UI.padX, paddingTop: 14, gap: 12 },
   list: { paddingHorizontal: UI.padX, paddingTop: 14 },
 
-  card: {
-    backgroundColor: UI.bg,
-    borderRadius: 16,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: UI.border,
-  },
+  card: { backgroundColor: UI.bg, borderRadius: 16, padding: 14, borderWidth: 1, borderColor: UI.border },
 
   warnCard: {
     borderRadius: 16,
