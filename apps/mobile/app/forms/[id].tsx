@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -14,7 +14,7 @@ import {
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
-import { CameraView, useCameraPermissions, type BarcodeScanningResult } from "expo-camera";
+import { Camera, CameraView, useCameraPermissions, type BarcodeScanningResult } from "expo-camera";
 import * as Clipboard from "expo-clipboard";
 import * as Contacts from "expo-contacts";
 import * as ImagePicker from "expo-image-picker";
@@ -28,6 +28,13 @@ import {
   uploadLeadAttachment,
 } from "../../src/lib/api";
 import { clearApiKey, getApiKey } from "../../src/lib/auth";
+import {
+  chooseBestQrCandidate,
+  parseQrContactData,
+  prettyQrPreview,
+  seemsWeakText,
+  type ParsedQrContactData,
+} from "../../src/lib/qrContact";
 import { getActiveEventId } from "../../src/lib/eventStorage";
 import { recognizeTextFromBusinessCard } from "../../src/ocr/recognizeText";
 import { parseBusinessCard } from "../../src/ocr/parseBusinessCard";
@@ -456,40 +463,6 @@ function hasAnySuggestion(s: ContactSuggestions): boolean {
   return Object.values(s).some((v) => typeof v === "string" && v.trim().length > 0);
 }
 
-function hasOnlyNameSuggestion(s: ContactSuggestions): boolean {
-  const first = sstr(s.contactFirstName);
-  const last = sstr(s.contactLastName);
-  const rest = [
-    s.contactCompany,
-    s.contactTitle,
-    s.contactEmail,
-    s.contactPhone,
-    s.contactMobile,
-    s.contactWebsite,
-    s.contactStreet,
-    s.contactZip,
-    s.contactCity,
-    s.contactCountry,
-  ].some((v) => sstr(v).length > 0);
-
-  return !rest && (first.length > 0 || last.length > 0);
-}
-
-function summaryFromSuggestions(s: ContactSuggestions): string {
-  const labels: string[] = [];
-  if (sstr(s.contactFirstName) || sstr(s.contactLastName)) labels.push("Name");
-  if (sstr(s.contactCompany)) labels.push("Firma");
-  if (sstr(s.contactTitle)) labels.push("Funktion");
-  if (sstr(s.contactEmail)) labels.push("E-Mail");
-  if (sstr(s.contactPhone)) labels.push("Telefon");
-  if (sstr(s.contactMobile)) labels.push("Mobile");
-  if (sstr(s.contactWebsite)) labels.push("Website");
-  if (sstr(s.contactStreet) || sstr(s.contactZip) || sstr(s.contactCity) || sstr(s.contactCountry)) {
-    labels.push("Adresse");
-  }
-  return labels.join(", ");
-}
-
 function applySuggestionsToValues(
   contactFields: FormFieldDTO[],
   values: Record<string, unknown>,
@@ -564,25 +537,6 @@ function smallHash(input: string): string {
   return `h${(h >>> 0).toString(16)}`;
 }
 
-function seemsWeakText(rawText: string): boolean {
-  const txt = (rawText || "").trim();
-  if (!txt) return true;
-  const alnum = txt.replace(/[^a-zA-Z0-9]/g, "");
-  const lines = txt.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
-  if (alnum.length < 28) return true;
-  if (lines.length < 2) return true;
-  return false;
-}
-
-function unescapeVCardValue(s: string): string {
-  return s
-    .replace(/\\n/gi, "\n")
-    .replace(/\\,/g, ",")
-    .replace(/\\;/g, ";")
-    .replace(/\\\\/g, "\\")
-    .trim();
-}
-
 function splitName(fullName: string): { first?: string; last?: string } {
   const t = fullName.trim();
   if (!t) return {};
@@ -591,367 +545,66 @@ function splitName(fullName: string): { first?: string; last?: string } {
   return { first: parts.slice(0, -1).join(" "), last: parts.slice(-1).join(" ") };
 }
 
-function parseVCard(text: string): ContactSuggestions {
-  const out: ContactSuggestions = {
-    contactFirstName: "",
-    contactLastName: "",
-    contactCompany: "",
-    contactTitle: "",
-    contactEmail: "",
-    contactPhone: "",
-    contactMobile: "",
-    contactWebsite: "",
-    contactStreet: "",
-    contactZip: "",
-    contactCity: "",
-    contactCountry: "",
-  };
-
-  const lines = text.replace(/\r\n[ \t]/g, "").split(/\r?\n/);
-
-  for (const line of lines) {
-    const idx = line.indexOf(":");
-    if (idx < 0) continue;
-
-    const rawKey = line.slice(0, idx);
-    const rawVal = unescapeVCardValue(line.slice(idx + 1));
-    const key = rawKey.split(";")[0].toUpperCase();
-    const rawKeyUpper = rawKey.toUpperCase();
-
-    if (!rawVal) continue;
-
-    if (key === "N") {
-      const parts = rawVal.split(";");
-      const last = parts[0]?.trim();
-      const first = parts[1]?.trim();
-      if (first) out.contactFirstName = first;
-      if (last) out.contactLastName = last;
-      continue;
-    }
-
-    if (key === "FN") {
-      if (!out.contactFirstName && !out.contactLastName) {
-        const split = splitName(rawVal);
-        if (split.first) out.contactFirstName = split.first;
-        if (split.last) out.contactLastName = split.last;
-      }
-      continue;
-    }
-
-    if (key === "ORG") {
-      out.contactCompany = rawVal;
-      continue;
-    }
-
-    if (key === "TITLE") {
-      out.contactTitle = rawVal;
-      continue;
-    }
-
-    if (key === "EMAIL") {
-      if (!out.contactEmail) out.contactEmail = rawVal;
-      continue;
-    }
-
-    if (key === "TEL") {
-      if (rawKeyUpper.includes("CELL") || rawKeyUpper.includes("MOBILE")) {
-        if (!out.contactMobile) out.contactMobile = rawVal;
-      } else if (!out.contactPhone) {
-        out.contactPhone = rawVal;
-      }
-      continue;
-    }
-
-    if (key === "URL") {
-      if (!out.contactWebsite) out.contactWebsite = normalizeWebsiteValue(rawVal);
-      continue;
-    }
-
-    if (key === "ADR") {
-      const parts = rawVal.split(";");
-      const street = parts[2]?.trim();
-      const city = parts[3]?.trim();
-      const zip = parts[5]?.trim();
-      const country = parts[6]?.trim();
-
-      if (street && !out.contactStreet) out.contactStreet = street;
-      if (zip && !out.contactZip) out.contactZip = zip;
-      if (city && !out.contactCity) out.contactCity = city;
-      if (country && !out.contactCountry) out.contactCountry = country;
-      continue;
-    }
-  }
-
-  return normalizeSuggestions(out);
+function hasRobustContactSuggestion(s: ContactSuggestions): boolean {
+  return [
+    s.contactEmail,
+    s.contactPhone,
+    s.contactMobile,
+    s.contactWebsite,
+    s.contactCompany,
+    s.contactTitle,
+    s.contactStreet,
+    s.contactZip,
+    s.contactCity,
+    s.contactCountry,
+  ].some((v) => sstr(v).length > 0);
 }
 
-function parseMeCard(text: string): ContactSuggestions {
-  const out: ContactSuggestions = {
-    contactFirstName: "",
-    contactLastName: "",
-    contactCompany: "",
-    contactTitle: "",
-    contactEmail: "",
-    contactPhone: "",
-    contactMobile: "",
-    contactWebsite: "",
-    contactStreet: "",
-    contactZip: "",
-    contactCity: "",
-    contactCountry: "",
-  };
-
-  const body = text.replace(/^MECARD:/i, "").replace(/;;$/, "");
-  const parts = body.split(";");
-
-  for (const part of parts) {
-    const idx = part.indexOf(":");
-    if (idx < 0) continue;
-
-    const key = part.slice(0, idx).trim().toUpperCase();
-    const val = part.slice(idx + 1).trim();
-    if (!val) continue;
-
-    if (key === "N") {
-      if (val.includes(",")) {
-        const [last, first] = val.split(",");
-        if (first?.trim()) out.contactFirstName = first.trim();
-        if (last?.trim()) out.contactLastName = last.trim();
-      } else {
-        const split = splitName(val);
-        if (split.first) out.contactFirstName = split.first;
-        if (split.last) out.contactLastName = split.last;
-      }
-      continue;
-    }
-
-    if (key === "EMAIL") {
-      out.contactEmail = val;
-      continue;
-    }
-
-    if (key === "TEL") {
-      if (!out.contactPhone) out.contactPhone = val;
-      continue;
-    }
-
-    if (key === "ORG") {
-      out.contactCompany = val;
-      continue;
-    }
-
-    if (key === "TITLE") {
-      out.contactTitle = val;
-      continue;
-    }
-
-    if (key === "URL") {
-      out.contactWebsite = normalizeWebsiteValue(val);
-      continue;
-    }
-
-    if (key === "ADR") {
-      out.contactStreet = val;
-      continue;
-    }
-  }
-
-  return normalizeSuggestions(out);
+function shouldApplyQrSuggestions(parsed: ParsedQrContactData): boolean {
+  if (!parsed.hasAnySuggestion) return false;
+  if (parsed.hasOnlyNameSuggestion) return false;
+  if (hasRobustContactSuggestion(parsed.suggestions)) return true;
+  return parsed.confidence === "HIGH" || parsed.confidence === "MEDIUM";
 }
 
-function parseBizCard(text: string): ContactSuggestions {
-  const out: ContactSuggestions = {
-    contactFirstName: "",
-    contactLastName: "",
-    contactCompany: "",
-    contactTitle: "",
-    contactEmail: "",
-    contactPhone: "",
-    contactMobile: "",
-    contactWebsite: "",
-    contactStreet: "",
-    contactZip: "",
-    contactCity: "",
-    contactCountry: "",
-  };
-
-  const body = text.replace(/^BIZCARD:/i, "");
-  const parts = body.split(";");
-
-  for (const part of parts) {
-    const idx = part.indexOf(":");
-    if (idx < 0) continue;
-
-    const key = part.slice(0, idx).trim().toUpperCase();
-    const val = part.slice(idx + 1).trim();
-    if (!val) continue;
-
-    if (key === "N") {
-      out.contactFirstName = val;
-      continue;
-    }
-
-    if (key === "X") {
-      out.contactLastName = val;
-      continue;
-    }
-
-    if (key === "C") {
-      out.contactCompany = val;
-      continue;
-    }
-
-    if (key === "T") {
-      out.contactTitle = val;
-      continue;
-    }
-
-    if (key === "E") {
-      out.contactEmail = val;
-      continue;
-    }
-
-    if (key === "B") {
-      out.contactPhone = val;
-      continue;
-    }
-
-    if (key === "M") {
-      out.contactMobile = val;
-      continue;
-    }
-
-    if (key === "A") {
-      if (!out.contactStreet) out.contactStreet = val;
-      continue;
-    }
-
-    if (key === "W" || key === "URL") {
-      out.contactWebsite = normalizeWebsiteValue(val);
-      continue;
-    }
+function labelQrFormat(format: string): string {
+  switch (format) {
+    case "VCARD":
+      return "vCard";
+    case "MECARD":
+      return "MECARD";
+    case "BIZCARD":
+      return "BIZCARD";
+    case "MAILTO":
+      return "mailto";
+    case "TEL":
+      return "tel";
+    case "MATMSG":
+      return "MATMSG";
+    case "JSON":
+      return "JSON";
+    case "KV":
+      return "Text / Schlüsselwerte";
+    case "URI":
+      return "Link / URI";
+    case "TEXT":
+      return "Freitext";
+    default:
+      return "Unbekannt";
   }
-
-  return normalizeSuggestions(out);
 }
 
-function parseMailto(text: string): ContactSuggestions {
-  const out: ContactSuggestions = {
-    contactFirstName: "",
-    contactLastName: "",
-    contactCompany: "",
-    contactTitle: "",
-    contactEmail: "",
-    contactPhone: "",
-    contactMobile: "",
-    contactWebsite: "",
-    contactStreet: "",
-    contactZip: "",
-    contactCity: "",
-    contactCountry: "",
-  };
-
-  const raw = text.replace(/^mailto:/i, "").trim();
-  if (!raw) return out;
-
-  const address = raw.split("?")[0]?.trim() ?? "";
-  if (address) out.contactEmail = address;
-
-  return normalizeSuggestions(out);
-}
-
-function parseTel(text: string): ContactSuggestions {
-  const out: ContactSuggestions = {
-    contactFirstName: "",
-    contactLastName: "",
-    contactCompany: "",
-    contactTitle: "",
-    contactEmail: "",
-    contactPhone: "",
-    contactMobile: "",
-    contactWebsite: "",
-    contactStreet: "",
-    contactZip: "",
-    contactCity: "",
-    contactCountry: "",
-  };
-
-  const raw = text.replace(/^tel:/i, "").trim();
-  if (!raw) return out;
-
-  out.contactPhone = raw;
-  return normalizeSuggestions(out);
-}
-
-function parseQrContactData(text: string): ContactSuggestions {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return {
-      contactFirstName: "",
-      contactLastName: "",
-      contactCompany: "",
-      contactTitle: "",
-      contactEmail: "",
-      contactPhone: "",
-      contactMobile: "",
-      contactWebsite: "",
-      contactStreet: "",
-      contactZip: "",
-      contactCity: "",
-      contactCountry: "",
-    };
+function labelQrConfidence(confidence: string): string {
+  switch (confidence) {
+    case "HIGH":
+      return "hoch";
+    case "MEDIUM":
+      return "mittel";
+    case "LOW":
+      return "niedrig";
+    default:
+      return "keine";
   }
-
-  if (/BEGIN:VCARD/i.test(trimmed)) return parseVCard(trimmed);
-  if (/^MECARD:/i.test(trimmed)) return parseMeCard(trimmed);
-  if (/^BIZCARD:/i.test(trimmed)) return parseBizCard(trimmed);
-  if (/^mailto:/i.test(trimmed)) return parseMailto(trimmed);
-  if (/^tel:/i.test(trimmed)) return parseTel(trimmed);
-
-  if (/^https?:\/\//i.test(trimmed) || /^www\./i.test(trimmed) || /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(trimmed)) {
-    return normalizeSuggestions({
-      contactFirstName: "",
-      contactLastName: "",
-      contactCompany: "",
-      contactTitle: "",
-      contactEmail: "",
-      contactPhone: "",
-      contactMobile: "",
-      contactWebsite: normalizeWebsiteValue(trimmed),
-      contactStreet: "",
-      contactZip: "",
-      contactCity: "",
-      contactCountry: "",
-    });
-  }
-
-  const out: ContactSuggestions = {
-    contactFirstName: "",
-    contactLastName: "",
-    contactCompany: "",
-    contactTitle: "",
-    contactEmail: "",
-    contactPhone: "",
-    contactMobile: "",
-    contactWebsite: "",
-    contactStreet: "",
-    contactZip: "",
-    contactCity: "",
-    contactCountry: "",
-  };
-
-  const email = trimmed.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0];
-  const phone = trimmed.match(/(\+?\d[\d ()/-]{5,}\d)/)?.[0];
-  const url =
-    trimmed.match(/https?:\/\/[^\s]+/i)?.[0] ??
-    trimmed.match(/\bwww\.[a-z0-9.-]+\.[a-z]{2,}(?:\/[^\s]+)?/i)?.[0] ??
-    trimmed.match(/\b[a-z0-9-]+(\.[a-z0-9-]+)+\.[a-z]{2,}(?:\/[^\s]+)?/i)?.[0];
-
-  if (email) out.contactEmail = email;
-  if (phone) out.contactPhone = phone;
-  if (url) out.contactWebsite = normalizeWebsiteValue(url);
-
-  return normalizeSuggestions(out);
 }
 
 function parsePickedContact(contact: unknown): ContactSuggestions {
@@ -1043,10 +696,6 @@ function parsePickedContact(contact: unknown): ContactSuggestions {
   return normalizeSuggestions(out);
 }
 
-function prettyQrPreview(raw: string): string {
-  return raw.replace(/\r/g, "\\r").replace(/\n/g, "\n");
-}
-
 function shortAlertText(raw: string): string {
   if (raw.length <= 1200) return raw;
   return `${raw.slice(0, 1200)}…`;
@@ -1124,6 +773,8 @@ export default function MobileCaptureFormScreen() {
   const formId = (params?.id ?? "").toString().trim();
   const eventIdParam = (params?.eventId ?? "").toString().trim();
 
+  const formScannerRef = useRef<CameraView | null>(null);
+
   const [eventId, setEventId] = useState<string>(eventIdParam);
 
   const [loading, setLoading] = useState(false);
@@ -1146,7 +797,9 @@ export default function MobileCaptureFormScreen() {
   const [lastContactSource, setLastContactSource] = useState<"OCR_MOBILE" | "QR_VCARD" | "MANUAL">("MANUAL");
 
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannerReady, setScannerReady] = useState(false);
   const [scanLock, setScanLock] = useState(false);
+  const [qrBusy, setQrBusy] = useState(false);
   const [camPermission, requestCamPermission] = useCameraPermissions();
 
   const [cardUri, setCardUri] = useState("");
@@ -1162,8 +815,22 @@ export default function MobileCaptureFormScreen() {
   const [qrDebugHint, setQrDebugHint] = useState("");
   const [qrDebugExpanded, setQrDebugExpanded] = useState(false);
   const [qrParsedSummary, setQrParsedSummary] = useState("");
+  const [qrFormatLabel, setQrFormatLabel] = useState("");
+  const [qrConfidenceLabel, setQrConfidenceLabel] = useState("");
+  const [qrDecodeMode, setQrDecodeMode] = useState("");
 
   const title = useMemo(() => (form ? form.name : "Formular"), [form]);
+
+  const resetQrState = useCallback(() => {
+    setQrRawText("");
+    setQrDebugHint("");
+    setQrDebugExpanded(false);
+    setQrParsedSummary("");
+    setQrFormatLabel("");
+    setQrConfidenceLabel("");
+    setQrDecodeMode("");
+    setQrBusy(false);
+  }, []);
 
   const reActivate = useCallback(async () => {
     await clearApiKey();
@@ -1274,15 +941,12 @@ export default function MobileCaptureFormScreen() {
       setOcrRawText("");
       setOcrBlocks(null);
       setRawExpanded(false);
-      setQrRawText("");
-      setQrDebugHint("");
-      setQrDebugExpanded(false);
-      setQrParsedSummary("");
+      resetQrState();
       setLastContactSource("MANUAL");
     } finally {
       setLoading(false);
     }
-  }, [eventIdParam, formId, handleApiErrorRedirects]);
+  }, [eventIdParam, formId, handleApiErrorRedirects, resetQrState]);
 
   useEffect(() => {
     void load();
@@ -1442,7 +1106,8 @@ export default function MobileCaptureFormScreen() {
 
   const openQrScanner = useCallback(async () => {
     setActiveCaptureMode("qr");
-    setQrDebugHint("");
+    resetQrState();
+    setScannerReady(false);
 
     if (Platform.OS === "web") {
       Alert.alert("Nicht verfügbar", "QR-Scan ist auf Web nicht verfügbar.");
@@ -1459,45 +1124,123 @@ export default function MobileCaptureFormScreen() {
 
     setScanLock(false);
     setScannerOpen(true);
-  }, [camPermission?.granted, requestCamPermission]);
+  }, [camPermission?.granted, requestCamPermission, resetQrState]);
+
+  const captureAndDecodeQrFrame = useCallback(async (): Promise<string[]> => {
+    const cam = formScannerRef.current;
+    if (!cam || !scannerReady) return [];
+
+    try {
+      const photo = await cam.takePictureAsync({
+        quality: 0.9,
+        skipProcessing: false,
+      });
+
+      if (!photo?.uri) return [];
+
+      const candidateUris: string[] = [photo.uri];
+
+      if (typeof photo.width === "number" && typeof photo.height === "number" && photo.width > 0 && photo.height > 0) {
+        const cropWidth = Math.max(240, Math.floor(photo.width * 0.72));
+        const cropHeight = Math.max(240, Math.floor(photo.height * 0.72));
+        const originX = Math.max(0, Math.floor((photo.width - cropWidth) / 2));
+        const originY = Math.max(0, Math.floor((photo.height - cropHeight) / 2));
+
+        const cropped = await ImageManipulator.manipulateAsync(
+          photo.uri,
+          [
+            { crop: { originX, originY, width: cropWidth, height: cropHeight } },
+            { resize: { width: 1600 } },
+          ],
+          { compress: 0.95, format: ImageManipulator.SaveFormat.JPEG }
+        );
+
+        if (cropped?.uri) candidateUris.unshift(cropped.uri);
+      }
+
+      const texts: string[] = [];
+
+      for (const uri of candidateUris) {
+        const scanResults = await Camera.scanFromURLAsync(uri, ["qr"]);
+        for (const item of scanResults) {
+          const raw = (item?.data ?? "").toString().trim();
+          if (raw) texts.push(raw);
+        }
+      }
+
+      return Array.from(new Set(texts));
+    } catch {
+      return [];
+    }
+  }, [scannerReady]);
 
   const onQrScanned = useCallback(
-    (res: BarcodeScanningResult) => {
-      if (scanLock) return;
-      setScanLock(true);
+    async (res: BarcodeScanningResult) => {
+      if (scanLock || qrBusy) return;
 
-      const raw = (res?.data ?? "").toString();
-      setQrRawText(raw);
+      setScanLock(true);
+      setQrBusy(true);
       setQrDebugExpanded(false);
 
-      const parsed = parseQrContactData(raw);
-      const summary = summaryFromSuggestions(parsed);
-      setQrParsedSummary(summary);
+      try {
+        const liveRaw = (res?.data ?? "").toString().trim();
+        const liveParsed = parseQrContactData(liveRaw);
 
-      if (!hasAnySuggestion(parsed)) {
-        setQrDebugHint("QR erkannt, aber noch nicht interpretierbar.");
-        Alert.alert(
-          "QR-Code erkannt",
-          "Der QR-Code enthält noch kein unterstütztes Kontaktformat. Der vollständige Rohinhalt wird unten angezeigt."
-        );
+        let best = liveParsed;
+        let decodeMode = "Live";
+        let usedPhotoFallback = false;
+
+        const shouldTryPhotoFallback =
+          Platform.OS !== "web" &&
+          (!liveParsed.hasAnySuggestion ||
+            liveParsed.hasOnlyNameSuggestion ||
+            liveParsed.confidence === "LOW" ||
+            liveParsed.confidence === "NONE" ||
+            liveParsed.isWeakText);
+
+        if (shouldTryPhotoFallback) {
+          const photoCandidates = await captureAndDecodeQrFrame();
+          if (photoCandidates.length > 0) {
+            best = chooseBestQrCandidate([liveRaw, ...photoCandidates]);
+            decodeMode = "Live + Foto";
+            usedPhotoFallback = true;
+          }
+        }
+
+        setQrRawText(best.rawText || liveRaw);
+        setQrParsedSummary(best.summary);
+        setQrFormatLabel(labelQrFormat(best.format));
+        setQrConfidenceLabel(labelQrConfidence(best.confidence));
+        setQrDecodeMode(decodeMode);
+
+        if (!shouldApplyQrSuggestions(best)) {
+          setQrDebugHint(
+            usedPhotoFallback
+              ? "QR erkannt, aber keine vollständigen Kontaktdaten lesbar."
+              : "QR erkannt, aber noch keine brauchbaren Kontaktdaten lesbar."
+          );
+          setScannerOpen(false);
+          Alert.alert(
+            "QR-Code erkannt",
+            "Wir konnten daraus keine vollständigen Kontaktdaten übernehmen. Bitte nochmals ruhiger scannen oder alternativ Visitenkarte bzw. Kontakte verwenden."
+          );
+          return;
+        }
+
+        setQrDebugHint(best.summary ? `Kontakt erkannt: ${best.summary}` : "Kontakt aus QR übernommen.");
         setScannerOpen(false);
+        applySuggestions(best.suggestions, "QR_VCARD");
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : "QR konnte nicht verarbeitet werden.";
+        setQrDebugHint("QR konnte nicht verarbeitet werden.");
+        setScannerOpen(false);
+        Alert.alert("QR-Scan fehlgeschlagen", message);
+      } finally {
+        setQrBusy(false);
         setTimeout(() => setScanLock(false), 400);
-        return;
       }
-
-      if (hasOnlyNameSuggestion(parsed)) {
-        setQrDebugHint("QR liefert aktuell nur Namensdaten. Rohinhalt unten prüfen.");
-      } else if (summary) {
-        setQrDebugHint(`Erkannt: ${summary}`);
-      } else {
-        setQrDebugHint("");
-      }
-
-      applySuggestions(parsed, "QR_VCARD");
-      setScannerOpen(false);
-      setTimeout(() => setScanLock(false), 400);
     },
-    [applySuggestions, scanLock]
+    [applySuggestions, captureAndDecodeQrFrame, qrBusy, scanLock]
   );
 
   const pickContact = useCallback(async () => {
@@ -1527,12 +1270,9 @@ export default function MobileCaptureFormScreen() {
     setOcrRawText("");
     setOcrBlocks(null);
     setRawExpanded(false);
-    setQrRawText("");
-    setQrDebugHint("");
-    setQrDebugExpanded(false);
-    setQrParsedSummary("");
+    resetQrState();
     setLastContactSource("MANUAL");
-  }, []);
+  }, [resetQrState]);
 
   const resetAll = useCallback(() => {
     if (!form) return;
@@ -1834,11 +1574,7 @@ export default function MobileCaptureFormScreen() {
     return lines.slice(0, 6).join("\n");
   }, [ocrRawText, rawExpanded]);
 
-  const qrVisibleText = useMemo(() => {
-    const full = prettyQrPreview(qrRawText || "");
-    if (qrDebugExpanded || full.length <= 900) return full;
-    return `${full.slice(0, 900)}…`;
-  }, [qrDebugExpanded, qrRawText]);
+  const qrVisibleText = useMemo(() => prettyQrPreview(qrRawText || "", 3200), [qrRawText]);
 
   if (scannerOpen) {
     return (
@@ -1850,13 +1586,24 @@ export default function MobileCaptureFormScreen() {
           </Text>
         </View>
 
-        <View style={{ flex: 1, marginHorizontal: 20, marginBottom: 20, overflow: "hidden", borderRadius: 20 }}>
+        <View style={styles.scannerViewport}>
           <CameraView
+            ref={formScannerRef}
             style={{ flex: 1 }}
             facing="back"
             barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-            onBarcodeScanned={scanLock ? undefined : onQrScanned}
+            onCameraReady={() => setScannerReady(true)}
+            onBarcodeScanned={scanLock || qrBusy ? undefined : onQrScanned}
           />
+          <View pointerEvents="none" style={styles.scannerOverlay}>
+            <View style={styles.scannerFrame} />
+            <View style={styles.scannerHintBox}>
+              <Text style={styles.scannerHintTitle}>{qrBusy ? "QR wird geprüft …" : "QR in den Rahmen halten"}</Text>
+              <Text style={styles.scannerHintText}>
+                Bei schwachem Treffer folgt automatisch ein zweiter Decode-Pass.
+              </Text>
+            </View>
+          </View>
         </View>
 
         <View style={{ paddingHorizontal: 20, paddingBottom: 28 }}>
@@ -1864,15 +1611,19 @@ export default function MobileCaptureFormScreen() {
             onPress={() => {
               setScannerOpen(false);
               setScanLock(false);
+              setQrBusy(false);
+              setScannerReady(false);
             }}
+            disabled={qrBusy}
             style={{
               paddingVertical: 14,
               borderRadius: 14,
               alignItems: "center",
               backgroundColor: "rgba(255,255,255,0.12)",
+              opacity: qrBusy ? 0.55 : 1,
             }}
           >
-            <Text style={{ color: "white", fontWeight: "900" }}>Abbrechen</Text>
+            <Text style={{ color: "white", fontWeight: "900" }}>{qrBusy ? "Bitte warten …" : "Abbrechen"}</Text>
           </Pressable>
         </View>
       </View>
@@ -1964,7 +1715,7 @@ export default function MobileCaptureFormScreen() {
                   if (mode === "contacts") void pickContact();
                   if (mode === "manual") setLastContactSource("MANUAL");
                 }}
-                disabled={submitting || ocrBusy}
+                disabled={submitting || ocrBusy || qrBusy}
               />
 
               {activeCaptureMode === "businessCard" && (cardUri || ocrBusy || ocrError || ocrRawText) ? (
@@ -2028,69 +1779,90 @@ export default function MobileCaptureFormScreen() {
                 </View>
               ) : null}
 
-              {activeCaptureMode === "qr" && (qrRawText || qrDebugHint) ? (
+              {activeCaptureMode === "qr" && (qrRawText || qrDebugHint || qrParsedSummary) ? (
                 <View style={styles.captureReviewBox}>
+                  <View style={styles.qrHeaderRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.pStrong}>QR-Erfassung</Text>
+                      {qrParsedSummary ? <Text style={styles.pMuted}>Übernommen: {qrParsedSummary}</Text> : null}
+                    </View>
+
+                    <View style={styles.qrBadge}>
+                      <Text style={styles.qrBadgeText}>QR</Text>
+                    </View>
+                  </View>
+
                   {qrDebugHint ? (
                     <View style={styles.warnInline}>
-                      <Text style={styles.warnInlineTitle}>QR-Hinweis</Text>
+                      <Text style={styles.warnInlineTitle}>Hinweis</Text>
                       <Text style={styles.warnInlineText}>{qrDebugHint}</Text>
+                    </View>
+                  ) : null}
+
+                  {(qrFormatLabel || qrConfidenceLabel || qrDecodeMode) ? (
+                    <View style={styles.qrMetaRow}>
+                      {qrFormatLabel ? <Text style={styles.qrMetaText}>Format: {qrFormatLabel}</Text> : null}
+                      {qrConfidenceLabel ? (
+                        <Text style={styles.qrMetaText}>Vertrauen: {qrConfidenceLabel}</Text>
+                      ) : null}
+                      {qrDecodeMode ? <Text style={styles.qrMetaText}>Pfad: {qrDecodeMode}</Text> : null}
+                      {qrRawText ? <Text style={styles.qrMetaText}>Länge: {qrRawText.length}</Text> : null}
                     </View>
                   ) : null}
 
                   {qrRawText ? (
                     <View style={styles.ocrBox}>
-                      <Text style={styles.ocrTitle}>QR-Rohinhalt</Text>
-
-                      <View style={styles.qrMetaRow}>
-                        <Text style={styles.qrMetaText}>Länge: {qrRawText.length}</Text>
-                        {qrParsedSummary ? <Text style={styles.qrMetaText}>Erkannt: {qrParsedSummary}</Text> : null}
-                      </View>
-
-                      <Text style={styles.ocrBody}>{qrVisibleText || "—"}</Text>
-
-                      <View style={styles.qrActionsRow}>
-                        <Pressable onPress={() => setQrDebugExpanded((p) => !p)} style={styles.qrActionBtn}>
-                          <Text style={styles.qrActionBtnText}>{qrDebugExpanded ? "Weniger" : "Mehr"}</Text>
-                        </Pressable>
-
-                        <Pressable
-                          onPress={async () => {
-                            await Clipboard.setStringAsync(qrRawText);
-                            Alert.alert("Kopiert", "QR-Rohinhalt wurde in die Zwischenablage kopiert.");
-                          }}
-                          style={styles.qrActionBtn}
-                        >
-                          <Text style={styles.qrActionBtnText}>Kopieren</Text>
-                        </Pressable>
-
-                        <Pressable
-                          onPress={() => Alert.alert("QR-Rohinhalt", shortAlertText(qrRawText))}
-                          style={styles.qrActionBtn}
-                        >
-                          <Text style={styles.qrActionBtnText}>Als Alert</Text>
+                      <View style={styles.qrDebugHeader}>
+                        <Text style={styles.ocrTitle}>Debug</Text>
+                        <Pressable onPress={() => setQrDebugExpanded((p) => !p)}>
+                          <Text style={styles.linkText}>{qrDebugExpanded ? "Ausblenden" : "Anzeigen"}</Text>
                         </Pressable>
                       </View>
+
+                      {qrDebugExpanded ? (
+                        <>
+                          <Text style={styles.ocrBody}>{qrVisibleText || "—"}</Text>
+
+                          <View style={styles.qrActionsRow}>
+                            <Pressable
+                              onPress={async () => {
+                                await Clipboard.setStringAsync(qrRawText);
+                                Alert.alert("Kopiert", "QR-Rohinhalt wurde in die Zwischenablage kopiert.");
+                              }}
+                              style={styles.qrActionBtn}
+                            >
+                              <Text style={styles.qrActionBtnText}>Kopieren</Text>
+                            </Pressable>
+
+                            <Pressable
+                              onPress={() => Alert.alert("QR-Rohinhalt", shortAlertText(qrRawText))}
+                              style={styles.qrActionBtn}
+                            >
+                              <Text style={styles.qrActionBtnText}>Als Alert</Text>
+                            </Pressable>
+                          </View>
+                        </>
+                      ) : (
+                        <Text style={styles.pMuted}>Rohinhalt nur für Entwicklung einblenden.</Text>
+                      )}
                     </View>
                   ) : null}
 
                   <View style={{ flexDirection: "row", gap: 10 }}>
                     <Pressable
                       onPress={() => void openQrScanner()}
-                      disabled={submitting}
+                      disabled={submitting || qrBusy}
                       style={[styles.smallActionBtn, styles.smallActionBtnDark]}
                     >
-                      <Text style={styles.smallActionBtnDarkText}>Erneut scannen</Text>
+                      <Text style={styles.smallActionBtnDarkText}>{qrBusy ? "…" : "Erneut scannen"}</Text>
                     </Pressable>
 
                     <Pressable
                       onPress={() => {
-                        setQrRawText("");
-                        setQrDebugHint("");
-                        setQrDebugExpanded(false);
-                        setQrParsedSummary("");
+                        resetQrState();
                         setLastContactSource("MANUAL");
                       }}
-                      disabled={submitting}
+                      disabled={submitting || qrBusy}
                       style={[styles.smallActionBtn, styles.smallActionBtnGhost]}
                     >
                       <Text style={styles.smallActionBtnGhostText}>Zurücksetzen</Text>
@@ -2256,6 +2028,42 @@ const styles = StyleSheet.create({
   statusRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingTop: 4 },
   statusText: { color: "rgba(17,24,39,0.55)", fontWeight: "700" },
 
+  scannerViewport: {
+    flex: 1,
+    marginHorizontal: 20,
+    marginBottom: 20,
+    overflow: "hidden",
+    borderRadius: 20,
+  },
+  scannerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 24,
+  },
+  scannerFrame: {
+    width: "72%",
+    aspectRatio: 1,
+    borderRadius: 24,
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.92)",
+    backgroundColor: "transparent",
+  },
+  scannerHintBox: {
+    position: "absolute",
+    bottom: 22,
+    left: 22,
+    right: 22,
+    borderRadius: 18,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: "rgba(0,0,0,0.46)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+  },
+  scannerHintTitle: { color: "white", fontWeight: "900" },
+  scannerHintText: { color: "rgba(255,255,255,0.8)", marginTop: 4 },
+
   ocrBox: {
     padding: 10,
     borderRadius: 12,
@@ -2267,8 +2075,28 @@ const styles = StyleSheet.create({
   ocrBody: { fontFamily: "monospace", opacity: 0.85, lineHeight: 18, color: UI.text },
   linkText: { fontWeight: "900", color: UI.text },
 
-  qrMetaRow: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginBottom: 8 },
+  qrHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
+  qrBadge: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    backgroundColor: "rgba(0,0,0,0.05)",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.06)",
+  },
+  qrBadgeText: { fontWeight: "900", color: UI.text, opacity: 0.7 },
+
+  qrMetaRow: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
   qrMetaText: { fontSize: 12, fontWeight: "800", color: UI.text, opacity: 0.7 },
+
+  qrDebugHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginBottom: 4,
+  },
+
   qrActionsRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 10 },
   qrActionBtn: {
     paddingVertical: 8,
