@@ -1,155 +1,124 @@
-# Teilprojekt 9.4a — QR Contact Capture Hardening
+# Schlussrapport — TP 9.4a: QR Contact Capture Hardening
 
 ## Titel + Status + Datum + Commit(s)
 
-- Teilprojekt: TP 9.4a — QR Contact Capture Hardening
-- Status: IMPLEMENTIERT, lokaler Proof / Typecheck / Lint / Commit noch ausstehend
+- Teilprojekt: 9.4a — QR Contact Capture Hardening
+- Status: ABGESCHLOSSEN ALS TECHNISCHER KLÄRUNGS-/HARDENING-SCHRITT, NICHT DONE
 - Datum: 2026-03-08 (Europe/Zurich)
-- Commit(s): offen
+- Commit(s): keine finalen Produktiv-Commits für DONE-Abschluss
 
 ## Ziel
 
-Den QR-Kontaktimport im Mobile Capture Screen GoLive-tauglich härten, ohne die bestehenden Flows für OCR, Kontakte und manuelle Eingabe zurückzubauen.
+Den QR-Kontaktimport im bestehenden Mobile-Capture-Flow härten und verifizieren, ob der aktuelle Expo-basierte QR-Decode-Weg für den GoLive-Anspruch ausreicht.
 
 ## Umsetzung (Highlights)
 
-- QR-Parsing aus `app/forms/[id].tsx` in eine zentrale Library ausgelagert:
-  - `vCard`
-  - `MECARD`
-  - `BIZCARD`
-  - `mailto`
-  - `tel`
-  - `MATMSG`
-  - JSON / Schlüsselwert-Text / URI / heuristischer Freitext
-- Live-Scan bleibt auf `expo-camera`, aber wird auf `barcodeTypes: ["qr"]` begrenzt.
-- Neuer zweiter Decode-Pass für schwache oder unvollständige Live-Scans:
-  - Kamera-Frame aufnehmen
-  - zentral croppen
-  - per `Camera.scanFromURLAsync(..., ["qr"])` erneut dekodieren
-  - bestes Ergebnis über Scoring auswählen
-- Schutz gegen unbrauchbare QR-Ergebnisse:
-  - reine Namensdaten werden nicht mehr blind übernommen
-  - nur brauchbare Kontaktdaten werden automatisch in die Kontaktfelder gemappt
-- UX bereinigt:
-  - klare Erfolg-/Fehlerhinweise
-  - Rohinhalt bleibt für Entwicklung verfügbar, aber hinter Debug-Toggle
+- Repo-Analyse des bestehenden QR-Flows in `apps/mobile/app/forms/[id].tsx`
+- QR-Parser fachlich und technisch gehärtet
+- QR-Parsing in separate Mobile-Lib ausgelagert:
+  - `apps/mobile/src/lib/qrContact.ts`
+- Unterstützte Formate erweitert/sauber strukturiert:
+  - vCard
+  - MECARD
+  - BIZCARD
+  - mailto
+  - tel
+  - MATMSG
+  - JSON
+  - Key/Value-Freiform
+  - URI / Website
+- QR-Scanner im Screen auf `barcodeTypes: ["qr"]` fokussiert
+- zusätzlicher zweiter Decode-Pass als Expo-only Hardening versucht
+- bestehende Flows nicht zurückgebaut:
+  - OCR
+  - Kontakte
+  - manuell
+  - Submit / Patch / Lead-Speicherung
 
 ## Dateien / Änderungen
 
 - `apps/mobile/src/lib/qrContact.ts`
-  - neue zentrale QR-Parser-/Scoring-Logik
 - `apps/mobile/app/forms/[id].tsx`
-  - QR-Flow gehärtet
-  - QR-only Scanner
-  - zweiter Decode-Pass via Kamera-Foto
-  - Debug-UI reduziert / gekapselt
-
-## Architekturentscheid
-
-Für TP 9.4a wurde **kein** separater nativer Scanner eingeführt.
-
-Begründung:
-
-1. Der bestehende Expo-Scanner bleibt funktional und integriert sich sauber in den vorhandenen Capture-Screen.
-2. Das konkrete Problembild deutet darauf hin, dass Live-Decode in einzelnen Android-Fällen nur einen Teil des QR-Inhalts liefert.
-3. Deshalb wird der Live-Scan nun durch einen gezielten zweiten Decode-Pass über ein aufgenommenes Bild ergänzt.
-4. Der QR-Parser selbst wurde deutlich robuster gemacht, sodass mehr Kontaktformate sauber interpretiert werden.
+- `docs/teilprojekt-9.4a-qr-contact-capture-hardening.md`
 
 ## Akzeptanzkriterien – Check
 
-- [x] QR-Kontaktimport technisch gehärtet
-- [x] unterstützte QR-Formate erweitert und zentralisiert
-- [x] Mapping in bestehende Kontaktfelder bleibt erhalten
-- [x] bestehender OCR-/Kontakte-/Manuell-Flow bleibt im UI bestehen
-- [x] Lead-Submit-Flow im Code nicht zurückgebaut
-- [x] klare UX / Fehlermeldungen vorgesehen
-- [ ] `npm run typecheck` → lokal ausstehend
-- [ ] `npm run lint` → lokal ausstehend
-- [ ] `cd apps/mobile && npm run lint` → lokal ausstehend
-- [x] TP-Doku ergänzt
-- [ ] `git status clean`, Commit, Push, Hash → lokal ausstehend
+- [x] QR-Kontaktimport analysiert und technisch gehärtet
+- [x] Parser-/Mapping-Schicht erweitert
+- [x] bestehender OCR-/Kontakte-/Manuell-Flow intakt belassen
+- [x] Lead Submit weiterhin intakt im bestehenden Flow
+- [x] klare UX / Debug-Hinweise für QR integriert
+- [x] `npm run typecheck` wieder grün nach Pfadkorrektur
+- [ ] `npm run lint` final verifiziert
+- [ ] `cd apps/mobile && npm run lint` final verifiziert
+- [ ] QR-Kontaktimport GoLive-ready
+- [ ] vollständige Kontaktübernahme des Referenz-QR
+- [ ] DONE-Abschluss mit Commit/Push/Hash
 
 ## Tests / Proof (reproduzierbar)
 
-### Lokaler Start
+### Lokaler Qualitätscheck
 
 ```bash
-cd /d/dev/leadradar2026a/apps/mobile
-npx expo start --dev-client -c
-Qualität
 cd /d/dev/leadradar2026a
 npm run typecheck
-npm run lint
 
-cd /d/dev/leadradar2026a/apps/mobile
-npm run lint
-Manueller Smoke auf Android
+Ergebnis:
 
-App öffnen
+npm run typecheck grün nach Korrektur des Dateipfads von qrContact.ts
 
-Aktivierung / Lizenz prüfen
+Manueller Device-Proof
 
-Event wählen
+Ablauf:
 
-Formular öffnen
+App geöffnet
 
-Kontakt-Screen öffnen
+Event gewählt
 
-QR-Code als Kontakt-Erfassungsart wählen
+Formular geöffnet
 
-Problem-QR erneut scannen
+Kontakt-Screen → QR-Code
 
-Erwartung:
+Referenz-QR gescannt
 
-schwacher Live-Scan löst automatisch zweiten Decode-Pass aus
+Ergebnis:
 
-wenn vollständige Kontaktdaten im QR enthalten sind, werden sie übernommen
+Hinweis: QR-Code erkannt
 
-reine Namensdaten werden nicht mehr stillschweigend als “erfolgreich” behandelt
-
-Lead absenden
-
-Prüfen, ob Daten im Backend / Admin korrekt ankommen
-
-Referenzfall aus TP 9.4
-
-Bisheriger Befund:
-
-QR-Hinweis: QR erkannt, aber noch nicht interpretierbar
+Interpretation weiterhin unvollständig
 
 QR-Rohinhalt: Thomas Gemperle
 
 Länge: 15
 
-Erwartung nach TP 9.4a:
+Technischer Befund
 
-entweder vollständige Datenübernahme nach zweitem Decode-Pass
+Der Parser ist nicht mehr das Hauptproblem.
 
-oder technisch saubere Einstufung als unbrauchbarer / unvollständiger QR ohne Blindübernahme
+Der aktuelle Decode-Layer liefert der App im Referenzfall weiterhin nur den verkürzten Payload Thomas Gemperle. Damit kommen die restlichen Kontaktdaten gar nicht bis in die App. Der aktuelle Expo-basierte QR-Decode-Weg ist für diesen Referenzfall damit nicht GoLive-safe.
 
 Offene Punkte / Risiken
 P0
 
-Keine.
+QR-Kontaktimport ist in der aktuellen Expo-basierten Variante nicht GoLive-ready.
 
 P1
 
-Der neue zweite Decode-Pass ist weiterhin an die Qualität des Kamera-Bildes und die Android-Decoder-Fähigkeit von expo-camera gebunden. Falls reale Geräte weiterhin systematisch abgeschnittene QR-Payloads liefern, wäre als nächster Schritt ein dedizierter nativer Scanner / alternativer Decoder zu prüfen.
+Für echten GoLive-Anspruch braucht es einen robusteren nativen, plattformübergreifenden QR-Decode-Weg.
 
 P2
 
-docs/LeadRadar2026A/05_RELEASE_TESTS.md und docs/LeadRadar2026A/00_INDEX.md wurden in diesem Schritt nicht angepasst, um ohne Repo-Vollkontext keine Doku-Navigation versehentlich zu beschädigen.
+iPhone muss im Nachfolge-Teilprojekt explizit mitberücksichtigt und real getestet werden.
 
 Next Step
 
-Lokal Typecheck / Lint ausführen
+Teilprojekt 9.4b — Native QR Decode Hardening (iOS + Android) starten.
 
-Auf realem Samsung-Gerät den Referenz-QR erneut testen
+Ziel von TP 9.4b:
 
-Falls grün:
+cross-platform QR-Decode-Weg für Android + iPhone
 
-commit feat(tp9.4a): harden qr contact capture
+bestehenden Parser apps/mobile/src/lib/qrContact.ts weiterverwenden
 
-optional Doku-Commit
+QR-Capture-Mode austauschen, ohne OCR / Kontakte / Manuell / Submit-Flow zurückzubauen
 
-Danach TP 9.4a mit echtem Proof und Commit-Hash final abschliessen

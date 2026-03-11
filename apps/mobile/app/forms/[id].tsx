@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -14,7 +14,6 @@ import {
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
-import { Camera, CameraView, useCameraPermissions, type BarcodeScanningResult } from "expo-camera";
 import * as Clipboard from "expo-clipboard";
 import * as Contacts from "expo-contacts";
 import * as ImagePicker from "expo-image-picker";
@@ -30,7 +29,6 @@ import {
 import { clearApiKey, getApiKey } from "../../src/lib/auth";
 import {
   chooseBestQrCandidate,
-  parseQrContactData,
   prettyQrPreview,
   seemsWeakText,
   type ParsedQrContactData,
@@ -39,6 +37,7 @@ import { getActiveEventId } from "../../src/lib/eventStorage";
 import { recognizeTextFromBusinessCard } from "../../src/ocr/recognizeText";
 import { parseBusinessCard } from "../../src/ocr/parseBusinessCard";
 import type { ContactSuggestions } from "../../src/ocr/types";
+import { NativeQrScannerSheet } from "../../src/features/capture/NativeQrScannerSheet";
 import { ScreenScaffold } from "../../src/ui/ScreenScaffold";
 import { UI } from "../../src/ui/tokens";
 
@@ -773,8 +772,6 @@ export default function MobileCaptureFormScreen() {
   const formId = (params?.id ?? "").toString().trim();
   const eventIdParam = (params?.eventId ?? "").toString().trim();
 
-  const formScannerRef = useRef<CameraView | null>(null);
-
   const [eventId, setEventId] = useState<string>(eventIdParam);
 
   const [loading, setLoading] = useState(false);
@@ -797,10 +794,6 @@ export default function MobileCaptureFormScreen() {
   const [lastContactSource, setLastContactSource] = useState<"OCR_MOBILE" | "QR_VCARD" | "MANUAL">("MANUAL");
 
   const [scannerOpen, setScannerOpen] = useState(false);
-  const [scannerReady, setScannerReady] = useState(false);
-  const [scanLock, setScanLock] = useState(false);
-  const [qrBusy, setQrBusy] = useState(false);
-  const [camPermission, requestCamPermission] = useCameraPermissions();
 
   const [cardUri, setCardUri] = useState("");
   const [cardMime, setCardMime] = useState("image/jpeg");
@@ -829,7 +822,6 @@ export default function MobileCaptureFormScreen() {
     setQrFormatLabel("");
     setQrConfidenceLabel("");
     setQrDecodeMode("");
-    setQrBusy(false);
   }, []);
 
   const reActivate = useCallback(async () => {
@@ -1107,140 +1099,40 @@ export default function MobileCaptureFormScreen() {
   const openQrScanner = useCallback(async () => {
     setActiveCaptureMode("qr");
     resetQrState();
-    setScannerReady(false);
 
     if (Platform.OS === "web") {
       Alert.alert("Nicht verfügbar", "QR-Scan ist auf Web nicht verfügbar.");
       return;
     }
 
-    if (!camPermission?.granted) {
-      const req = await requestCamPermission();
-      if (!req.granted) {
-        Alert.alert("Kamera erforderlich", "Bitte Kamera-Zugriff erlauben, um QR-Codes zu scannen.");
+    setScannerOpen(true);
+  }, [resetQrState]);
+
+  const handleNativeQrDetected = useCallback(
+    (rawCandidates: string[]) => {
+      const best = chooseBestQrCandidate(rawCandidates);
+
+      setQrRawText(best.rawText);
+      setQrParsedSummary(best.summary);
+      setQrFormatLabel(labelQrFormat(best.format));
+      setQrConfidenceLabel(labelQrConfidence(best.confidence));
+      setQrDecodeMode("Native");
+
+      setScannerOpen(false);
+
+      if (!shouldApplyQrSuggestions(best)) {
+        setQrDebugHint("QR erkannt, aber keine vollständigen Kontaktdaten lesbar.");
+        Alert.alert(
+          "QR-Code erkannt",
+          "Wir konnten daraus keine vollständigen Kontaktdaten übernehmen. Bitte nochmals ruhiger scannen oder alternativ Visitenkarte bzw. Kontakte verwenden."
+        );
         return;
       }
-    }
 
-    setScanLock(false);
-    setScannerOpen(true);
-  }, [camPermission?.granted, requestCamPermission, resetQrState]);
-
-  const captureAndDecodeQrFrame = useCallback(async (): Promise<string[]> => {
-    const cam = formScannerRef.current;
-    if (!cam || !scannerReady) return [];
-
-    try {
-      const photo = await cam.takePictureAsync({
-        quality: 0.9,
-        skipProcessing: false,
-      });
-
-      if (!photo?.uri) return [];
-
-      const candidateUris: string[] = [photo.uri];
-
-      if (typeof photo.width === "number" && typeof photo.height === "number" && photo.width > 0 && photo.height > 0) {
-        const cropWidth = Math.max(240, Math.floor(photo.width * 0.72));
-        const cropHeight = Math.max(240, Math.floor(photo.height * 0.72));
-        const originX = Math.max(0, Math.floor((photo.width - cropWidth) / 2));
-        const originY = Math.max(0, Math.floor((photo.height - cropHeight) / 2));
-
-        const cropped = await ImageManipulator.manipulateAsync(
-          photo.uri,
-          [
-            { crop: { originX, originY, width: cropWidth, height: cropHeight } },
-            { resize: { width: 1600 } },
-          ],
-          { compress: 0.95, format: ImageManipulator.SaveFormat.JPEG }
-        );
-
-        if (cropped?.uri) candidateUris.unshift(cropped.uri);
-      }
-
-      const texts: string[] = [];
-
-      for (const uri of candidateUris) {
-        const scanResults = await Camera.scanFromURLAsync(uri, ["qr"]);
-        for (const item of scanResults) {
-          const raw = (item?.data ?? "").toString().trim();
-          if (raw) texts.push(raw);
-        }
-      }
-
-      return Array.from(new Set(texts));
-    } catch {
-      return [];
-    }
-  }, [scannerReady]);
-
-  const onQrScanned = useCallback(
-    async (res: BarcodeScanningResult) => {
-      if (scanLock || qrBusy) return;
-
-      setScanLock(true);
-      setQrBusy(true);
-      setQrDebugExpanded(false);
-
-      try {
-        const liveRaw = (res?.data ?? "").toString().trim();
-        const liveParsed = parseQrContactData(liveRaw);
-
-        let best = liveParsed;
-        let decodeMode = "Live";
-        let usedPhotoFallback = false;
-
-        const shouldTryPhotoFallback =
-          Platform.OS !== "web" &&
-          (!liveParsed.hasAnySuggestion ||
-            liveParsed.hasOnlyNameSuggestion ||
-            liveParsed.confidence === "LOW" ||
-            liveParsed.confidence === "NONE" ||
-            liveParsed.isWeakText);
-
-        if (shouldTryPhotoFallback) {
-          const photoCandidates = await captureAndDecodeQrFrame();
-          if (photoCandidates.length > 0) {
-            best = chooseBestQrCandidate([liveRaw, ...photoCandidates]);
-            decodeMode = "Live + Foto";
-            usedPhotoFallback = true;
-          }
-        }
-
-        setQrRawText(best.rawText || liveRaw);
-        setQrParsedSummary(best.summary);
-        setQrFormatLabel(labelQrFormat(best.format));
-        setQrConfidenceLabel(labelQrConfidence(best.confidence));
-        setQrDecodeMode(decodeMode);
-
-        if (!shouldApplyQrSuggestions(best)) {
-          setQrDebugHint(
-            usedPhotoFallback
-              ? "QR erkannt, aber keine vollständigen Kontaktdaten lesbar."
-              : "QR erkannt, aber noch keine brauchbaren Kontaktdaten lesbar."
-          );
-          setScannerOpen(false);
-          Alert.alert(
-            "QR-Code erkannt",
-            "Wir konnten daraus keine vollständigen Kontaktdaten übernehmen. Bitte nochmals ruhiger scannen oder alternativ Visitenkarte bzw. Kontakte verwenden."
-          );
-          return;
-        }
-
-        setQrDebugHint(best.summary ? `Kontakt erkannt: ${best.summary}` : "Kontakt aus QR übernommen.");
-        setScannerOpen(false);
-        applySuggestions(best.suggestions, "QR_VCARD");
-      } catch (e: unknown) {
-        const message = e instanceof Error ? e.message : "QR konnte nicht verarbeitet werden.";
-        setQrDebugHint("QR konnte nicht verarbeitet werden.");
-        setScannerOpen(false);
-        Alert.alert("QR-Scan fehlgeschlagen", message);
-      } finally {
-        setQrBusy(false);
-        setTimeout(() => setScanLock(false), 400);
-      }
+      setQrDebugHint(best.summary ? `Kontakt erkannt: ${best.summary}` : "Kontakt aus QR übernommen.");
+      applySuggestions(best.suggestions, "QR_VCARD");
     },
-    [applySuggestions, captureAndDecodeQrFrame, qrBusy, scanLock]
+    [applySuggestions]
   );
 
   const pickContact = useCallback(async () => {
@@ -1578,55 +1470,12 @@ export default function MobileCaptureFormScreen() {
 
   if (scannerOpen) {
     return (
-      <View style={{ flex: 1, backgroundColor: "black" }}>
-        <View style={{ paddingTop: 56, paddingHorizontal: 20, paddingBottom: 14 }}>
-          <Text style={{ color: "white", fontSize: 18, fontWeight: "900" }}>QR-Code scannen</Text>
-          <Text style={{ color: "rgba(255,255,255,0.75)", marginTop: 6 }}>
-            vCard / MECARD / BIZCARD oder andere Kontaktdaten scannen.
-          </Text>
-        </View>
-
-        <View style={styles.scannerViewport}>
-          <CameraView
-            ref={formScannerRef}
-            style={{ flex: 1 }}
-            facing="back"
-            barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-            onCameraReady={() => setScannerReady(true)}
-            onBarcodeScanned={scanLock || qrBusy ? undefined : onQrScanned}
-          />
-          <View pointerEvents="none" style={styles.scannerOverlay}>
-            <View style={styles.scannerFrame} />
-            <View style={styles.scannerHintBox}>
-              <Text style={styles.scannerHintTitle}>{qrBusy ? "QR wird geprüft …" : "QR in den Rahmen halten"}</Text>
-              <Text style={styles.scannerHintText}>
-                Bei schwachem Treffer folgt automatisch ein zweiter Decode-Pass.
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={{ paddingHorizontal: 20, paddingBottom: 28 }}>
-          <Pressable
-            onPress={() => {
-              setScannerOpen(false);
-              setScanLock(false);
-              setQrBusy(false);
-              setScannerReady(false);
-            }}
-            disabled={qrBusy}
-            style={{
-              paddingVertical: 14,
-              borderRadius: 14,
-              alignItems: "center",
-              backgroundColor: "rgba(255,255,255,0.12)",
-              opacity: qrBusy ? 0.55 : 1,
-            }}
-          >
-            <Text style={{ color: "white", fontWeight: "900" }}>{qrBusy ? "Bitte warten …" : "Abbrechen"}</Text>
-          </Pressable>
-        </View>
-      </View>
+      <NativeQrScannerSheet
+        title="QR-Code scannen"
+        subtitle="vCard / MECARD / BIZCARD oder andere Kontaktdaten scannen."
+        onClose={() => setScannerOpen(false)}
+        onDetected={handleNativeQrDetected}
+      />
     );
   }
 
@@ -1715,7 +1564,7 @@ export default function MobileCaptureFormScreen() {
                   if (mode === "contacts") void pickContact();
                   if (mode === "manual") setLastContactSource("MANUAL");
                 }}
-                disabled={submitting || ocrBusy || qrBusy}
+                disabled={submitting || ocrBusy || scannerOpen}
               />
 
               {activeCaptureMode === "businessCard" && (cardUri || ocrBusy || ocrError || ocrRawText) ? (
@@ -1851,10 +1700,10 @@ export default function MobileCaptureFormScreen() {
                   <View style={{ flexDirection: "row", gap: 10 }}>
                     <Pressable
                       onPress={() => void openQrScanner()}
-                      disabled={submitting || qrBusy}
+                      disabled={submitting || scannerOpen}
                       style={[styles.smallActionBtn, styles.smallActionBtnDark]}
                     >
-                      <Text style={styles.smallActionBtnDarkText}>{qrBusy ? "…" : "Erneut scannen"}</Text>
+                      <Text style={styles.smallActionBtnDarkText}>Erneut scannen</Text>
                     </Pressable>
 
                     <Pressable
@@ -1862,7 +1711,7 @@ export default function MobileCaptureFormScreen() {
                         resetQrState();
                         setLastContactSource("MANUAL");
                       }}
-                      disabled={submitting || qrBusy}
+                      disabled={submitting || scannerOpen}
                       style={[styles.smallActionBtn, styles.smallActionBtnGhost]}
                     >
                       <Text style={styles.smallActionBtnGhostText}>Zurücksetzen</Text>
@@ -2027,42 +1876,6 @@ const styles = StyleSheet.create({
 
   statusRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingTop: 4 },
   statusText: { color: "rgba(17,24,39,0.55)", fontWeight: "700" },
-
-  scannerViewport: {
-    flex: 1,
-    marginHorizontal: 20,
-    marginBottom: 20,
-    overflow: "hidden",
-    borderRadius: 20,
-  },
-  scannerOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 24,
-  },
-  scannerFrame: {
-    width: "72%",
-    aspectRatio: 1,
-    borderRadius: 24,
-    borderWidth: 2,
-    borderColor: "rgba(255,255,255,0.92)",
-    backgroundColor: "transparent",
-  },
-  scannerHintBox: {
-    position: "absolute",
-    bottom: 22,
-    left: 22,
-    right: 22,
-    borderRadius: 18,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    backgroundColor: "rgba(0,0,0,0.46)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-  },
-  scannerHintTitle: { color: "white", fontWeight: "900" },
-  scannerHintText: { color: "rgba(255,255,255,0.8)", marginTop: 4 },
 
   ocrBox: {
     padding: 10,
