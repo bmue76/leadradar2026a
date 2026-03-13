@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 
@@ -11,6 +11,7 @@ import { AppHeader } from "../src/ui/AppHeader";
 import { PoweredBy } from "../src/ui/PoweredBy";
 import { UI } from "../src/ui/tokens";
 import { useBranding } from "../src/features/branding/useBranding";
+import { ACCENT_HEX } from "../src/lib/mobileConfig";
 
 type JsonObject = Record<string, unknown>;
 
@@ -45,18 +46,37 @@ function parseEvents(data: unknown): EventItem[] {
     const id = pickString(it.id);
     if (!id) continue;
 
-    const name = pickString(it.name) ?? id;
-    const startsAt = typeof it.startsAt === "string" ? it.startsAt : null;
-    const endsAt = typeof it.endsAt === "string" ? it.endsAt : null;
-    const location = typeof it.location === "string" ? it.location : null;
-
-    out.push({ id, name, startsAt, endsAt, location });
+    out.push({
+      id,
+      name: pickString(it.name) ?? id,
+      startsAt: typeof it.startsAt === "string" ? it.startsAt : null,
+      endsAt: typeof it.endsAt === "string" ? it.endsAt : null,
+      location: typeof it.location === "string" ? it.location : null,
+    });
   }
   return out;
 }
 
+function fmtDate(iso?: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString("de-CH", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+}
+
+function resolveNextPath(eventId: string, next?: string | null): string {
+  if (next === "forms") return `/forms?eventId=${encodeURIComponent(eventId)}`;
+  if (next === "capture") return "/capture";
+  return "/home";
+}
+
 export default function EventGate() {
   const insets = useSafeAreaInsets();
+  const params = useLocalSearchParams<{ next?: string }>();
   const { state: brandingState, branding } = useBranding();
 
   const tenantName = brandingState.kind === "ready" ? branding.tenantName : null;
@@ -64,10 +84,8 @@ export default function EventGate() {
 
   const [items, setItems] = useState<EventItem[]>([]);
   const [activeId, setActiveIdState] = useState<string | null>(null);
-
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-
   const [errorTitle, setErrorTitle] = useState("");
   const [errorDetail, setErrorDetail] = useState("");
   const [traceId, setTraceId] = useState<string>("");
@@ -77,14 +95,19 @@ export default function EventGate() {
     [insets.bottom]
   );
 
+  const nextTarget = typeof params.next === "string" ? params.next : null;
+
   const reActivate = useCallback(async () => {
     await clearApiKey();
     router.replace("/provision");
   }, []);
 
-  const goForms = useCallback((eventId: string) => {
-    router.replace(`/forms?eventId=${encodeURIComponent(eventId)}`);
-  }, []);
+  const goNext = useCallback(
+    (eventId: string) => {
+      router.replace(resolveNextPath(eventId, nextTarget));
+    },
+    [nextTarget]
+  );
 
   const load = useCallback(async () => {
     setErrorTitle("");
@@ -137,7 +160,7 @@ export default function EventGate() {
       if (evs.length === 1) {
         await setActiveEventId(evs[0].id);
         setActiveIdState(evs[0].id);
-        goForms(evs[0].id);
+        goNext(evs[0].id);
         return;
       }
 
@@ -147,7 +170,7 @@ export default function EventGate() {
     } finally {
       setBusy(false);
     }
-  }, [goForms, reActivate]);
+  }, [goNext, reActivate]);
 
   useEffect(() => {
     void load();
@@ -200,7 +223,7 @@ export default function EventGate() {
           <View style={styles.card}>
             <Text style={styles.h2}>Keine aktiven Events.</Text>
             <Text style={styles.p}>
-              Für dieses Konto sind aktuell keine aktiven Messen verfügbar. Bitte im Admin prüfen (Event aktiv).
+              Für dieses Konto sind aktuell keine aktiven Messen verfügbar. Bitte im Admin prüfen.
             </Text>
 
             <View style={styles.row}>
@@ -225,20 +248,37 @@ export default function EventGate() {
           ListFooterComponent={<PoweredBy />}
           renderItem={({ item }) => {
             const selected = item.id === activeId;
+            const d1 = fmtDate(item.startsAt);
+            const d2 = fmtDate(item.endsAt);
+
             return (
               <Pressable
                 onPress={async () => {
                   await setActiveEventId(item.id);
                   setActiveIdState(item.id);
-                  goForms(item.id);
+                  goNext(item.id);
                 }}
                 style={[styles.eventCard, selected ? styles.eventCardSelected : null]}
               >
                 <Text style={[styles.eventTitle, selected ? styles.eventTitleSelected : null]}>{item.name}</Text>
                 <Text style={[styles.eventId, selected ? styles.eventIdSelected : null]}>{item.id}</Text>
+
                 {item.location ? (
                   <Text style={[styles.meta, selected ? styles.metaSelected : null]}>{item.location}</Text>
                 ) : null}
+
+                {d1 || d2 ? (
+                  <Text style={[styles.meta, selected ? styles.metaSelected : null]}>
+                    {d1 ?? "—"} {d2 ? `– ${d2}` : ""}
+                  </Text>
+                ) : null}
+
+                <View style={styles.pickRow}>
+                  <Text style={[styles.pickText, selected ? styles.pickTextSelected : null]}>
+                    {selected ? "Aktiv" : "Auswählen"}
+                  </Text>
+                  <IoniconsLike selected={selected} />
+                </View>
               </Pressable>
             );
           }}
@@ -248,69 +288,170 @@ export default function EventGate() {
   );
 }
 
+function IoniconsLike({ selected }: { selected: boolean }) {
+  return (
+    <View style={[styles.dot, selected ? styles.dotActive : null]} />
+  );
+}
+
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: UI.bg },
-
-  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10, paddingHorizontal: UI.padX },
-  loadingText: { opacity: 0.7, fontWeight: "800", color: UI.text },
-
-  body: { paddingHorizontal: UI.padX, paddingTop: 14, gap: 12 },
-  list: { paddingHorizontal: UI.padX, paddingTop: 14 },
-
+  safe: {
+    flex: 1,
+    backgroundColor: UI.bg,
+  },
+  center: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: UI.padX,
+    gap: 10,
+  },
+  loadingText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "rgba(0,0,0,0.56)",
+  },
+  body: {
+    flex: 1,
+    paddingHorizontal: UI.padX,
+    paddingTop: 8,
+  },
+  list: {
+    paddingHorizontal: UI.padX,
+    paddingTop: 8,
+  },
   card: {
-    backgroundColor: UI.bg,
-    borderRadius: 16,
-    padding: 14,
+    backgroundColor: "#fff",
+    borderRadius: 20,
     borderWidth: 1,
     borderColor: UI.border,
+    padding: 16,
   },
-
   warnCard: {
-    borderRadius: 16,
-    padding: 14,
+    backgroundColor: "#fff",
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: "rgba(220,38,38,0.25)",
-    backgroundColor: "rgba(220,38,38,0.06)",
+    borderColor: "rgba(255,120,120,0.28)",
+    padding: 16,
   },
-  warnTitle: { fontWeight: "900", color: "rgba(153,27,27,0.95)" },
-  warnText: { marginTop: 6, color: "rgba(153,27,27,0.95)" },
-  mono: { marginTop: 8, fontFamily: "monospace", color: UI.text, opacity: 0.75 },
-
-  row: { flexDirection: "row", gap: 10, marginTop: 12 },
-
-  btn: { flex: 1, paddingVertical: 12, borderRadius: 14, alignItems: "center" },
-  btnDark: { backgroundColor: UI.text },
-  btnDarkText: { color: "white", fontWeight: "900" },
-
+  warnTitle: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: UI.text,
+    marginBottom: 6,
+  },
+  warnText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: "rgba(0,0,0,0.62)",
+  },
+  mono: {
+    marginTop: 8,
+    fontSize: 12,
+    fontWeight: "700",
+    color: "rgba(0,0,0,0.48)",
+  },
+  row: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  btn: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  btnDark: {
+    backgroundColor: UI.text,
+  },
+  btnDarkText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "900",
+  },
   btnGhost: {
-    backgroundColor: "rgba(0,0,0,0.04)",
-    borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.06)",
-  },
-  btnGhostText: { fontWeight: "900", color: "rgba(0,0,0,0.55)" },
-
-  h2: { fontWeight: "900", color: UI.text },
-  p: { marginTop: 6, opacity: 0.75, color: UI.text },
-
-  eventCard: {
-    padding: 14,
-    borderRadius: 16,
+    backgroundColor: "#fff",
     borderWidth: 1,
     borderColor: UI.border,
+  },
+  btnGhostText: {
+    color: UI.text,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  h2: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: UI.text,
+    marginBottom: 8,
+  },
+  p: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: "rgba(0,0,0,0.62)",
+  },
+  eventCard: {
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: UI.border,
+    padding: 16,
     marginBottom: 10,
-    backgroundColor: UI.bg,
   },
   eventCardSelected: {
-    borderColor: UI.text,
-    backgroundColor: "rgba(17,24,39,0.04)",
+    borderColor: ACCENT_HEX,
+    backgroundColor: "rgba(255,255,255,0.98)",
   },
-
-  eventTitle: { fontWeight: "900", color: UI.text, marginBottom: 6 },
-  eventTitleSelected: { color: UI.text },
-
-  eventId: { opacity: 0.7, fontFamily: "monospace", color: UI.text, marginBottom: 6 },
-  eventIdSelected: { opacity: 0.9 },
-
-  meta: { opacity: 0.8, color: UI.text },
-  metaSelected: { opacity: 0.95 },
+  eventTitle: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: UI.text,
+    marginBottom: 6,
+  },
+  eventTitleSelected: {
+    color: UI.text,
+  },
+  eventId: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: "rgba(0,0,0,0.48)",
+    marginBottom: 6,
+  },
+  eventIdSelected: {
+    color: ACCENT_HEX,
+  },
+  meta: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: "rgba(0,0,0,0.62)",
+    marginBottom: 4,
+  },
+  metaSelected: {
+    color: "rgba(0,0,0,0.72)",
+  },
+  pickRow: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  pickText: {
+    fontSize: 13,
+    fontWeight: "900",
+    color: "rgba(0,0,0,0.62)",
+  },
+  pickTextSelected: {
+    color: ACCENT_HEX,
+  },
+  dot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "rgba(0,0,0,0.16)",
+  },
+  dotActive: {
+    backgroundColor: ACCENT_HEX,
+  },
 });

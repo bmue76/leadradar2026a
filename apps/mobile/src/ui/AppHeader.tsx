@@ -1,30 +1,28 @@
 /* eslint-disable jsx-a11y/alt-text */
 import React from "react";
 import { Image, StyleSheet, Text, View } from "react-native";
+
+import BRAND_LOGO from "../../assets/brand/leadradar-logo.png";
 import { UI } from "./tokens";
 
 export type AppHeaderProps = {
   title: string;
   tenantName?: string | null;
-  logoDataUrl?: string | null; // data-url (base64) or normal URL
+  logoDataUrl?: string | null;
 };
 
 function AppHeaderImpl({ title, tenantName = null, logoDataUrl = null }: AppHeaderProps) {
+  const logoSource = logoDataUrl ? { uri: logoDataUrl } : BRAND_LOGO;
+
   return (
     <View style={styles.root}>
-      <View style={styles.topRow}>
-        <View style={styles.logoWrap}>
-          {logoDataUrl ? (
-            <Image source={{ uri: logoDataUrl }} style={styles.logo} resizeMode="contain" accessibilityLabel="" />
-          ) : (
-            <View style={styles.logoPlaceholder} />
-          )}
-        </View>
+      <View style={styles.logoRow}>
+        <Image source={logoSource} style={styles.logo} resizeMode="contain" accessibilityLabel="" />
+      </View>
 
-        <View style={styles.rightCol}>
-          {tenantName ? <Text style={styles.tenantName}>{tenantName}</Text> : null}
-          <Text style={styles.title}>{title}</Text>
-        </View>
+      <View style={styles.textRow}>
+        {tenantName ? <Text style={styles.tenantName}>{tenantName}</Text> : null}
+        <Text style={styles.title}>{title}</Text>
       </View>
     </View>
   );
@@ -40,39 +38,26 @@ const styles = StyleSheet.create({
     borderBottomColor: UI.border,
     paddingHorizontal: 16,
     paddingTop: 12,
-    paddingBottom: 10,
+    paddingBottom: 12,
   },
-  topRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
+  logoRow: {
+    minHeight: 30,
+    justifyContent: "center",
+    marginBottom: 10,
   },
-  logoWrap: {
-    width: 120,
-    height: 34,
+  logo: {
+    width: 132,
+    height: 30,
+  },
+  textRow: {
     alignItems: "flex-start",
     justifyContent: "center",
   },
-  logo: {
-    width: 120,
-    height: 34,
-  },
-  logoPlaceholder: {
-    width: 56,
-    height: 20,
-    borderRadius: 6,
-    backgroundColor: "rgba(17,24,39,0.08)",
-  },
-  rightCol: {
-    flex: 1,
-    minHeight: 34,
-    justifyContent: "center",
-  },
   tenantName: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "700",
     color: "rgba(17,24,39,0.55)",
-    marginBottom: 2,
+    marginBottom: 4,
   },
   title: {
     fontSize: 20,

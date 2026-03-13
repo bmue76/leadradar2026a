@@ -10,6 +10,7 @@ import CollapsibleDetails from "../src/ui/CollapsibleDetails";
 import { getApiKey } from "../src/lib/auth";
 import { loadLicenseState } from "../src/lib/licenseState";
 import { getAppSettings } from "../src/lib/appSettings";
+import { getActiveEventId } from "../src/lib/eventStorage";
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -78,18 +79,18 @@ export default function StartGate() {
 
     (async () => {
       try {
-        const [storedAuth, rawApiKey, licenseState, settings] = await Promise.all([
+        const [storedAuth, rawApiKey, licenseState, settings, activeEventId] = await Promise.all([
           getStoredAuth(),
           getApiKey(),
           loadLicenseState(),
           getAppSettings(),
+          getActiveEventId(),
         ]);
 
         const apiKey = rawApiKey || storedAuth.apiKey || licenseState?.apiKey || null;
         const tenantSlug = storedAuth.tenantSlug || settings.tenantSlug || null;
         const deviceId = storedAuth.deviceId || null;
 
-        // self-heal mobileStorage if apiKey exists elsewhere
         if (apiKey && tenantSlug && (!storedAuth.apiKey || !storedAuth.tenantSlug)) {
           await setStoredAuth({
             tenantSlug,
@@ -104,7 +105,6 @@ export default function StartGate() {
           return;
         }
 
-        // Ohne Konto-Kürzel können wir den Mobile-License-Check nicht sauber fahren
         if (!tenantSlug) {
           await ensureMin();
           await routeNow("/provision");
@@ -128,13 +128,12 @@ export default function StartGate() {
         await ensureMin();
 
         if (winner.kind === "timeout") {
-          // ONLINE-only: wenn der Live-Check nicht rechtzeitig kommt, auf Lizenzscreen
           await routeNow("/license");
           return;
         }
 
         if (winner.res.isActive) {
-          await routeNow("/event-gate");
+          await routeNow(activeEventId ? "/home" : "/event-gate");
           return;
         }
 
