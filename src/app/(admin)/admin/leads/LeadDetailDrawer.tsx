@@ -33,6 +33,14 @@ function pickNumber(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
+function fileExt(filename?: string): string {
+  const raw = String(filename || "").trim().toLowerCase();
+  if (!raw) return "";
+  const idx = raw.lastIndexOf(".");
+  if (idx < 0) return "";
+  return raw.slice(idx);
+}
+
 function formatValue(v: unknown): string {
   if (v === null || v === undefined) return "";
   if (typeof v === "string") return v;
@@ -56,11 +64,59 @@ function formatValue(v: unknown): string {
   return String(v);
 }
 
-function isImageAttachment(a: { type?: string; mimeType?: string | null }): boolean {
+function isImageAttachment(a: { type?: string; mimeType?: string | null; filename?: string }): boolean {
   const t = String(a.type || "").toUpperCase();
   const m = String(a.mimeType || "").toLowerCase();
   if (m.startsWith("image/")) return true;
+  const ext = fileExt(a.filename);
+  if ([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".heif"].includes(ext)) return true;
   return t === "BUSINESS_CARD_IMAGE" || t === "IMAGE";
+}
+
+function isPdfAttachment(a: { type?: string; mimeType?: string | null; filename?: string }): boolean {
+  const t = String(a.type || "").toUpperCase();
+  const m = String(a.mimeType || "").toLowerCase();
+  if (m === "application/pdf") return true;
+  return t === "PDF" || fileExt(a.filename) === ".pdf";
+}
+
+function isAudioAttachment(a: { type?: string; mimeType?: string | null; filename?: string }): boolean {
+  const t = String(a.type || "").toUpperCase();
+  const m = String(a.mimeType || "").toLowerCase();
+  if (m.startsWith("audio/")) return true;
+  const ext = fileExt(a.filename);
+  if ([".m4a", ".mp3", ".wav", ".aac", ".ogg", ".oga", ".webm"].includes(ext)) return true;
+  return t === "AUDIO" || t === "VOICE_MESSAGE" || t === "VOICE" || t === "AUDIO_RECORDING";
+}
+
+function attachmentKindLabel(a: { type?: string; mimeType?: string | null; filename?: string }): string {
+  const t = String(a.type || "").toUpperCase();
+  if (t === "BUSINESS_CARD_IMAGE") return "Business card";
+  if (isAudioAttachment(a)) return "Voice message";
+  if (isPdfAttachment(a)) return "PDF";
+  if (isImageAttachment(a)) return "Image";
+  return t || "File";
+}
+
+function compactDate(iso?: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString();
+}
+
+function attachmentMetaText(a: {
+  type?: string;
+  mimeType?: string | null;
+  filename?: string;
+  sizeBytes?: number | null;
+  createdAt?: string | null;
+}): string {
+  const parts: string[] = [attachmentKindLabel(a)];
+  if (a.mimeType) parts.push(a.mimeType);
+  if (typeof a.sizeBytes === "number") parts.push(formatBytes(a.sizeBytes));
+  if (a.createdAt) parts.push(`created ${compactDate(a.createdAt)}`);
+  return parts.join(" · ");
 }
 
 function pillClass(kind: "neutral" | "good" | "warn" | "bad"): string {
@@ -103,6 +159,7 @@ type LeadAttachmentListItem = {
   filename?: string;
   mimeType?: string | null;
   sizeBytes?: number | null;
+  createdAt?: string | null;
 };
 
 type LeadContactView = {
@@ -241,6 +298,7 @@ function normalizeOcrPanelData(payload: unknown, fallbackAttachment: LeadAttachm
         filename: pickString(attRaw.filename) ?? fallbackAttachment?.filename,
         mimeType: pickString(attRaw.mimeType) ?? fallbackAttachment?.mimeType ?? null,
         sizeBytes: pickNumber(attRaw.sizeBytes) ?? fallbackAttachment?.sizeBytes ?? null,
+        createdAt: pickString(attRaw.createdAt) ?? fallbackAttachment?.createdAt ?? null,
       }
     : fallbackAttachment;
 
@@ -250,7 +308,27 @@ function normalizeOcrPanelData(payload: unknown, fallbackAttachment: LeadAttachm
 }
 
 function contactFromLead(lead: AdminLeadDetail | null): LeadContactView {
-  return (lead ?? ({} as AdminLeadDetail)) as unknown as LeadContactView;
+  const base = (lead ?? {}) as unknown as Record<string, unknown>;
+  const nestedContact = isPlainObject(base.contact) ? base.contact : {};
+
+  return {
+    contactFirstName: pickString(base.contactFirstName) ?? pickString(nestedContact.firstName) ?? null,
+    contactLastName: pickString(base.contactLastName) ?? pickString(nestedContact.lastName) ?? null,
+    contactEmail: pickString(base.contactEmail) ?? pickString(nestedContact.email) ?? null,
+    contactPhone:
+      pickString(base.contactPhone) ?? pickString(nestedContact.phoneRaw) ?? pickString(nestedContact.phone) ?? null,
+    contactMobile: pickString(base.contactMobile) ?? pickString(nestedContact.mobile) ?? null,
+    contactCompany: pickString(base.contactCompany) ?? pickString(nestedContact.company) ?? null,
+    contactTitle: pickString(base.contactTitle) ?? null,
+    contactWebsite: pickString(base.contactWebsite) ?? null,
+    contactStreet: pickString(base.contactStreet) ?? null,
+    contactZip: pickString(base.contactZip) ?? null,
+    contactCity: pickString(base.contactCity) ?? null,
+    contactCountry: pickString(base.contactCountry) ?? null,
+    contactSource: pickString(base.contactSource) ?? pickString(nestedContact.source) ?? null,
+    contactUpdatedAt: pickString(base.contactUpdatedAt) ?? pickString(nestedContact.updatedAt) ?? null,
+    contactOcrResultId: pickString(base.contactOcrResultId) ?? null,
+  };
 }
 
 function ocrStatusPill(status?: string | null): { label: string; kind: "neutral" | "good" | "warn" | "bad" } {
@@ -260,13 +338,6 @@ function ocrStatusPill(status?: string | null): { label: string; kind: "neutral"
   if (s === "FAILED") return { label: "Failed", kind: "bad" };
   if (!s) return { label: "—", kind: "neutral" };
   return { label: s, kind: "neutral" };
-}
-
-function compactDate(iso?: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString();
 }
 
 function toInput(v: string | null | undefined): string {
@@ -376,7 +447,7 @@ function OcrFieldRow(props: { label: string; value: string }) {
   );
 }
 
-function NonEmptyPairsFromContact(c: OcrContact | null): Array<{ label: string; value: string }> {
+function nonEmptyPairsFromContact(c: OcrContact | null): Array<{ label: string; value: string }> {
   const x = c ?? {};
   const pairs: Array<{ label: string; value: string }> = [
     { label: "First name", value: toInput(x.firstName) },
@@ -448,14 +519,45 @@ export default function LeadDetailDrawer(props: {
     return raw.filter((x) => isPlainObject(x)).map((x) => x as unknown as LeadAttachmentListItem);
   }, [lead]);
 
-  const businessCardAttachment = useMemo(() => {
-    const items = leadAttachments;
-    const pick = items.find((a) => String(a.type || "").toUpperCase() === "BUSINESS_CARD_IMAGE");
-    if (pick) return pick;
-
-    const img = items.find((a) => isImageAttachment(a));
-    return img ?? null;
+  const explicitBusinessCardAttachment = useMemo(() => {
+    return leadAttachments.find((a) => String(a.type || "").toUpperCase() === "BUSINESS_CARD_IMAGE") ?? null;
   }, [leadAttachments]);
+
+  const businessCardAttachment = useMemo(() => {
+    if (explicitBusinessCardAttachment) return explicitBusinessCardAttachment;
+    const img = leadAttachments.find((a) => isImageAttachment(a));
+    return img ?? null;
+  }, [explicitBusinessCardAttachment, leadAttachments]);
+
+  const businessCardUsesFallback = Boolean(!explicitBusinessCardAttachment && businessCardAttachment);
+
+  const nonBusinessAttachments = useMemo(() => {
+    if (!businessCardAttachment?.id) return leadAttachments;
+    return leadAttachments.filter((a) => a.id !== businessCardAttachment.id);
+  }, [leadAttachments, businessCardAttachment]);
+
+  const audioAttachments = useMemo(
+    () => nonBusinessAttachments.filter((a) => isAudioAttachment(a)),
+    [nonBusinessAttachments]
+  );
+
+  const imageAttachments = useMemo(
+    () => nonBusinessAttachments.filter((a) => isImageAttachment(a) && !isAudioAttachment(a) && !isPdfAttachment(a)),
+    [nonBusinessAttachments]
+  );
+
+  const pdfAttachments = useMemo(
+    () => nonBusinessAttachments.filter((a) => isPdfAttachment(a)),
+    [nonBusinessAttachments]
+  );
+
+  const otherFileAttachments = useMemo(
+    () =>
+      nonBusinessAttachments.filter(
+        (a) => !isAudioAttachment(a) && !isImageAttachment(a) && !isPdfAttachment(a)
+      ),
+    [nonBusinessAttachments]
+  );
 
   const resetLocalErrors = useCallback(() => {
     setErrorMessage("");
@@ -517,8 +619,9 @@ export default function LeadDetailDrawer(props: {
         setOcrPanel(normalized);
 
         const effective = normalized.ocr?.correctedContact ?? normalized.ocr?.parsedContact ?? null;
-        if (effective) setCorrectionDraft({ ...effective });
-        else {
+        if (effective) {
+          setCorrectionDraft({ ...effective });
+        } else {
           setCorrectionDraft({
             firstName: null,
             lastName: null,
@@ -719,8 +822,9 @@ export default function LeadDetailDrawer(props: {
 
   const doResetDraft = useCallback(() => {
     const base = effectiveContact;
-    if (base) setCorrectionDraft({ ...base });
-    else {
+    if (base) {
+      setCorrectionDraft({ ...base });
+    } else {
       setCorrectionDraft({
         firstName: null,
         lastName: null,
@@ -738,8 +842,7 @@ export default function LeadDetailDrawer(props: {
     }
   }, [effectiveContact]);
 
-  // ✅ HOOK FIX: parsedPairs useMemo MUST be before any early return
-  const parsedPairs = useMemo(() => NonEmptyPairsFromContact(parsedContact), [parsedContact]);
+  const parsedPairs = useMemo(() => nonEmptyPairsFromContact(parsedContact), [parsedContact]);
 
   if (!open) return null;
 
@@ -773,6 +876,9 @@ export default function LeadDetailDrawer(props: {
   const canApply = Boolean(ocr?.id) && String(ocr?.status || "").toUpperCase() === "COMPLETED" && !ocrBusyApply && !ocrBusySave;
   const canSave = Boolean(ocr?.id) && isDraftDirty && !ocrBusyApply && !ocrBusySave;
 
+  const hasAdditionalAttachments =
+    audioAttachments.length > 0 || imageAttachments.length > 0 || pdfAttachments.length > 0 || otherFileAttachments.length > 0;
+
   return (
     <div className="fixed inset-0 z-50">
       <button type="button" className="absolute inset-0 bg-black/30" onClick={onClose} aria-label="Close" />
@@ -801,7 +907,7 @@ export default function LeadDetailDrawer(props: {
                 </>
               ) : null}
             </div>
-            {leadId && <div className="mt-1 truncate text-xs text-black/40">id: {leadId}</div>}
+            {leadId ? <div className="mt-1 truncate text-xs text-black/40">id: {leadId}</div> : null}
           </div>
 
           <button type="button" className="rounded-md border px-3 py-1.5 text-sm hover:bg-black/5" onClick={onClose}>
@@ -810,9 +916,9 @@ export default function LeadDetailDrawer(props: {
         </div>
 
         <div className="px-5 py-4">
-          {state === "loading" && <DetailSkeleton />}
+          {state === "loading" ? <DetailSkeleton /> : null}
 
-          {state === "error" && (
+          {state === "error" ? (
             <Callout
               tone="bad"
               title="Could not load lead."
@@ -821,15 +927,15 @@ export default function LeadDetailDrawer(props: {
               onRetry={() => void loadDetail()}
               retryLabel="Retry"
             />
-          )}
+          ) : null}
 
-          {state === "idle" && lead && (
+          {state === "idle" && lead ? (
             <>
-              {(errorMessage || traceId) && (
+              {(errorMessage || traceId) ? (
                 <div className="mb-4">
                   <Callout tone="warn" title="Action issue" message={errorMessage || ""} traceId={traceId} onRetry={null} />
                 </div>
-              )}
+              ) : null}
 
               <div className="mb-5 flex flex-wrap items-center gap-2">
                 <button
@@ -932,6 +1038,12 @@ export default function LeadDetailDrawer(props: {
                       {ocr?.mode ? `· ${ocr.mode}` : ""}
                       {typeof ocr?.confidence === "number" ? ` · conf ${Math.round(ocr.confidence * 100)}%` : ""}
                     </div>
+
+                    {businessCardUsesFallback ? (
+                      <div className="mt-1 text-xs text-amber-700">
+                        No explicit BUSINESS_CARD_IMAGE found. Using first image as fallback.
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="flex shrink-0 items-center gap-2">
@@ -963,7 +1075,7 @@ export default function LeadDetailDrawer(props: {
                   </div>
                 </div>
 
-                {(ocrErrorMessage || ocrTraceId) && (
+                {(ocrErrorMessage || ocrTraceId) ? (
                   <div className="mb-3">
                     <Callout
                       tone="warn"
@@ -974,13 +1086,50 @@ export default function LeadDetailDrawer(props: {
                       retryLabel="Retry"
                     />
                   </div>
-                )}
+                ) : null}
 
                 {!businessCardAttachment ? (
                   <div className="text-sm text-black/60">No business card image attachment found for this lead.</div>
                 ) : !ocr?.id ? (
-                  <div className="rounded-xl border bg-black/[0.02] p-4 text-sm text-black/60">
-                    No OCR result yet. Use <span className="font-medium">Reload</span>.
+                  <div className="grid grid-cols-12 gap-4">
+                    <div className="col-span-5">
+                      <div className="rounded-xl border bg-black/[0.02] p-3">
+                        <div className="flex items-center justify-between">
+                          <div className="text-xs font-medium text-black/70">Attachment</div>
+                          <div className="flex items-center gap-2">
+                            <a
+                              href={inlineUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs text-black/60 underline hover:text-black"
+                            >
+                              Open
+                            </a>
+                            <a href={downloadUrl} className="text-xs text-black/60 underline hover:text-black">
+                              Download
+                            </a>
+                          </div>
+                        </div>
+
+                        <div className="mt-2 overflow-hidden rounded-lg border bg-white">
+                          <Image
+                            src={inlineUrl}
+                            alt={businessCardAttachment.filename || "business card"}
+                            width={400}
+                            height={240}
+                            className="h-auto w-full object-contain"
+                            unoptimized
+                          />
+                        </div>
+
+                        <div className="mt-2 text-xs text-black/50">{attachmentMetaText(businessCardAttachment)}</div>
+                      </div>
+                    </div>
+
+                    <div className="col-span-7 rounded-xl border bg-black/[0.02] p-4 text-sm text-black/60">
+                      No OCR result yet. The business card is already available above. Use <span className="font-medium">Reload</span>{" "}
+                      to fetch OCR data.
+                    </div>
                   </div>
                 ) : (
                   <div className="grid grid-cols-12 gap-4">
@@ -988,9 +1137,19 @@ export default function LeadDetailDrawer(props: {
                       <div className="rounded-xl border bg-black/[0.02] p-3">
                         <div className="flex items-center justify-between">
                           <div className="text-xs font-medium text-black/70">Attachment</div>
-                          <a href={downloadUrl} className="text-xs text-black/60 underline hover:text-black">
-                            Download
-                          </a>
+                          <div className="flex items-center gap-2">
+                            <a
+                              href={inlineUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs text-black/60 underline hover:text-black"
+                            >
+                              Open
+                            </a>
+                            <a href={downloadUrl} className="text-xs text-black/60 underline hover:text-black">
+                              Download
+                            </a>
+                          </div>
                         </div>
 
                         <div className="mt-2 overflow-hidden rounded-lg border bg-white">
@@ -1009,9 +1168,7 @@ export default function LeadDetailDrawer(props: {
                         </div>
 
                         <div className="mt-2 text-xs text-black/50">
-                          {ocrAttachment?.filename || "—"}
-                          {ocrAttachment?.mimeType ? ` · ${ocrAttachment.mimeType}` : ""}
-                          {typeof ocrAttachment?.sizeBytes === "number" ? ` · ${formatBytes(ocrAttachment.sizeBytes)}` : ""}
+                          {ocrAttachment ? attachmentMetaText(ocrAttachment) : "—"}
                         </div>
                       </div>
 
@@ -1150,63 +1307,182 @@ export default function LeadDetailDrawer(props: {
               </section>
 
               <section className="mt-4 rounded-xl border bg-white p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <h3 className="text-sm font-semibold">Attachments</h3>
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold">Attachments & media</h3>
+                    <div className="mt-1 text-xs text-black/50">
+                      {businessCardAttachment ? "1 business card" : "0 business cards"} · {audioAttachments.length} audio ·{" "}
+                      {imageAttachments.length} images · {pdfAttachments.length + otherFileAttachments.length} documents/files
+                    </div>
+                  </div>
                   <span className="text-xs text-black/50">{lead.attachments?.length ?? 0} file(s)</span>
                 </div>
 
-                {lead.attachments && lead.attachments.length > 0 ? (
-                  <div className="space-y-2">
-                    {lead.attachments.map((a) => {
-                      const item = a as unknown as LeadAttachmentListItem;
-                      const img = isImageAttachment(item);
-                      const inlineUrl2 = leadId ? `/api/admin/v1/leads/${leadId}/attachments/${item.id}/download?disposition=inline` : "#";
-                      const downloadUrl2 = leadId ? `/api/admin/v1/leads/${leadId}/attachments/${item.id}/download` : "#";
+                {audioAttachments.length > 0 ? (
+                  <div className="rounded-xl border bg-black/[0.02] p-3">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h4 className="text-sm font-medium">Voice messages / audio</h4>
+                      <span className="text-xs text-black/50">{audioAttachments.length} item(s)</span>
+                    </div>
 
-                      return (
-                        <div key={item.id} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
-                          <div className="flex min-w-0 items-center gap-3">
-                            {img ? (
-                              <div className="h-16 w-16 overflow-hidden rounded-md border bg-black/[0.02]">
-                                <Image
-                                  src={inlineUrl2}
-                                  alt={item.filename || "attachment"}
-                                  width={64}
-                                  height={64}
-                                  className="h-16 w-16 object-cover"
-                                  unoptimized
-                                />
-                              </div>
-                            ) : (
-                              <div className="flex h-16 w-16 items-center justify-center rounded-md border bg-black/[0.02] text-sm text-black/50">
-                                FILE
-                              </div>
-                            )}
+                    <div className="space-y-3">
+                      {audioAttachments.map((item) => {
+                        const inlineUrl2 = leadId
+                          ? `/api/admin/v1/leads/${leadId}/attachments/${item.id}/download?disposition=inline`
+                          : "#";
+                        const downloadUrl2 = leadId
+                          ? `/api/admin/v1/leads/${leadId}/attachments/${item.id}/download`
+                          : "#";
 
-                            <div className="min-w-0">
-                              <div className="truncate text-sm font-medium">{item.filename}</div>
-                              <div className="mt-0.5 text-xs text-black/50">
-                                {item.type}
-                                {item.mimeType ? ` · ${item.mimeType}` : ""}
-                                {typeof item.sizeBytes === "number" ? ` · ${formatBytes(item.sizeBytes)}` : ""}
+                        return (
+                          <div key={item.id} className="rounded-lg border bg-white p-3">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-medium text-black">{item.filename || "audio"}</div>
+                                <div className="mt-1 text-xs text-black/50">{attachmentMetaText(item)}</div>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                <a
+                                  href={inlineUrl2}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="rounded-md border px-3 py-1.5 text-sm hover:bg-black/5"
+                                >
+                                  Open
+                                </a>
+                                <a href={downloadUrl2} className="rounded-md border px-3 py-1.5 text-sm hover:bg-black/5">
+                                  Download
+                                </a>
+                              </div>
+                            </div>
+
+                            <div className="mt-3 rounded-lg border bg-black/[0.02] p-2">
+                              <audio controls preload="none" className="w-full">
+                                <source src={inlineUrl2} type={item.mimeType ?? undefined} />
+                              </audio>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+
+                {imageAttachments.length > 0 ? (
+                  <div className="mt-4 rounded-xl border bg-black/[0.02] p-3">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h4 className="text-sm font-medium">Additional images</h4>
+                      <span className="text-xs text-black/50">{imageAttachments.length} item(s)</span>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      {imageAttachments.map((item) => {
+                        const inlineUrl2 = leadId
+                          ? `/api/admin/v1/leads/${leadId}/attachments/${item.id}/download?disposition=inline`
+                          : "#";
+                        const downloadUrl2 = leadId
+                          ? `/api/admin/v1/leads/${leadId}/attachments/${item.id}/download`
+                          : "#";
+
+                        return (
+                          <div key={item.id} className="overflow-hidden rounded-lg border bg-white">
+                            <div className="overflow-hidden border-b bg-black/[0.02]">
+                              <Image
+                                src={inlineUrl2}
+                                alt={item.filename || "attachment image"}
+                                width={560}
+                                height={360}
+                                className="h-48 w-full object-cover"
+                                unoptimized
+                              />
+                            </div>
+
+                            <div className="p-3">
+                              <div className="truncate text-sm font-medium text-black">{item.filename || "image"}</div>
+                              <div className="mt-1 text-xs text-black/50">{attachmentMetaText(item)}</div>
+
+                              <div className="mt-3 flex items-center gap-2">
+                                <a
+                                  href={inlineUrl2}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="rounded-md border px-3 py-1.5 text-sm hover:bg-black/5"
+                                >
+                                  Open
+                                </a>
+                                <a href={downloadUrl2} className="rounded-md border px-3 py-1.5 text-sm hover:bg-black/5">
+                                  Download
+                                </a>
                               </div>
                             </div>
                           </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
 
-                          <a href={downloadUrl2} className="rounded-md border px-3 py-1.5 text-sm hover:bg-black/5">
-                            Download
-                          </a>
-                        </div>
-                      );
-                    })}
-                    <div className="text-xs text-black/40">Thumbnails are served inline. Download uses Content-Disposition: attachment.</div>
+                {pdfAttachments.length > 0 || otherFileAttachments.length > 0 ? (
+                  <div className="mt-4 rounded-xl border bg-black/[0.02] p-3">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h4 className="text-sm font-medium">PDFs & files</h4>
+                      <span className="text-xs text-black/50">{pdfAttachments.length + otherFileAttachments.length} item(s)</span>
+                    </div>
+
+                    <div className="space-y-2">
+                      {[...pdfAttachments, ...otherFileAttachments].map((item) => {
+                        const inlineUrl2 = leadId
+                          ? `/api/admin/v1/leads/${leadId}/attachments/${item.id}/download?disposition=inline`
+                          : "#";
+                        const downloadUrl2 = leadId
+                          ? `/api/admin/v1/leads/${leadId}/attachments/${item.id}/download`
+                          : "#";
+                        const canOpenInline = isPdfAttachment(item);
+
+                        return (
+                          <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-white px-3 py-3">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium text-black">{item.filename || "file"}</div>
+                              <div className="mt-1 text-xs text-black/50">{attachmentMetaText(item)}</div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              {canOpenInline ? (
+                                <a
+                                  href={inlineUrl2}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="rounded-md border px-3 py-1.5 text-sm hover:bg-black/5"
+                                >
+                                  Open
+                                </a>
+                              ) : null}
+                              <a href={downloadUrl2} className="rounded-md border px-3 py-1.5 text-sm hover:bg-black/5">
+                                Download
+                              </a>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+
+                {!hasAdditionalAttachments ? (
+                  <div className="mt-2 text-sm text-black/60">
+                    {businessCardAttachment
+                      ? "No additional attachments. The business card is shown in the OCR section above."
+                      : "No attachments."}
                   </div>
                 ) : (
-                  <div className="text-sm text-black/60">No attachments.</div>
+                  <div className="mt-3 text-xs text-black/40">
+                    Inline preview uses the existing tenant-scoped attachment download route. Download keeps Content-Disposition: attachment.
+                  </div>
                 )}
               </section>
             </>
-          )}
+          ) : null}
         </div>
       </div>
     </div>

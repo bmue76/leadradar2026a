@@ -43,12 +43,25 @@ export type AdminLeadFormRef = {
 
 export type AdminLeadAttachment = {
   id: string;
-  type: string; // IMAGE|PDF|OTHER (contract-driven)
+  type: string; // BUSINESS_CARD_IMAGE|IMAGE|PDF|OTHER|... (contract-driven, keep open-ended)
   filename: string;
   mimeType?: string | null;
   sizeBytes?: number | null;
   createdAt?: string | null;
   storageKey?: string | null;
+};
+
+export type AdminLeadContact = {
+  firstName?: string | null;
+  lastName?: string | null;
+  name?: string | null;
+  company?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  phoneRaw?: string | null;
+  mobile?: string | null;
+  source?: string | null;
+  updatedAt?: string | null;
 };
 
 export type AdminLeadDetail = {
@@ -68,6 +81,30 @@ export type AdminLeadDetail = {
   values: Record<string, unknown> | null;
   meta?: Record<string, unknown> | null;
 
+  reviewedAt?: string | null;
+  reviewStatus?: "NEW" | "REVIEWED" | string;
+  adminNotes?: string | null;
+  sourceDeviceName?: string | null;
+  hasCardAttachment?: boolean;
+
   form?: AdminLeadFormRef | null;
+  contact?: AdminLeadContact | null;
   attachments?: AdminLeadAttachment[];
+
+  // compatibility for older / mixed UI usage
+  contactFirstName?: string | null;
+  contactLastName?: string | null;
+  contactEmail?: string | null;
+  contactPhone?: string | null;
+  contactMobile?: string | null;
+  contactCompany?: string | null;
+  contactTitle?: string | null;
+  contactWebsite?: string | null;
+  contactStreet?: string | null;
+  contactZip?: string | null;
+  contactCity?: string | null;
+  contactCountry?: string | null;
+  contactSource?: string | null;
+  contactUpdatedAt?: string | null;
+  contactOcrResultId?: string | null;
 };
