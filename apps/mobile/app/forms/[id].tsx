@@ -16,8 +16,18 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import * as Clipboard from "expo-clipboard";
 import * as Contacts from "expo-contacts";
+import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
+import {
+  AudioModule,
+  RecordingPresets,
+  setAudioModeAsync,
+  useAudioPlayer,
+  useAudioPlayerStatus,
+  useAudioRecorder,
+  useAudioRecorderState,
+} from "expo-audio";
 
 import {
   apiFetch,
@@ -25,6 +35,7 @@ import {
   patchLeadContact,
   storeAttachmentOcrResult,
   uploadLeadAttachment,
+  type LeadAttachmentUploadType,
 } from "../../src/lib/api";
 import { clearApiKey, getApiKey } from "../../src/lib/auth";
 import {
@@ -45,6 +56,16 @@ type JsonObject = Record<string, unknown>;
 type ScreenSection = "FORM" | "CONTACT";
 type ContactPolicy = "NONE" | "EMAIL_OR_PHONE" | "EMAIL" | "PHONE";
 type CaptureModeKey = "businessCard" | "qr" | "contacts" | "manual";
+type VoiceMemoState = "idle" | "recording" | "preview" | "uploading" | "uploaded" | "error";
+type LocalAttachmentKind = "VOICE" | "IMAGE" | "PDF" | "AUDIO_FILE";
+type LocalAttachmentSource =
+  | "VOICE_RECORDING"
+  | "AUDIO_PICKER"
+  | "PHOTO_CAMERA"
+  | "PHOTO_LIBRARY"
+  | "PDF_PICKER";
+type LocalAttachmentStatus = "idle" | "uploading" | "uploaded" | "error";
+type FieldVariant = "audio" | "attachment" | null;
 
 type CaptureModes = {
   businessCard: boolean;
@@ -82,6 +103,35 @@ type FormDetailDTO = {
   status?: string | null;
   config?: unknown;
   fields: FormFieldDTO[];
+};
+
+type LocalLeadAttachment = {
+  localId: string;
+  formFieldKey: string;
+  kind: LocalAttachmentKind;
+  source: LocalAttachmentSource;
+  label: string;
+  fileName: string;
+  fileUri: string;
+  mimeType: string;
+  uploadType: LeadAttachmentUploadType;
+  sizeBytes?: number | null;
+  durationSec?: number | null;
+  status: LocalAttachmentStatus;
+  attachmentId?: string | null;
+  error?: string | null;
+};
+
+type AudioFieldConfig = {
+  allowRecord: boolean;
+  allowPick: boolean;
+  maxDurationSec: number;
+};
+
+type AttachmentFieldConfig = {
+  allowCamera: boolean;
+  allowLibrary: boolean;
+  allowPdf: boolean;
 };
 
 function isRecord(v: unknown): v is JsonObject {
@@ -397,6 +447,49 @@ function readCaptureModes(config: unknown): CaptureModes {
   };
 }
 
+function readFieldVariant(config: unknown): FieldVariant {
+  const raw = pickPropString(config, "variant")?.toLowerCase();
+  if (raw === "audio") return "audio";
+  if (raw === "attachment") return "attachment";
+  return null;
+}
+
+function readAudioFieldConfig(config: unknown): AudioFieldConfig {
+  const audioCfg = isRecord(config) && isRecord(config.audio) ? config.audio : null;
+
+  return {
+    allowRecord: typeof audioCfg?.allowRecord === "boolean" ? (audioCfg.allowRecord as boolean) : true,
+    allowPick: typeof audioCfg?.allowPick === "boolean" ? (audioCfg.allowPick as boolean) : true,
+    maxDurationSec:
+      typeof audioCfg?.maxDurationSec === "number" && Number.isFinite(audioCfg.maxDurationSec)
+        ? Math.max(1, Math.round(audioCfg.maxDurationSec as number))
+        : 60,
+  };
+}
+
+function readAttachmentFieldConfig(config: unknown): AttachmentFieldConfig {
+  const attachmentCfg = isRecord(config) && isRecord(config.attachment) ? config.attachment : null;
+
+  const allowCamera =
+    typeof attachmentCfg?.allowCamera === "boolean" ? (attachmentCfg.allowCamera as boolean) : true;
+
+  const allowLibrary =
+    typeof attachmentCfg?.allowLibrary === "boolean"
+      ? (attachmentCfg.allowLibrary as boolean)
+      : typeof attachmentCfg?.allowImageLibrary === "boolean"
+        ? (attachmentCfg.allowImageLibrary as boolean)
+        : true;
+
+  const allowPdf =
+    typeof attachmentCfg?.allowPdf === "boolean"
+      ? (attachmentCfg.allowPdf as boolean)
+      : typeof attachmentCfg?.allowDocument === "boolean"
+        ? (attachmentCfg.allowDocument as boolean)
+        : true;
+
+  return { allowCamera, allowLibrary, allowPdf };
+}
+
 function valueToString(v: unknown): string | null {
   if (typeof v === "string") {
     const t = v.trim();
@@ -700,6 +793,231 @@ function shortAlertText(raw: string): string {
   return `${raw.slice(0, 1200)}…`;
 }
 
+function stripExtension(name: string): string {
+  return name.replace(/\.[^.]+$/g, "");
+}
+
+function sanitizeBaseName(raw: string, fallback: string): string {
+  const cleaned = raw
+    .trim()
+    .replace(/[^\p{L}\p{N}._-]+/gu, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-_.]+|[-_.]+$/g, "");
+  return cleaned || fallback;
+}
+
+function guessAudioExtensionFromUri(uri: string): string {
+  const ext = uri.split("?")[0].split(".").pop()?.toLowerCase() ?? "";
+  if (
+    ext === "mp3" ||
+    ext === "m4a" ||
+    ext === "aac" ||
+    ext === "wav" ||
+    ext === "webm" ||
+    ext === "ogg" ||
+    ext === "opus" ||
+    ext === "3gp"
+  ) {
+    return ext;
+  }
+  return "m4a";
+}
+
+function guessAudioMimeTypeFromUri(uri: string): string {
+  const ext = guessAudioExtensionFromUri(uri);
+  switch (ext) {
+    case "mp3":
+      return "audio/mpeg";
+    case "m4a":
+      return "audio/mp4";
+    case "aac":
+      return "audio/aac";
+    case "wav":
+      return "audio/wav";
+    case "webm":
+      return "audio/webm";
+    case "ogg":
+      return "audio/ogg";
+    case "opus":
+      return "audio/opus";
+    case "3gp":
+      return "audio/3gpp";
+    default:
+      return "audio/mp4";
+  }
+}
+
+function formatDuration(seconds: number | null | undefined): string {
+  const total = Math.max(0, Math.round(seconds ?? 0));
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
+  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
+function formatBytes(bytes: number | null | undefined): string | null {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes <= 0) return null;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function attachmentStatusLabel(status: LocalAttachmentStatus): string {
+  switch (status) {
+    case "uploading":
+      return "Upload läuft";
+    case "uploaded":
+      return "Hochgeladen";
+    case "error":
+      return "Fehler";
+    default:
+      return "Bereit";
+  }
+}
+
+function voiceStateLabel(state: VoiceMemoState): string {
+  switch (state) {
+    case "recording":
+      return "Aufnahme läuft";
+    case "preview":
+      return "Bereit zur Prüfung";
+    case "uploading":
+      return "Upload läuft";
+    case "uploaded":
+      return "Hochgeladen";
+    case "error":
+      return "Fehler";
+    default:
+      return "Noch keine Sprachnachricht";
+  }
+}
+
+function attachmentKindLabel(kind: LocalAttachmentKind): string {
+  switch (kind) {
+    case "VOICE":
+      return "Sprachnotiz";
+    case "AUDIO_FILE":
+      return "Audio-Datei";
+    case "PDF":
+      return "PDF";
+    default:
+      return "Bild";
+  }
+}
+
+function summarizeAttachmentNames(items: LocalLeadAttachment[]): string {
+  return items.map((item) => item.fileName).join(", ");
+}
+
+async function normalizeImageAssetToAttachment(args: {
+  asset: ImagePicker.ImagePickerAsset;
+  source: LocalAttachmentSource;
+  formFieldKey: string;
+  label: string;
+}): Promise<LocalLeadAttachment> {
+  const manipulated = await ImageManipulator.manipulateAsync(
+    args.asset.uri,
+    [{ resize: { width: 2048 } }],
+    { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG }
+  );
+
+  const base = sanitizeBaseName(stripExtension(args.asset.fileName ?? "bild"), "bild");
+
+  return {
+    localId: uuidv4(),
+    formFieldKey: args.formFieldKey,
+    kind: "IMAGE",
+    source: args.source,
+    label: args.label,
+    fileName: `${base}-${Date.now()}.jpg`,
+    fileUri: manipulated.uri,
+    mimeType: "image/jpeg",
+    uploadType: "IMAGE",
+    sizeBytes: typeof args.asset.fileSize === "number" ? args.asset.fileSize : null,
+    durationSec: null,
+    status: "idle",
+    attachmentId: null,
+    error: null,
+  };
+}
+
+function createPdfAttachment(args: {
+  asset: DocumentPicker.DocumentPickerAsset;
+  formFieldKey: string;
+  label: string;
+}): LocalLeadAttachment {
+  const base = sanitizeBaseName(stripExtension(args.asset.name ?? "dokument"), "dokument");
+
+  return {
+    localId: uuidv4(),
+    formFieldKey: args.formFieldKey,
+    kind: "PDF",
+    source: "PDF_PICKER",
+    label: args.label,
+    fileName: `${base}.pdf`,
+    fileUri: args.asset.uri,
+    mimeType: args.asset.mimeType || "application/pdf",
+    uploadType: "PDF",
+    sizeBytes: typeof args.asset.size === "number" ? args.asset.size : null,
+    durationSec: null,
+    status: "idle",
+    attachmentId: null,
+    error: null,
+  };
+}
+
+function createPickedAudioAttachment(args: {
+  asset: DocumentPicker.DocumentPickerAsset;
+  formFieldKey: string;
+  label: string;
+}): LocalLeadAttachment {
+  const ext = guessAudioExtensionFromUri(args.asset.uri);
+  const fallbackBase = sanitizeBaseName(stripExtension(args.asset.name ?? "audio"), "audio");
+  const fileName =
+    args.asset.name && args.asset.name.trim().length > 0 ? args.asset.name.trim() : `${fallbackBase}.${ext}`;
+
+  return {
+    localId: uuidv4(),
+    formFieldKey: args.formFieldKey,
+    kind: "AUDIO_FILE",
+    source: "AUDIO_PICKER",
+    label: args.label,
+    fileName,
+    fileUri: args.asset.uri,
+    mimeType: args.asset.mimeType || guessAudioMimeTypeFromUri(args.asset.uri),
+    uploadType: "OTHER",
+    sizeBytes: typeof args.asset.size === "number" ? args.asset.size : null,
+    durationSec: null,
+    status: "idle",
+    attachmentId: null,
+    error: null,
+  };
+}
+
+function createRecordedAudioAttachment(args: {
+  uri: string;
+  durationSec: number;
+  formFieldKey: string;
+  label: string;
+}): LocalLeadAttachment {
+  const extension = guessAudioExtensionFromUri(args.uri);
+  return {
+    localId: uuidv4(),
+    formFieldKey: args.formFieldKey,
+    kind: "VOICE",
+    source: "VOICE_RECORDING",
+    label: args.label,
+    fileName: `voice-memo-${Date.now()}.${extension}`,
+    fileUri: args.uri,
+    mimeType: guessAudioMimeTypeFromUri(args.uri),
+    uploadType: "OTHER",
+    sizeBytes: null,
+    durationSec: Math.max(1, args.durationSec),
+    status: "idle",
+    attachmentId: null,
+    error: null,
+  };
+}
+
 function ScreenTabs(props: {
   current: ScreenSection;
   onChange: (next: ScreenSection) => void;
@@ -785,8 +1103,10 @@ export default function MobileCaptureFormScreen() {
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string>("");
+  const [submitInfo, setSubmitInfo] = useState<string>("");
   const [submitTraceId, setSubmitTraceId] = useState<string>("");
   const [submitStage, setSubmitStage] = useState<string>("");
+  const [completedLeadId, setCompletedLeadId] = useState<string>("");
 
   const [currentScreen, setCurrentScreen] = useState<ScreenSection>("FORM");
 
@@ -812,6 +1132,36 @@ export default function MobileCaptureFormScreen() {
   const [qrConfidenceLabel, setQrConfidenceLabel] = useState("");
   const [qrDecodeMode, setQrDecodeMode] = useState("");
 
+  const [audioFieldItems, setAudioFieldItems] = useState<Record<string, LocalLeadAttachment | null>>({});
+  const [audioFieldStates, setAudioFieldStates] = useState<Record<string, VoiceMemoState>>({});
+  const [audioFieldErrors, setAudioFieldErrors] = useState<Record<string, string>>({});
+  const [attachmentFieldItems, setAttachmentFieldItems] = useState<Record<string, LocalLeadAttachment[]>>({});
+  const [recordingFieldKey, setRecordingFieldKey] = useState<string | null>(null);
+  const [activeAudioFieldKey, setActiveAudioFieldKey] = useState<string | null>(null);
+  const [playbackRequestFieldKey, setPlaybackRequestFieldKey] = useState<string | null>(null);
+
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const audioRecorderState = useAudioRecorderState(audioRecorder);
+  const activeAudioUri = activeAudioFieldKey ? audioFieldItems[activeAudioFieldKey]?.fileUri ?? null : null;
+  const audioPlayer = useAudioPlayer(activeAudioUri ?? null, { updateInterval: 500 });
+  const audioPlayerStatus = useAudioPlayerStatus(audioPlayer);
+
+  const audioPlayerStatusSafe = audioPlayerStatus as {
+    playing?: boolean;
+    currentTime?: number;
+    duration?: number;
+  };
+  const audioIsPlaying = Boolean(audioPlayerStatusSafe.playing);
+  const audioCurrentTimeSec =
+    typeof audioPlayerStatusSafe.currentTime === "number" ? audioPlayerStatusSafe.currentTime : 0;
+  const audioDurationFromPlayer =
+    typeof audioPlayerStatusSafe.duration === "number" ? audioPlayerStatusSafe.duration : 0;
+  const recorderDurationMillis =
+    typeof (audioRecorderState as { durationMillis?: number }).durationMillis === "number"
+      ? ((audioRecorderState as { durationMillis?: number }).durationMillis as number)
+      : 0;
+  const recorderDurationSec = Math.max(0, Math.round(recorderDurationMillis / 1000));
+
   const title = useMemo(() => (form ? form.name : "Formular"), [form]);
 
   const resetQrState = useCallback(() => {
@@ -823,6 +1173,43 @@ export default function MobileCaptureFormScreen() {
     setQrConfidenceLabel("");
     setQrDecodeMode("");
   }, []);
+
+  useEffect(() => {
+    void setAudioModeAsync({
+      playsInSilentMode: true,
+      allowsRecording: false,
+    }).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!activeAudioFieldKey) return;
+    if (audioFieldItems[activeAudioFieldKey]) return;
+
+    try {
+      audioPlayer.pause();
+      audioPlayer.seekTo(0);
+    } catch {
+      // ignore
+    }
+
+    setActiveAudioFieldKey(null);
+  }, [activeAudioFieldKey, audioFieldItems, audioPlayer]);
+
+  useEffect(() => {
+    if (!playbackRequestFieldKey) return;
+    if (!activeAudioFieldKey) return;
+    if (activeAudioFieldKey !== playbackRequestFieldKey) return;
+    if (!activeAudioUri) return;
+
+    try {
+      audioPlayer.seekTo(0);
+      audioPlayer.play();
+    } catch {
+      // ignore
+    } finally {
+      setPlaybackRequestFieldKey(null);
+    }
+  }, [activeAudioFieldKey, activeAudioUri, audioPlayer, playbackRequestFieldKey]);
 
   const reActivate = useCallback(async () => {
     await clearApiKey();
@@ -867,12 +1254,32 @@ export default function MobileCaptureFormScreen() {
     [reActivate]
   );
 
+  const resetFieldMediaState = useCallback(() => {
+    try {
+      audioPlayer.pause();
+      audioPlayer.seekTo(0);
+    } catch {
+      // ignore
+    }
+
+    setAudioFieldItems({});
+    setAudioFieldStates({});
+    setAudioFieldErrors({});
+    setAttachmentFieldItems({});
+    setRecordingFieldKey(null);
+    setActiveAudioFieldKey(null);
+    setPlaybackRequestFieldKey(null);
+  }, [audioPlayer]);
+
   const load = useCallback(async () => {
     setLoadErrorTitle("");
     setLoadErrorDetail("");
     setLoadTraceId("");
     setSubmitError("");
+    setSubmitInfo("");
     setSubmitTraceId("");
+    setSubmitStage("");
+    setCompletedLeadId("");
     setErrors({});
     setLoading(true);
 
@@ -933,12 +1340,13 @@ export default function MobileCaptureFormScreen() {
       setOcrRawText("");
       setOcrBlocks(null);
       setRawExpanded(false);
+      resetFieldMediaState();
       resetQrState();
       setLastContactSource("MANUAL");
     } finally {
       setLoading(false);
     }
-  }, [eventIdParam, formId, handleApiErrorRedirects, resetQrState]);
+  }, [eventIdParam, formId, handleApiErrorRedirects, resetFieldMediaState, resetQrState]);
 
   useEffect(() => {
     void load();
@@ -994,6 +1402,7 @@ export default function MobileCaptureFormScreen() {
   const submitLabel = useMemo(() => readSubmitLabel(form?.config), [form?.config]);
 
   const padBottom = 24 + UI.tabBarBaseHeight + Math.max(insets.bottom, 0);
+  const actionLocked = submitting || Boolean(completedLeadId);
 
   const updateValue = useCallback((key: string, next: unknown) => {
     setValues((prev) => ({ ...prev, [key]: next }));
@@ -1016,6 +1425,49 @@ export default function MobileCaptureFormScreen() {
     },
     [updateValue, values]
   );
+
+  const setAudioFieldItem = useCallback(
+    (fieldKey: string, item: LocalLeadAttachment | null) => {
+      setAudioFieldItems((prev) => ({ ...prev, [fieldKey]: item }));
+      updateValue(fieldKey, item ? item.fileName : "");
+    },
+    [updateValue]
+  );
+
+  const setAudioFieldState = useCallback((fieldKey: string, state: VoiceMemoState) => {
+    setAudioFieldStates((prev) => ({ ...prev, [fieldKey]: state }));
+  }, []);
+
+  const setAudioFieldError = useCallback((fieldKey: string, message: string) => {
+    setAudioFieldErrors((prev) => ({ ...prev, [fieldKey]: message }));
+  }, []);
+
+  const clearAudioFieldError = useCallback((fieldKey: string) => {
+    setAudioFieldErrors((prev) => {
+      if (!prev[fieldKey]) return prev;
+      const copy = { ...prev };
+      delete copy[fieldKey];
+      return copy;
+    });
+  }, []);
+
+  const setAttachmentItemsForField = useCallback(
+    (fieldKey: string, items: LocalLeadAttachment[]) => {
+      setAttachmentFieldItems((prev) => ({ ...prev, [fieldKey]: items }));
+      updateValue(fieldKey, summarizeAttachmentNames(items));
+    },
+    [updateValue]
+  );
+
+  const patchAttachmentItem = useCallback((fieldKey: string, localId: string, patch: Partial<LocalLeadAttachment>) => {
+    setAttachmentFieldItems((prev) => {
+      const current = prev[fieldKey] ?? [];
+      return {
+        ...prev,
+        [fieldKey]: current.map((item) => (item.localId === localId ? { ...item, ...patch } : item)),
+      };
+    });
+  }, []);
 
   const applySuggestions = useCallback(
     (suggestionsRaw: ContactSuggestions, source: "OCR_MOBILE" | "QR_VCARD" | "MANUAL") => {
@@ -1171,10 +1623,14 @@ export default function MobileCaptureFormScreen() {
     setValues(initValuesFor(form.fields));
     setErrors({});
     setSubmitError("");
+    setSubmitInfo("");
     setSubmitTraceId("");
+    setSubmitStage("");
+    setCompletedLeadId("");
     resetCaptureState();
+    resetFieldMediaState();
     setCurrentScreen(startScreen);
-  }, [form, resetCaptureState, startScreen]);
+  }, [form, resetCaptureState, resetFieldMediaState, startScreen]);
 
   const goNext = useCallback(() => {
     const errs = validateFields(currentFields, values);
@@ -1184,10 +1640,342 @@ export default function MobileCaptureFormScreen() {
     setCurrentScreen(secondScreen);
   }, [currentFields, secondScreen, values]);
 
+  const startAudioRecordingForField = useCallback(
+    async (field: FormFieldDTO) => {
+      if (Platform.OS === "web") {
+        Alert.alert("Nicht verfügbar", "Audio-Aufnahme ist auf Web nicht verfügbar.");
+        return;
+      }
+
+      if (actionLocked) return;
+
+      if (recordingFieldKey && recordingFieldKey !== field.key) {
+        Alert.alert("Aufnahme läuft", "Bitte zuerst die aktuelle Aufnahme stoppen.");
+        return;
+      }
+
+      const audioCfg = readAudioFieldConfig(field.config);
+
+      try {
+        const perm = await AudioModule.requestRecordingPermissionsAsync();
+        if (!perm.granted) {
+          setAudioFieldState(field.key, "error");
+          setAudioFieldError(field.key, "Mikrofon-Zugriff wurde nicht erlaubt.");
+          return;
+        }
+
+        try {
+          audioPlayer.pause();
+          audioPlayer.seekTo(0);
+        } catch {
+          // ignore
+        }
+
+        setActiveAudioFieldKey(null);
+        setPlaybackRequestFieldKey(null);
+        setAudioFieldItem(field.key, null);
+        clearAudioFieldError(field.key);
+        setAudioFieldState(field.key, "recording");
+        setRecordingFieldKey(field.key);
+
+        await setAudioModeAsync({
+          playsInSilentMode: true,
+          allowsRecording: true,
+        });
+
+        await audioRecorder.prepareToRecordAsync();
+        audioRecorder.record();
+
+        if (audioCfg.maxDurationSec > 0) {
+          // maxDuration currently only informative in UI; hard stop can follow later if needed.
+        }
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Aufnahme konnte nicht gestartet werden.";
+        setRecordingFieldKey(null);
+        setAudioFieldState(field.key, "error");
+        setAudioFieldError(field.key, msg || "Aufnahme konnte nicht gestartet werden.");
+      }
+    },
+    [
+      actionLocked,
+      audioPlayer,
+      audioRecorder,
+      clearAudioFieldError,
+      recordingFieldKey,
+      setAudioFieldError,
+      setAudioFieldItem,
+      setAudioFieldState,
+    ]
+  );
+
+  const stopAudioRecordingForField = useCallback(
+    async (field: FormFieldDTO) => {
+      if (recordingFieldKey !== field.key) return;
+
+      try {
+        await audioRecorder.stop();
+        await setAudioModeAsync({
+          playsInSilentMode: true,
+          allowsRecording: false,
+        });
+
+        const uri =
+          typeof (audioRecorder as { uri?: string | null }).uri === "string"
+            ? (((audioRecorder as { uri?: string | null }).uri as string) || "")
+            : "";
+
+        if (!uri) {
+          setRecordingFieldKey(null);
+          setAudioFieldState(field.key, "error");
+          setAudioFieldError(field.key, "Aufnahme wurde gestoppt, aber die Datei ist nicht verfügbar.");
+          return;
+        }
+
+        const item = createRecordedAudioAttachment({
+          uri,
+          durationSec: recorderDurationSec,
+          formFieldKey: field.key,
+          label: field.label,
+        });
+
+        setAudioFieldItem(field.key, item);
+        clearAudioFieldError(field.key);
+        setAudioFieldState(field.key, "preview");
+        setRecordingFieldKey(null);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Aufnahme konnte nicht gestoppt werden.";
+        setRecordingFieldKey(null);
+        setAudioFieldState(field.key, "error");
+        setAudioFieldError(field.key, msg || "Aufnahme konnte nicht gestoppt werden.");
+      }
+    },
+    [
+      audioRecorder,
+      clearAudioFieldError,
+      recorderDurationSec,
+      recordingFieldKey,
+      setAudioFieldError,
+      setAudioFieldItem,
+      setAudioFieldState,
+    ]
+  );
+
+  const pickAudioFileForField = useCallback(
+    async (field: FormFieldDTO) => {
+      if (actionLocked) return;
+
+      try {
+        const result = await DocumentPicker.getDocumentAsync({
+          type: ["audio/*"],
+          multiple: false,
+          copyToCacheDirectory: true,
+        });
+
+        if (result.canceled || !result.assets?.length) return;
+
+        const item = createPickedAudioAttachment({
+          asset: result.assets[0],
+          formFieldKey: field.key,
+          label: field.label,
+        });
+
+        setAudioFieldItem(field.key, item);
+        clearAudioFieldError(field.key);
+        setAudioFieldState(field.key, "preview");
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Audio-Datei konnte nicht gewählt werden.";
+        setAudioFieldState(field.key, "error");
+        setAudioFieldError(field.key, msg || "Audio-Datei konnte nicht gewählt werden.");
+      }
+    },
+    [actionLocked, clearAudioFieldError, setAudioFieldError, setAudioFieldItem, setAudioFieldState]
+  );
+
+  const clearAudioField = useCallback(
+    (fieldKey: string) => {
+      if (activeAudioFieldKey === fieldKey) {
+        try {
+          audioPlayer.pause();
+          audioPlayer.seekTo(0);
+        } catch {
+          // ignore
+        }
+        setActiveAudioFieldKey(null);
+        setPlaybackRequestFieldKey(null);
+      }
+
+      if (recordingFieldKey === fieldKey) {
+        setRecordingFieldKey(null);
+      }
+
+      setAudioFieldItem(fieldKey, null);
+      setAudioFieldState(fieldKey, "idle");
+      clearAudioFieldError(fieldKey);
+    },
+    [
+      activeAudioFieldKey,
+      audioPlayer,
+      clearAudioFieldError,
+      recordingFieldKey,
+      setAudioFieldItem,
+      setAudioFieldState,
+    ]
+  );
+
+  const toggleAudioPlaybackForField = useCallback(
+    (fieldKey: string) => {
+      const item = audioFieldItems[fieldKey];
+      if (!item) return;
+
+      if (activeAudioFieldKey === fieldKey) {
+        try {
+          if (audioIsPlaying) {
+            audioPlayer.pause();
+          } else {
+            const effectiveDuration = audioDurationFromPlayer || item.durationSec || 0;
+            if (effectiveDuration > 0 && audioCurrentTimeSec >= Math.max(effectiveDuration - 0.2, 0)) {
+              audioPlayer.seekTo(0);
+            }
+            audioPlayer.play();
+          }
+        } catch {
+          Alert.alert("Wiedergabe nicht möglich", "Die Audio-Datei konnte nicht abgespielt werden.");
+        }
+        return;
+      }
+
+      setActiveAudioFieldKey(fieldKey);
+      setPlaybackRequestFieldKey(fieldKey);
+    },
+    [
+      activeAudioFieldKey,
+      audioCurrentTimeSec,
+      audioDurationFromPlayer,
+      audioFieldItems,
+      audioIsPlaying,
+      audioPlayer,
+    ]
+  );
+
+  const addImageToAttachmentField = useCallback(
+    async (field: FormFieldDTO, source: "camera" | "library") => {
+      if (actionLocked) return;
+
+      if (source === "camera" && Platform.OS === "web") {
+        Alert.alert("Nicht verfügbar", "Fotoaufnahme ist auf Web nicht verfügbar.");
+        return;
+      }
+
+      if (source === "camera") {
+        const perm = await ImagePicker.requestCameraPermissionsAsync();
+        if (!perm.granted) {
+          Alert.alert("Kamera erforderlich", "Bitte Kamera-Zugriff erlauben.");
+          return;
+        }
+
+        const result = await ImagePicker.launchCameraAsync({
+          quality: 1,
+          allowsEditing: false,
+          base64: false,
+        });
+
+        if (result.canceled || !result.assets?.length) return;
+
+        try {
+          const item = await normalizeImageAssetToAttachment({
+            asset: result.assets[0],
+            source: "PHOTO_CAMERA",
+            formFieldKey: field.key,
+            label: field.label,
+          });
+          const next = [...(attachmentFieldItems[field.key] ?? []), item];
+          setAttachmentItemsForField(field.key, next);
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : "Foto konnte nicht vorbereitet werden.";
+          Alert.alert("Foto fehlgeschlagen", msg || "Foto konnte nicht vorbereitet werden.");
+        }
+        return;
+      }
+
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert("Fotos erforderlich", "Bitte Fotos-Zugriff erlauben.");
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        quality: 1,
+        allowsEditing: false,
+        base64: false,
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      });
+
+      if (result.canceled || !result.assets?.length) return;
+
+      try {
+        const item = await normalizeImageAssetToAttachment({
+          asset: result.assets[0],
+          source: "PHOTO_LIBRARY",
+          formFieldKey: field.key,
+          label: field.label,
+        });
+        const next = [...(attachmentFieldItems[field.key] ?? []), item];
+        setAttachmentItemsForField(field.key, next);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Bild konnte nicht vorbereitet werden.";
+        Alert.alert("Bild fehlgeschlagen", msg || "Bild konnte nicht vorbereitet werden.");
+      }
+    },
+    [actionLocked, attachmentFieldItems, setAttachmentItemsForField]
+  );
+
+  const addPdfToAttachmentField = useCallback(
+    async (field: FormFieldDTO) => {
+      if (actionLocked) return;
+
+      try {
+        const result = await DocumentPicker.getDocumentAsync({
+          type: "application/pdf",
+          multiple: false,
+          copyToCacheDirectory: true,
+        });
+
+        if (result.canceled || !result.assets?.length) return;
+
+        const item = createPdfAttachment({
+          asset: result.assets[0],
+          formFieldKey: field.key,
+          label: field.label,
+        });
+
+        const next = [...(attachmentFieldItems[field.key] ?? []), item];
+        setAttachmentItemsForField(field.key, next);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "PDF konnte nicht gewählt werden.";
+        Alert.alert("PDF fehlgeschlagen", msg || "PDF konnte nicht gewählt werden.");
+      }
+    },
+    [actionLocked, attachmentFieldItems, setAttachmentItemsForField]
+  );
+
+  const removeAttachmentFromField = useCallback(
+    (fieldKey: string, localId: string) => {
+      const current = attachmentFieldItems[fieldKey] ?? [];
+      const next = current.filter((item) => item.localId !== localId);
+      setAttachmentItemsForField(fieldKey, next);
+    },
+    [attachmentFieldItems, setAttachmentItemsForField]
+  );
+
   const submit = useCallback(async () => {
     if (!form) return;
+    if (completedLeadId) {
+      Alert.alert("Lead bereits gespeichert", "Bitte zuerst einen neuen Lead starten.");
+      return;
+    }
 
     setSubmitError("");
+    setSubmitInfo("");
     setSubmitTraceId("");
 
     const allErrs = validateFields(form.fields, values);
@@ -1246,6 +2034,13 @@ export default function MobileCaptureFormScreen() {
       const leadId = res.data?.leadId;
       const deduped = typeof res.data?.deduped === "boolean" ? res.data.deduped : undefined;
 
+      const failAfterLead = async (message: string, traceId?: string) => {
+        setCompletedLeadId(leadId);
+        setSubmitTraceId(traceId ?? "");
+        setSubmitInfo(`${message}${traceId ? ` (traceId: ${traceId})` : ""}`);
+        Alert.alert("Lead gespeichert, Folgeaktion fehlgeschlagen", message);
+      };
+
       let ocrResultId: string | undefined;
 
       if (leadId && cardUri && lastContactSource === "OCR_MOBILE") {
@@ -1263,10 +2058,7 @@ export default function MobileCaptureFormScreen() {
           const redirected = await handleApiErrorRedirects({ status: attRes.status, code: attRes.code });
           if (redirected) return;
 
-          setSubmitTraceId(attRes.traceId ?? "");
-          setSubmitError(
-            `Attachment Upload fehlgeschlagen. ${attRes.message}${attRes.traceId ? ` (traceId: ${attRes.traceId})` : ""}`
-          );
+          await failAfterLead("Visitenkarten-Attachment Upload fehlgeschlagen.", attRes.traceId);
           return;
         }
 
@@ -1291,10 +2083,7 @@ export default function MobileCaptureFormScreen() {
           const redirected = await handleApiErrorRedirects({ status: ocrStoreRes.status, code: ocrStoreRes.code });
           if (redirected) return;
 
-          setSubmitTraceId(ocrStoreRes.traceId ?? "");
-          setSubmitError(
-            `OCR speichern fehlgeschlagen. ${ocrStoreRes.message}${ocrStoreRes.traceId ? ` (traceId: ${ocrStoreRes.traceId})` : ""}`
-          );
+          await failAfterLead("OCR-Ergebnis konnte nicht gespeichert werden.", ocrStoreRes.traceId);
           return;
         }
 
@@ -1320,12 +2109,96 @@ export default function MobileCaptureFormScreen() {
           const redirected = await handleApiErrorRedirects({ status: pr.status, code: pr.code });
           if (redirected) return;
 
-          setSubmitTraceId(pr.traceId ?? "");
-          setSubmitError(
-            `Kontakt konnte nicht übernommen werden. ${pr.message}${pr.traceId ? ` (traceId: ${pr.traceId})` : ""}`
-          );
+          await failAfterLead("Kontakt konnte nicht übernommen werden.", pr.traceId);
           return;
         }
+      }
+
+      const uploadQueue: LocalLeadAttachment[] = [
+        ...Object.values(audioFieldItems).filter((item): item is LocalLeadAttachment => Boolean(item)),
+        ...Object.values(attachmentFieldItems).flat(),
+      ];
+
+      const uploadFailures: string[] = [];
+      let uploadIndex = 0;
+
+      for (const item of uploadQueue) {
+        uploadIndex += 1;
+        setSubmitStage(uploadQueue.length > 1 ? `Anhang ${uploadIndex}/${uploadQueue.length}` : "Anhang");
+
+        if (item.kind === "VOICE" || item.kind === "AUDIO_FILE") {
+          setAudioFieldState(item.formFieldKey, "uploading");
+          clearAudioFieldError(item.formFieldKey);
+          setAudioFieldItems((prev) => ({
+            ...prev,
+            [item.formFieldKey]: prev[item.formFieldKey]
+              ? { ...(prev[item.formFieldKey] as LocalLeadAttachment), status: "uploading", error: null }
+              : prev[item.formFieldKey],
+          }));
+        } else {
+          patchAttachmentItem(item.formFieldKey, item.localId, { status: "uploading", error: null });
+        }
+
+        const attRes = await uploadLeadAttachment({
+          apiKey: key,
+          leadId,
+          fileUri: item.fileUri,
+          mimeType: item.mimeType,
+          fileName: item.fileName,
+          type: item.uploadType,
+        });
+
+        if (!attRes.ok) {
+          const redirected = await handleApiErrorRedirects({ status: attRes.status, code: attRes.code });
+          if (redirected) return;
+
+          const message = `${item.label}: ${attRes.message}${attRes.traceId ? ` (traceId: ${attRes.traceId})` : ""}`;
+          uploadFailures.push(message);
+
+          if (item.kind === "VOICE" || item.kind === "AUDIO_FILE") {
+            setAudioFieldState(item.formFieldKey, "error");
+            setAudioFieldError(item.formFieldKey, message);
+            setAudioFieldItems((prev) => ({
+              ...prev,
+              [item.formFieldKey]: prev[item.formFieldKey]
+                ? { ...(prev[item.formFieldKey] as LocalLeadAttachment), status: "error", error: message }
+                : prev[item.formFieldKey],
+            }));
+          } else {
+            patchAttachmentItem(item.formFieldKey, item.localId, { status: "error", error: message });
+          }
+
+          continue;
+        }
+
+        if (item.kind === "VOICE" || item.kind === "AUDIO_FILE") {
+          setAudioFieldState(item.formFieldKey, "uploaded");
+          setAudioFieldItems((prev) => ({
+            ...prev,
+            [item.formFieldKey]: prev[item.formFieldKey]
+              ? {
+                  ...(prev[item.formFieldKey] as LocalLeadAttachment),
+                  status: "uploaded",
+                  attachmentId: attRes.data.attachmentId,
+                  error: null,
+                }
+              : prev[item.formFieldKey],
+          }));
+        } else {
+          patchAttachmentItem(item.formFieldKey, item.localId, {
+            status: "uploaded",
+            attachmentId: attRes.data.attachmentId,
+            error: null,
+          });
+        }
+      }
+
+      if (uploadFailures.length > 0) {
+        setCompletedLeadId(leadId);
+        const message = `Lead wurde gespeichert, aber ${uploadFailures.length} Upload(s) sind fehlgeschlagen.`;
+        setSubmitInfo(`${message} ${uploadFailures.join(" · ")}`);
+        Alert.alert("Lead gespeichert, Upload unvollständig", message);
+        return;
       }
 
       Alert.alert("Gespeichert.", deduped ? "Lead war bereits vorhanden (Dedup)." : "Lead wurde erfasst.");
@@ -1335,9 +2208,13 @@ export default function MobileCaptureFormScreen() {
       setSubmitStage("");
     }
   }, [
+    attachmentFieldItems,
+    audioFieldItems,
     cardMime,
     cardName,
     cardUri,
+    clearAudioFieldError,
+    completedLeadId,
     contactFields,
     contactPolicy,
     eventId,
@@ -1346,7 +2223,10 @@ export default function MobileCaptureFormScreen() {
     lastContactSource,
     ocrBlocks,
     ocrRawText,
+    patchAttachmentItem,
     resetAll,
+    setAudioFieldError,
+    setAudioFieldState,
     values,
   ]);
 
@@ -1355,6 +2235,284 @@ export default function MobileCaptureFormScreen() {
       const err = errors[f.key];
       const requiredMark = f.required ? " *" : "";
       const help = f.helpText && f.helpText.trim() ? f.helpText.trim() : null;
+      const variant = readFieldVariant(f.config);
+
+      if (f.type === "TEXT" && variant === "audio") {
+        const audioCfg = readAudioFieldConfig(f.config);
+        const item = audioFieldItems[f.key] ?? null;
+        const state =
+          recordingFieldKey === f.key
+            ? "recording"
+            : audioFieldStates[f.key] ?? (item ? "preview" : "idle");
+        const audioErr = audioFieldErrors[f.key] ?? "";
+        const isActiveAudio = activeAudioFieldKey === f.key;
+        const isPlaying = isActiveAudio && audioIsPlaying;
+        const currentTime = isActiveAudio ? audioCurrentTimeSec : 0;
+        const duration = Math.max(isActiveAudio ? audioDurationFromPlayer : 0, item?.durationSec ?? 0);
+
+        return (
+          <View key={f.key} style={styles.fieldCard}>
+            <Text style={styles.fieldLabel}>
+              {f.label}
+              <Text style={styles.req}>{requiredMark}</Text>
+            </Text>
+
+            {help ? <Text style={styles.help}>{help}</Text> : null}
+
+            <View style={styles.inlineMediaCard}>
+              <View style={styles.inlineMediaHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inlineMediaTitle}>Sprachnotiz</Text>
+                  <Text style={styles.inlineMediaMeta}>
+                    Status: {voiceStateLabel(state as VoiceMemoState)}
+                    {audioCfg.maxDurationSec > 0 ? ` · max. ${audioCfg.maxDurationSec}s` : ""}
+                  </Text>
+                </View>
+
+                <View
+                  style={[
+                    styles.statusPill,
+                    state === "recording"
+                      ? styles.statusPillAccent
+                      : state === "uploaded"
+                        ? styles.statusPillSuccess
+                        : state === "error"
+                          ? styles.statusPillError
+                          : null,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.statusPillText,
+                      state === "recording" || state === "uploaded" ? styles.statusPillTextInverted : null,
+                      state === "error" ? styles.statusPillTextError : null,
+                    ]}
+                  >
+                    {voiceStateLabel(state as VoiceMemoState)}
+                  </Text>
+                </View>
+              </View>
+
+              {state === "recording" ? (
+                <View style={styles.voiceRecordingBox}>
+                  <View style={styles.voiceRecordingRow}>
+                    <View style={styles.recordingDot} />
+                    <Text style={styles.voiceTimer}>{formatDuration(recorderDurationSec)}</Text>
+                  </View>
+
+                  <View style={styles.inlineActionsRow}>
+                    <Pressable
+                      onPress={() => void stopAudioRecordingForField(f)}
+                      disabled={actionLocked}
+                      style={[styles.smallActionBtn, styles.smallActionBtnDark]}
+                    >
+                      <Text style={styles.smallActionBtnDarkText}>Stoppen</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : item ? (
+                <View style={styles.voicePreviewBox}>
+                  <Text style={styles.attachmentName}>{item.fileName}</Text>
+                  <Text style={styles.attachmentMeta}>
+                    {attachmentKindLabel(item.kind)}
+                    {item.durationSec ? ` · ${formatDuration(item.durationSec)}` : ""}
+                  </Text>
+
+                  <View style={styles.voiceProgressWrap}>
+                    <Text style={styles.voiceProgressText}>
+                      {formatDuration(currentTime)} / {formatDuration(duration)}
+                    </Text>
+                  </View>
+
+                  <View style={styles.inlineActionsRow}>
+                    <Pressable
+                      onPress={() => toggleAudioPlaybackForField(f.key)}
+                      disabled={state === "uploading"}
+                      style={[styles.smallActionBtn, styles.smallActionBtnDark]}
+                    >
+                      <Text style={styles.smallActionBtnDarkText}>{isPlaying ? "Pause" : "Prüfen"}</Text>
+                    </Pressable>
+
+                    {audioCfg.allowRecord ? (
+                      <Pressable
+                        onPress={() => void startAudioRecordingForField(f)}
+                        disabled={actionLocked || (recordingFieldKey !== null && recordingFieldKey !== f.key)}
+                        style={[styles.smallActionBtn, styles.smallActionBtnGhost]}
+                      >
+                        <Text style={styles.smallActionBtnGhostText}>Neu aufnehmen</Text>
+                      </Pressable>
+                    ) : null}
+
+                    <Pressable
+                      onPress={() => clearAudioField(f.key)}
+                      disabled={actionLocked}
+                      style={[styles.smallActionBtn, styles.smallActionBtnGhost]}
+                    >
+                      <Text style={styles.smallActionBtnGhostText}>Entfernen</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : (
+                <View style={styles.inlineMediaEmpty}>
+                  <Text style={styles.pMutedCompact}>Noch keine Audiodatei erfasst.</Text>
+
+                  <View style={styles.inlineActionsRow}>
+                    {audioCfg.allowRecord ? (
+                      <Pressable
+                        onPress={() => void startAudioRecordingForField(f)}
+                        disabled={actionLocked || (recordingFieldKey !== null && recordingFieldKey !== f.key)}
+                        style={[styles.smallActionBtn, styles.smallActionBtnDark]}
+                      >
+                        <Text style={styles.smallActionBtnDarkText}>Aufnehmen</Text>
+                      </Pressable>
+                    ) : null}
+
+                    {audioCfg.allowPick ? (
+                      <Pressable
+                        onPress={() => void pickAudioFileForField(f)}
+                        disabled={actionLocked || recordingFieldKey !== null}
+                        style={[styles.smallActionBtn, styles.smallActionBtnGhost]}
+                      >
+                        <Text style={styles.smallActionBtnGhostText}>Audio wählen</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </View>
+              )}
+
+              {audioErr ? (
+                <View style={styles.warnInlineCompact}>
+                  <Text style={styles.warnInlineTitle}>Audio</Text>
+                  <Text style={styles.warnInlineText}>{audioErr}</Text>
+                </View>
+              ) : null}
+            </View>
+
+            {err ? <Text style={styles.errText}>{err}</Text> : null}
+          </View>
+        );
+      }
+
+      if (f.type === "TEXT" && variant === "attachment") {
+        const attachmentCfg = readAttachmentFieldConfig(f.config);
+        const items = attachmentFieldItems[f.key] ?? [];
+
+        return (
+          <View key={f.key} style={styles.fieldCard}>
+            <Text style={styles.fieldLabel}>
+              {f.label}
+              <Text style={styles.req}>{requiredMark}</Text>
+            </Text>
+
+            {help ? <Text style={styles.help}>{help}</Text> : null}
+
+            <View style={styles.inlineMediaCard}>
+              <View style={styles.inlineMediaHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inlineMediaTitle}>Anhänge</Text>
+                  <Text style={styles.inlineMediaMeta}>Bild/Foto und PDF hinzufügen.</Text>
+                </View>
+              </View>
+
+              <View style={styles.attachmentActionsWrap}>
+                {attachmentCfg.allowCamera ? (
+                  <Pressable
+                    onPress={() => void addImageToAttachmentField(f, "camera")}
+                    disabled={actionLocked}
+                    style={[styles.attachmentActionBtn, styles.attachmentActionBtnDark]}
+                  >
+                    <Text style={styles.attachmentActionBtnDarkText}>Foto aufnehmen</Text>
+                  </Pressable>
+                ) : null}
+
+                {attachmentCfg.allowLibrary ? (
+                  <Pressable
+                    onPress={() => void addImageToAttachmentField(f, "library")}
+                    disabled={actionLocked}
+                    style={[styles.attachmentActionBtn, styles.attachmentActionBtnGhost]}
+                  >
+                    <Text style={styles.attachmentActionBtnGhostText}>Bild wählen</Text>
+                  </Pressable>
+                ) : null}
+
+                {attachmentCfg.allowPdf ? (
+                  <Pressable
+                    onPress={() => void addPdfToAttachmentField(f)}
+                    disabled={actionLocked}
+                    style={[styles.attachmentActionBtn, styles.attachmentActionBtnGhost]}
+                  >
+                    <Text style={styles.attachmentActionBtnGhostText}>PDF wählen</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+
+              {items.length === 0 ? (
+                <Text style={styles.pMutedCompact}>Noch keine Anhänge gewählt.</Text>
+              ) : (
+                <View style={styles.attachmentList}>
+                  {items.map((item) => {
+                    const metaParts = [
+                      attachmentKindLabel(item.kind),
+                      formatBytes(item.sizeBytes),
+                    ].filter(Boolean);
+
+                    return (
+                      <View key={item.localId} style={styles.attachmentRow}>
+                        <View style={{ flex: 1, gap: 4 }}>
+                          <Text style={styles.attachmentName}>{item.fileName}</Text>
+                          <Text style={styles.attachmentMeta}>
+                            {metaParts.length > 0 ? metaParts.join(" · ") : "Bereit"}
+                          </Text>
+                          {item.error ? <Text style={styles.errTextCompact}>{item.error}</Text> : null}
+                        </View>
+
+                        <View style={styles.attachmentRowActions}>
+                          <View
+                            style={[
+                              styles.statusPill,
+                              item.status === "uploading"
+                                ? styles.statusPillAccent
+                                : item.status === "uploaded"
+                                  ? styles.statusPillSuccess
+                                  : item.status === "error"
+                                    ? styles.statusPillError
+                                    : null,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.statusPillText,
+                                item.status === "uploading" || item.status === "uploaded"
+                                  ? styles.statusPillTextInverted
+                                  : null,
+                                item.status === "error" ? styles.statusPillTextError : null,
+                              ]}
+                            >
+                              {attachmentStatusLabel(item.status)}
+                            </Text>
+                          </View>
+
+                          {!completedLeadId && item.status !== "uploading" ? (
+                            <Pressable
+                              onPress={() => removeAttachmentFromField(f.key, item.localId)}
+                              disabled={actionLocked}
+                              style={[styles.smallActionBtn, styles.smallActionBtnGhost]}
+                            >
+                              <Text style={styles.smallActionBtnGhostText}>Entfernen</Text>
+                            </Pressable>
+                          ) : null}
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+
+            {err ? <Text style={styles.errText}>{err}</Text> : null}
+          </View>
+        );
+      }
 
       if (f.type === "CHECKBOX") {
         const v = values[f.key] === true;
@@ -1400,7 +2558,7 @@ export default function MobileCaptureFormScreen() {
                     <Pressable
                       key={o.value}
                       onPress={() => {
-                        if (submitting) return;
+                        if (submitting || completedLeadId) return;
                         if (f.type === "SINGLE_SELECT") updateValue(f.key, o.value);
                         else toggleMulti(f.key, o.value);
                       }}
@@ -1448,20 +2606,49 @@ export default function MobileCaptureFormScreen() {
             autoCorrect={f.type === "EMAIL" ? false : true}
             multiline={multiline}
             style={[styles.input, { height: inputHeight }, multiline ? styles.inputMultiline : null]}
-            editable={!submitting}
+            editable={!submitting && !completedLeadId}
           />
 
           {err ? <Text style={styles.errText}>{err}</Text> : null}
         </View>
       );
     },
-    [errors, submitting, toggleMulti, updateValue, values]
+    [
+      activeAudioFieldKey,
+      actionLocked,
+      addImageToAttachmentField,
+      addPdfToAttachmentField,
+      attachmentFieldItems,
+      audioCurrentTimeSec,
+      audioDurationFromPlayer,
+      audioFieldErrors,
+      audioFieldItems,
+      audioFieldStates,
+      audioIsPlaying,
+      clearAudioField,
+      completedLeadId,
+      errors,
+      pickAudioFileForField,
+      recorderDurationSec,
+      recordingFieldKey,
+      removeAttachmentFromField,
+      startAudioRecordingForField,
+      stopAudioRecordingForField,
+      submitting,
+      toggleAudioPlaybackForField,
+      toggleMulti,
+      updateValue,
+      values,
+    ]
   );
 
   const rawPreview = useMemo(() => {
     const txt = (ocrRawText || "").trim();
     if (!txt) return "";
-    const lines = txt.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+    const lines = txt
+      .split(/\r?\n/)
+      .map((x) => x.trim())
+      .filter(Boolean);
     if (rawExpanded) return lines.join("\n");
     return lines.slice(0, 6).join("\n");
   }, [ocrRawText, rawExpanded]);
@@ -1539,7 +2726,11 @@ export default function MobileCaptureFormScreen() {
             </View>
 
             <View style={{ marginTop: 12 }}>
-              <ScreenTabs current={currentScreen} onChange={setCurrentScreen} disabled={submitting} />
+              <ScreenTabs
+                current={currentScreen}
+                onChange={setCurrentScreen}
+                disabled={submitting || Boolean(completedLeadId)}
+              />
               <Text style={styles.subHint}>
                 Start:{" "}
                 <Text style={styles.subHintStrong}>
@@ -1557,6 +2748,7 @@ export default function MobileCaptureFormScreen() {
                 modes={captureModes}
                 active={activeCaptureMode}
                 onSelect={(mode) => {
+                  if (completedLeadId) return;
                   setActiveCaptureMode(mode);
 
                   if (mode === "businessCard") void scanBusinessCard();
@@ -1564,19 +2756,14 @@ export default function MobileCaptureFormScreen() {
                   if (mode === "contacts") void pickContact();
                   if (mode === "manual") setLastContactSource("MANUAL");
                 }}
-                disabled={submitting || ocrBusy || scannerOpen}
+                disabled={submitting || ocrBusy || scannerOpen || Boolean(completedLeadId)}
               />
 
               {activeCaptureMode === "businessCard" && (cardUri || ocrBusy || ocrError || ocrRawText) ? (
                 <View style={styles.captureReviewBox}>
                   {cardUri ? (
                     <View style={styles.capturePreviewRow}>
-                      <Image
-                        alt=""
-                        source={{ uri: cardUri }}
-                        style={styles.cardPreview}
-                        contentFit="cover"
-                      />
+                      <Image alt="" source={{ uri: cardUri }} style={styles.cardPreview} contentFit="cover" />
 
                       <View style={{ flex: 1, gap: 8 }}>
                         <Text style={styles.pStrong}>Scan vorhanden</Text>
@@ -1584,7 +2771,7 @@ export default function MobileCaptureFormScreen() {
                         <View style={{ flexDirection: "row", gap: 10 }}>
                           <Pressable
                             onPress={() => void scanBusinessCard()}
-                            disabled={ocrBusy || submitting}
+                            disabled={ocrBusy || submitting || Boolean(completedLeadId)}
                             style={[styles.smallActionBtn, styles.smallActionBtnDark]}
                           >
                             <Text style={styles.smallActionBtnDarkText}>{ocrBusy ? "…" : "Neu scannen"}</Text>
@@ -1592,7 +2779,7 @@ export default function MobileCaptureFormScreen() {
 
                           <Pressable
                             onPress={resetCaptureState}
-                            disabled={ocrBusy || submitting}
+                            disabled={ocrBusy || submitting || Boolean(completedLeadId)}
                             style={[styles.smallActionBtn, styles.smallActionBtnGhost]}
                           >
                             <Text style={styles.smallActionBtnGhostText}>Entfernen</Text>
@@ -1700,7 +2887,7 @@ export default function MobileCaptureFormScreen() {
                   <View style={{ flexDirection: "row", gap: 10 }}>
                     <Pressable
                       onPress={() => void openQrScanner()}
-                      disabled={submitting || scannerOpen}
+                      disabled={submitting || scannerOpen || Boolean(completedLeadId)}
                       style={[styles.smallActionBtn, styles.smallActionBtnDark]}
                     >
                       <Text style={styles.smallActionBtnDarkText}>Erneut scannen</Text>
@@ -1711,7 +2898,7 @@ export default function MobileCaptureFormScreen() {
                         resetQrState();
                         setLastContactSource("MANUAL");
                       }}
-                      disabled={submitting || scannerOpen}
+                      disabled={submitting || scannerOpen || Boolean(completedLeadId)}
                       style={[styles.smallActionBtn, styles.smallActionBtnGhost]}
                     >
                       <Text style={styles.smallActionBtnGhostText}>Zurücksetzen</Text>
@@ -1742,6 +2929,14 @@ export default function MobileCaptureFormScreen() {
             <View style={styles.fieldsWrap}>{currentFields.map(renderField)}</View>
           )}
 
+          {submitInfo ? (
+            <View style={styles.infoCard}>
+              <Text style={styles.infoTitle}>Hinweis</Text>
+              <Text style={styles.infoText}>{submitInfo}</Text>
+              {submitTraceId ? <Text style={styles.trace}>traceId: {submitTraceId}</Text> : null}
+            </View>
+          ) : null}
+
           {submitError ? (
             <View style={styles.warnInline}>
               <Text style={styles.warnInlineTitle}>Senden fehlgeschlagen</Text>
@@ -1751,7 +2946,17 @@ export default function MobileCaptureFormScreen() {
           ) : null}
 
           <View style={styles.footerCard}>
-            {!isFinalStep ? (
+            {completedLeadId ? (
+              <View style={{ flexDirection: "row", gap: 10 }}>
+                <Pressable onPress={resetAll} style={styles.submitBtn}>
+                  <Text style={styles.submitBtnText}>Neuer Lead</Text>
+                </Pressable>
+
+                <Pressable onPress={goList} style={styles.backBtn}>
+                  <Text style={styles.backBtnText}>Zur Liste</Text>
+                </Pressable>
+              </View>
+            ) : !isFinalStep ? (
               <Pressable
                 onPress={goNext}
                 disabled={submitting}
@@ -1774,13 +2979,19 @@ export default function MobileCaptureFormScreen() {
                   disabled={submitting || !form || form.fields.length === 0}
                   style={[styles.submitBtn, submitting ? styles.submitBtnDisabled : null]}
                 >
-                  <Text style={styles.submitBtnText}>{submitting ? `${submitStage || "Sende"}…` : submitLabel}</Text>
+                  <Text style={styles.submitBtnText}>
+                    {submitting ? `${submitStage || "Sende"}…` : submitLabel}
+                  </Text>
                 </Pressable>
               </View>
             )}
 
             <Text style={styles.pMuted}>
-              {currentScreen === "CONTACT" ? "Kontaktdaten" : "Individuelle Formularfelder"}
+              {completedLeadId
+                ? "Der aktuelle Lead ist bereits gespeichert. Bitte mit «Neuer Lead» weiterfahren."
+                : currentScreen === "CONTACT"
+                  ? "Kontaktdaten"
+                  : "Individuelle Formularfelder"}
             </Text>
           </View>
         </ScrollView>
@@ -1937,6 +3148,7 @@ const styles = StyleSheet.create({
     padding: 14,
     borderWidth: 1,
     borderColor: UI.border,
+    gap: 10,
   },
 
   fieldRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
@@ -1972,7 +3184,123 @@ const styles = StyleSheet.create({
   optionText: { fontWeight: "900", color: UI.text, opacity: 0.8 },
   optionTextSelected: { color: "white", opacity: 1 },
 
+  inlineMediaCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: UI.border,
+    backgroundColor: "rgba(0,0,0,0.02)",
+    padding: 12,
+    gap: 12,
+  },
+  inlineMediaHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  inlineMediaTitle: { fontWeight: "900", color: UI.text },
+  inlineMediaMeta: { marginTop: 2, color: UI.text, opacity: 0.7, lineHeight: 18 },
+  inlineMediaEmpty: { gap: 10 },
+
+  voiceRecordingBox: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.06)",
+    backgroundColor: "#ffffff",
+    padding: 12,
+    gap: 10,
+  },
+  voiceRecordingRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  recordingDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: UI.accent,
+  },
+  voiceTimer: { fontWeight: "900", color: UI.text, fontSize: 18 },
+
+  voicePreviewBox: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.06)",
+    backgroundColor: "#ffffff",
+    padding: 12,
+    gap: 10,
+  },
+  voiceProgressWrap: {
+    borderRadius: 10,
+    backgroundColor: "rgba(0,0,0,0.04)",
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  voiceProgressText: { fontWeight: "800", color: UI.text, opacity: 0.75 },
+
+  inlineActionsRow: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+
+  attachmentActionsWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  attachmentActionBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+  },
+  attachmentActionBtnDark: { backgroundColor: UI.text },
+  attachmentActionBtnDarkText: { color: "white", fontWeight: "900" },
+  attachmentActionBtnGhost: {
+    backgroundColor: "rgba(17,24,39,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.06)",
+  },
+  attachmentActionBtnGhostText: { color: UI.text, fontWeight: "900" },
+
+  attachmentList: { gap: 10 },
+  attachmentRow: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.06)",
+    backgroundColor: "#ffffff",
+    padding: 12,
+    gap: 8,
+  },
+  attachmentName: { fontWeight: "900", color: UI.text },
+  attachmentMeta: { color: UI.text, opacity: 0.7, fontWeight: "700" },
+  attachmentRowActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    flexWrap: "wrap",
+  },
+
+  statusPill: {
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.08)",
+    backgroundColor: "rgba(0,0,0,0.03)",
+  },
+  statusPillAccent: {
+    backgroundColor: UI.accent,
+    borderColor: UI.accent,
+  },
+  statusPillSuccess: {
+    backgroundColor: UI.text,
+    borderColor: UI.text,
+  },
+  statusPillError: {
+    backgroundColor: "rgba(220,38,38,0.06)",
+    borderColor: "rgba(220,38,38,0.18)",
+  },
+  statusPillText: { fontWeight: "900", color: UI.text, opacity: 0.75, fontSize: 12 },
+  statusPillTextInverted: { color: "white", opacity: 1 },
+  statusPillTextError: { color: "rgba(153,27,27,0.95)", opacity: 1 },
+
   errText: { marginTop: 8, fontWeight: "900", color: "rgba(153,27,27,0.95)" },
+  errTextCompact: { marginTop: 2, fontWeight: "800", fontSize: 12, color: "rgba(153,27,27,0.95)" },
 
   warnCard: {
     borderRadius: 16,
@@ -1991,8 +3319,25 @@ const styles = StyleSheet.create({
     borderColor: "rgba(220,38,38,0.18)",
     backgroundColor: "rgba(220,38,38,0.04)",
   },
+  warnInlineCompact: {
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "rgba(220,38,38,0.18)",
+    backgroundColor: "rgba(220,38,38,0.04)",
+  },
   warnInlineTitle: { fontWeight: "900", color: "rgba(153,27,27,0.95)" },
   warnInlineText: { marginTop: 6, color: "rgba(153,27,27,0.95)" },
+
+  infoCard: {
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "rgba(217,119,6,0.22)",
+    backgroundColor: "rgba(217,119,6,0.06)",
+  },
+  infoTitle: { fontWeight: "900", color: "rgba(146,64,14,0.95)" },
+  infoText: { marginTop: 6, color: "rgba(146,64,14,0.95)" },
 
   trace: { marginTop: 8, fontFamily: "monospace", opacity: 0.85, color: UI.text },
 
@@ -2019,6 +3364,7 @@ const styles = StyleSheet.create({
   p: { marginTop: 8, color: UI.text, opacity: 0.9, lineHeight: 18 },
   pStrong: { color: UI.text, fontWeight: "900" },
   pMuted: { marginTop: 8, color: UI.text, opacity: 0.7, lineHeight: 18 },
+  pMutedCompact: { color: UI.text, opacity: 0.7, lineHeight: 18 },
 
   footerCard: {
     backgroundColor: UI.bg,
@@ -2030,7 +3376,14 @@ const styles = StyleSheet.create({
   },
 
   submitBtn: { flex: 1, paddingVertical: 14, borderRadius: 14, alignItems: "center", backgroundColor: UI.text },
-  backBtn: { width: 110, paddingVertical: 14, borderRadius: 14, alignItems: "center", borderWidth: 1, borderColor: UI.border },
+  backBtn: {
+    width: 110,
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: UI.border,
+  },
   backBtnText: { fontWeight: "900", color: UI.text, opacity: 0.75 },
 
   submitBtnDisabled: { opacity: 0.6 },

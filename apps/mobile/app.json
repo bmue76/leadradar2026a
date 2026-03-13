@@ -28,6 +28,13 @@
           }
         }
       ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "LeadRadar benötigt Zugriff auf das Mikrofon, um eine Sprachnachricht zum Lead aufzunehmen.",
+          "recordAudioAndroid": true
+        }
+      ],
       "expo-secure-store"
     ],
     "android": {
@@ -37,7 +44,8 @@
         "backgroundColor": "#ffffff"
       },
       "permissions": [
-        "CAMERA"
+        "CAMERA",
+        "RECORD_AUDIO"
       ]
     },
     "ios": {
@@ -46,7 +54,8 @@
       "infoPlist": {
         "NSCameraUsageDescription": "LeadRadar benötigt die Kamera, um Visitenkarten zu scannen.",
         "NSPhotoLibraryUsageDescription": "LeadRadar benötigt Zugriff auf Fotos, um eine Visitenkarte auszuwählen.",
-        "NSPhotoLibraryAddUsageDescription": "LeadRadar speichert das Foto temporär, um OCR auszuführen."
+        "NSPhotoLibraryAddUsageDescription": "LeadRadar speichert das Foto temporär, um OCR auszuführen.",
+        "NSMicrophoneUsageDescription": "LeadRadar benötigt Zugriff auf das Mikrofon, um eine Sprachnachricht zum Lead aufzunehmen."
       }
     },
     "web": {

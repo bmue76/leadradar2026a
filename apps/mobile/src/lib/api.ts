@@ -198,10 +198,10 @@ export async function apiFetch<T = unknown>(arg: string | ApiFetchArgs): Promise
 
   // Prefer server response shape (ok/data), but accept plain JSON too.
   if (isRecord(payload) && payload.ok === true && "data" in payload) {
-    return { ok: true, data: (payload.data as T), traceId: pickString(payload.traceId) ?? traceId };
+    return { ok: true, data: payload.data as T, traceId: pickString(payload.traceId) ?? traceId };
   }
 
-  return { ok: true, data: (payload as T), traceId };
+  return { ok: true, data: payload as T, traceId };
 }
 
 /* ---------------------------
@@ -241,20 +241,21 @@ export async function createLead(args: { apiKey: string; payload: CreateLeadBody
   return { ok: true, data: { leadId, deduped }, traceId: (res as ApiOk<unknown>).traceId };
 }
 
-export type LegacyUploadLeadAttachmentArgs = {
+export type LeadAttachmentUploadType = "BUSINESS_CARD_IMAGE" | "IMAGE" | "PDF" | "OTHER";
+
+export type UploadLeadAttachmentArgs = {
   apiKey: string;
   leadId: string;
   fileUri: string;
   mimeType: string;
   fileName: string;
-  type?: "BUSINESS_CARD_IMAGE" | "IMAGE" | "PDF" | "OTHER";
+  type?: LeadAttachmentUploadType;
 };
 
 export type UploadLeadAttachmentData = { attachmentId: string };
 
-export async function uploadLeadAttachment(args: LegacyUploadLeadAttachmentArgs): Promise<ApiResult<UploadLeadAttachmentData>> {
+export async function uploadLeadAttachment(args: UploadLeadAttachmentArgs): Promise<ApiResult<UploadLeadAttachmentData>> {
   const fd = new FormData();
-  // RN file part:
   fd.append("file", { uri: args.fileUri, name: args.fileName, type: args.mimeType } as unknown as Blob);
   if (args.type) fd.append("type", args.type);
 
@@ -263,7 +264,7 @@ export async function uploadLeadAttachment(args: LegacyUploadLeadAttachmentArgs)
     path: `/api/mobile/v1/leads/${encodeURIComponent(args.leadId)}/attachments`,
     apiKey: args.apiKey,
     body: fd,
-    timeoutMs: 30_000,
+    timeoutMs: 60_000,
   });
 
   if (!res.ok) return res;
@@ -271,7 +272,6 @@ export async function uploadLeadAttachment(args: LegacyUploadLeadAttachmentArgs)
   const data = res.data;
   if (!isRecord(data)) return { ok: false, message: "Invalid API response shape (uploadLeadAttachment)." };
 
-  // backend currently returns { id: ... } — keep mobile contract { attachmentId }
   const attachmentId = pickString(data.attachmentId) ?? pickString(data.id);
   if (!attachmentId) return { ok: false, message: "Invalid API response shape (missing attachmentId)." };
 
