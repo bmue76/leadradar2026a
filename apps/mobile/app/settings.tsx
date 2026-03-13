@@ -1,14 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import * as Clipboard from "expo-clipboard";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { StatusBar } from "expo-status-bar";
 
 import { getApiBaseUrl as getEnvApiBaseUrl } from "../src/lib/env";
 import { clearApiKey, getApiKey } from "../src/lib/auth";
 import { apiFetch } from "../src/lib/api";
 import { getAppSettings, normalizeBaseUrl, normalizeTenantSlug, setAppSettings } from "../src/lib/appSettings";
-import { ScreenScaffold } from "../src/ui/ScreenScaffold";
+import { PoweredBy } from "../src/ui/PoweredBy";
+import MobileContentHeader from "../src/ui/MobileContentHeader";
 import { UI } from "../src/ui/tokens";
+import { ACCENT_HEX } from "../src/lib/mobileConfig";
+import { useBranding } from "../src/features/branding/useBranding";
 
 type ConnState =
   | { kind: "idle" }
@@ -28,8 +33,10 @@ function keyInfo(key: string | null): string {
   return `${prefix}… (len ${trimmed.length})`;
 }
 
-export default function Settings() {
+export default function ProfileScreen() {
   const isDev = isDevRuntime();
+  const insets = useSafeAreaInsets();
+  const { state: brandingState, branding } = useBranding();
 
   const [busy, setBusy] = useState(false);
 
@@ -47,6 +54,15 @@ export default function Settings() {
   const [note, setNote] = useState<string | null>(null);
   const [conn, setConn] = useState<ConnState>({ kind: "idle" });
 
+  const tenantName = brandingState.kind === "ready" ? branding.tenantName : null;
+  const logoDataUrl = brandingState.kind === "ready" ? branding.logoDataUrl : null;
+  const accentColor = brandingState.kind === "ready" ? branding.accentColor ?? ACCENT_HEX : ACCENT_HEX;
+
+  const scrollPadBottom = useMemo(
+    () => UI.tabBarBaseHeight + Math.max(insets.bottom, 0) + 48,
+    [insets.bottom]
+  );
+
   const canSave = useMemo(() => {
     const b = normalizeBaseUrl(baseUrlText);
     const t = normalizeTenantSlug(tenantText);
@@ -56,11 +72,11 @@ export default function Settings() {
   const load = useCallback(async () => {
     setBusy(true);
     setNote(null);
+
     try {
       const s = await getAppSettings({ refresh: true });
       setDeviceUid(s.deviceUid);
 
-      // Show stored values if present, otherwise DEV-friendly defaults
       const env = getEnvApiBaseUrl();
       setBaseUrlText(s.baseUrl ?? (isDev ? env : ""));
       setTenantText(s.tenantSlug ?? "");
@@ -97,16 +113,17 @@ export default function Settings() {
   const onSave = useCallback(async () => {
     setBusy(true);
     setNote(null);
+
     try {
       const b = normalizeBaseUrl(baseUrlText);
       const t = normalizeTenantSlug(tenantText);
 
       if (!b) {
-        setNote("Bitte eine gültige Base URL eingeben (z.B. https://leadradar.ch).");
+        setNote("Bitte eine gültige Base URL eingeben.");
         return;
       }
       if (!t) {
-        setNote("Bitte ein gültiges Konto-Kürzel eingeben (z.B. atlex).");
+        setNote("Bitte ein gültiges Konto-Kürzel eingeben.");
         return;
       }
 
@@ -123,6 +140,7 @@ export default function Settings() {
 
     setBusy(true);
     setNote(null);
+
     try {
       const env = getEnvApiBaseUrl();
       setBaseUrlText(env);
@@ -140,11 +158,51 @@ export default function Settings() {
     setNote("Device UID kopiert.");
   }, [deviceUid]);
 
+  const onCopySetup = useCallback(async () => {
+    const summary = [
+      `LeadRadar Support-Handoff`,
+      ``,
+      `Tenant: ${tenantText || "—"}`,
+      `Base URL: ${normalizeBaseUrl(baseUrlText) ?? "—"}`,
+      `Device UID: ${deviceUid || "—"}`,
+      `API Key: ${apiKeyMasked}`,
+      `Plattform: ${Platform.OS}`,
+      `Verbindung: ${conn.kind}`,
+      conn.kind === "success" ? `TraceId: ${conn.traceId ?? "—"}` : "",
+      conn.kind === "error" ? `Fehler: ${conn.message}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    await Clipboard.setStringAsync(summary);
+    setNote("Aktuelles Setup kopiert.");
+  }, [apiKeyMasked, baseUrlText, conn, deviceUid, tenantText]);
+
+  const onSupport = useCallback(async () => {
+    const body = [
+      "LeadRadar Support",
+      "",
+      `Tenant: ${tenantText || "—"}`,
+      `Base URL: ${normalizeBaseUrl(baseUrlText) ?? "—"}`,
+      `Device UID: ${deviceUid || "—"}`,
+      `API Key: ${apiKeyMasked}`,
+      `Plattform: ${Platform.OS}`,
+      conn.kind === "success" ? `TraceId: ${conn.traceId ?? "—"}` : "",
+      conn.kind === "error" ? `Fehler: ${conn.message}` : "",
+      "",
+      "Beschreibung des Problems:",
+      "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    await Linking.openURL(`mailto:?subject=${encodeURIComponent("LeadRadar Support")}&body=${encodeURIComponent(body)}`);
+  }, [apiKeyMasked, baseUrlText, conn, deviceUid, tenantText]);
+
   const onTestConnection = useCallback(async () => {
     setConn({ kind: "loading" });
     setNote(null);
 
-    // Lightweight endpoint (no mobile auth required)
     const res = await apiFetch<{ now?: string }>({
       method: "GET",
       path: "/api/platform/v1/health",
@@ -170,9 +228,10 @@ export default function Settings() {
     });
   }, []);
 
-  const onResetApiKey = useCallback(async () => {
+  const onDisconnect = useCallback(async () => {
     setBusy(true);
     setNote(null);
+
     try {
       await clearApiKey();
       setRevealKey(false);
@@ -186,10 +245,14 @@ export default function Settings() {
   }, []);
 
   return (
-    <ScreenScaffold title="Einstellungen" scroll={true} showPoweredBy>
-      <View style={{ gap: 12 }}>
+    <SafeAreaView style={styles.safe} edges={["top"]}>
+      <StatusBar style="dark" backgroundColor={UI.bg} />
+
+      <ScrollView contentContainerStyle={[styles.body, { paddingBottom: scrollPadBottom }]}>
+        <MobileContentHeader title="Profil" tenantName={tenantName} logoDataUrl={logoDataUrl} />
+
         <View style={styles.card}>
-          <Text style={styles.h2}>Server</Text>
+          <Text style={styles.sectionTitle}>Server</Text>
 
           <Text style={styles.label}>Base URL</Text>
           <TextInput
@@ -203,7 +266,7 @@ export default function Settings() {
           />
           <Text style={styles.meta}>{baseUrlMeta}</Text>
 
-          <Text style={[styles.label, { marginTop: 10 }]}>Konto-Kürzel</Text>
+          <Text style={[styles.label, styles.labelTop]}>Konto-Kürzel</Text>
           <TextInput
             value={tenantText}
             onChangeText={setTenantText}
@@ -215,140 +278,249 @@ export default function Settings() {
           />
           <Text style={styles.meta}>{tenantMeta}</Text>
 
-          <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
-            <Pressable disabled={!canSave} onPress={onSave} style={[styles.btn, styles.btnDark, !canSave && styles.btnDisabled]}>
-              <Text style={styles.btnDarkText}>{busy ? "Lade…" : "Speichern"}</Text>
+          <View style={styles.row}>
+            <Pressable disabled={!canSave} onPress={onSave} style={[styles.btn, { backgroundColor: accentColor }, !canSave && styles.btnDisabled]}>
+              <Text style={styles.btnPrimaryText}>{busy ? "Lade…" : "Speichern"}</Text>
             </Pressable>
 
-            {isDev ? (
-              <Pressable disabled={busy} onPress={onDevDefaults} style={[styles.btn, styles.btnLight, busy && styles.btnDisabled]}>
-                <Text style={styles.btnLightText}>DEV Defaults</Text>
-              </Pressable>
-            ) : null}
+            <Pressable disabled={busy} onPress={onTestConnection} style={[styles.btn, styles.btnGhost, busy && styles.btnDisabled]}>
+              <Text style={styles.btnGhostText}>
+                {conn.kind === "loading" ? "Prüfe…" : "Verbindung testen"}
+              </Text>
+            </Pressable>
           </View>
+
+          {isDev ? (
+            <Pressable disabled={busy} onPress={onDevDefaults} style={[styles.btnWide, styles.btnGhost, busy && styles.btnDisabled]}>
+              <Text style={styles.btnGhostText}>DEV Defaults setzen</Text>
+            </Pressable>
+          ) : null}
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.h2}>Gerät</Text>
+          <Text style={styles.sectionTitle}>Gerät</Text>
 
-          <Text style={styles.label}>Device UID (read-only)</Text>
-          <View style={{ flexDirection: "row", gap: 10, alignItems: "center" }}>
-            <Text style={[styles.mono, { flex: 1 }]} numberOfLines={1}>
+          <Text style={styles.label}>Device UID</Text>
+          <View style={styles.inlineRow}>
+            <Text style={[styles.mono, styles.inlineFill]} numberOfLines={1}>
               {deviceUid}
             </Text>
-            <Pressable onPress={onCopyDeviceUid} style={[styles.btnMini, styles.btnLight]}>
-              <Text style={styles.btnLightText}>Kopieren</Text>
+            <Pressable onPress={onCopyDeviceUid} style={[styles.btnMini, styles.btnGhost]}>
+              <Text style={styles.btnGhostText}>Kopieren</Text>
             </Pressable>
           </View>
 
-          <Text style={[styles.label, { marginTop: 10 }]}>Gespeicherter apiKey</Text>
+          <Text style={[styles.label, styles.labelTop]}>API Key</Text>
           <Text style={styles.mono}>{revealKey ? apiKeyFull : apiKeyMasked}</Text>
 
-          <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
-            <Pressable disabled={busy} onPress={() => setRevealKey((v) => !v)} style={[styles.btnMini, styles.btnLight, busy && styles.btnDisabled]}>
-              <Text style={styles.btnLightText}>{revealKey ? "Verbergen" : "Anzeigen"}</Text>
+          <View style={styles.row}>
+            <Pressable onPress={() => setRevealKey((v) => !v)} style={[styles.btn, styles.btnGhost]}>
+              <Text style={styles.btnGhostText}>{revealKey ? "Verbergen" : "Anzeigen"}</Text>
             </Pressable>
 
-            <Pressable disabled={busy} onPress={onResetApiKey} style={[styles.btnMini, styles.btnAccent, busy && styles.btnDisabled]}>
-              <Text style={styles.btnDarkText}>Zurücksetzen</Text>
+            <Pressable disabled={busy} onPress={onDisconnect} style={[styles.btn, styles.btnDanger, busy && styles.btnDisabled]}>
+              <Text style={styles.btnDangerText}>Gerät trennen</Text>
             </Pressable>
           </View>
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.h2}>Verbindung</Text>
+          <Text style={styles.sectionTitle}>Zuweisung & Flow</Text>
 
-          <Pressable disabled={busy || conn.kind === "loading"} onPress={onTestConnection} style={[styles.btn, styles.btnDark, (busy || conn.kind === "loading") && styles.btnDisabled]}>
-            <Text style={styles.btnDarkText}>{conn.kind === "loading" ? "Teste…" : "Verbindung testen"}</Text>
+          <View style={styles.row}>
+            <Pressable onPress={() => router.push("/event-gate?next=home")} style={[styles.btn, styles.btnGhost]}>
+              <Text style={styles.btnGhostText}>Event wählen</Text>
+            </Pressable>
+
+            <Pressable onPress={() => router.push("/forms")} style={[styles.btn, styles.btnGhost]}>
+              <Text style={styles.btnGhostText}>Formulare</Text>
+            </Pressable>
+          </View>
+
+          <Pressable onPress={() => router.push("/capture")} style={[styles.btnWide, { backgroundColor: accentColor }]}>
+            <Text style={styles.btnPrimaryText}>Lead erfassen</Text>
           </Pressable>
+        </View>
 
-          {conn.kind === "success" ? (
-            <View style={{ marginTop: 10, gap: 4 }}>
-              <Text style={styles.ok}>Verbunden</Text>
-              {conn.now ? <Text style={styles.meta}>Server-Zeit: {conn.now}</Text> : null}
-              {conn.traceId ? <Text style={styles.meta}>Trace-ID: {conn.traceId}</Text> : null}
-            </View>
-          ) : null}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Hilfe & Support</Text>
+          <Text style={styles.supportText}>
+            Übergibt das aktuelle Setup sauber weiter und erleichtert Support-Fälle im Feld.
+          </Text>
 
-          {conn.kind === "error" ? (
-            <View style={{ marginTop: 10, gap: 4 }}>
-              <Text style={styles.err}>Fehler</Text>
-              <Text style={styles.meta}>
-                {conn.code ? `${conn.code} · ` : ""}
-                {typeof conn.status === "number" ? `HTTP ${conn.status} · ` : ""}
-                {conn.message}
-              </Text>
-              {conn.traceId ? <Text style={styles.meta}>Trace-ID: {conn.traceId}</Text> : null}
-              <Pressable onPress={onTestConnection} style={[styles.btnMini, styles.btnLight, { marginTop: 8 }]}>
-                <Text style={styles.btnLightText}>Retry</Text>
-              </Pressable>
-            </View>
-          ) : null}
+          <View style={styles.row}>
+            <Pressable onPress={onCopySetup} style={[styles.btn, styles.btnGhost]}>
+              <Text style={styles.btnGhostText}>Setup kopieren</Text>
+            </Pressable>
+
+            <Pressable onPress={onSupport} style={[styles.btn, styles.btnGhost]}>
+              <Text style={styles.btnGhostText}>Support öffnen</Text>
+            </Pressable>
+          </View>
         </View>
 
         {note ? (
-          <View style={styles.note}>
-            <Text style={styles.noteText}>{note}</Text>
+          <View style={styles.infoBox}>
+            <Text style={styles.infoText}>{note}</Text>
           </View>
         ) : null}
 
-        <Pressable disabled={busy} onPress={() => router.replace("/")} style={[styles.btn, styles.btnLight]}>
-          <Text style={styles.btnLightText}>Zur Startseite</Text>
-        </Pressable>
-      </View>
-    </ScreenScaffold>
+        {conn.kind === "success" ? (
+          <View style={styles.infoBox}>
+            <Text style={styles.infoText}>
+              Verbindung ok{conn.now ? ` · ${conn.now}` : ""}{conn.traceId ? ` · traceId: ${conn.traceId}` : ""}
+            </Text>
+          </View>
+        ) : null}
+
+        {conn.kind === "error" ? (
+          <View style={[styles.infoBox, styles.errorBox]}>
+            <Text style={styles.infoText}>
+              {conn.message}
+              {conn.status ? ` · HTTP ${conn.status}` : ""}
+              {conn.traceId ? ` · traceId: ${conn.traceId}` : ""}
+            </Text>
+          </View>
+        ) : null}
+
+        <PoweredBy />
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  card: {
+  safe: {
+    flex: 1,
     backgroundColor: UI.bg,
-    borderRadius: 16,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: UI.border,
-    gap: 6,
   },
-  h2: { fontWeight: "900", color: UI.text },
-  label: { fontWeight: "800", color: UI.text, marginTop: 8 },
-  meta: { opacity: 0.8, color: UI.text, fontSize: 12 },
-  mono: { fontFamily: "monospace", opacity: 0.9, color: UI.text },
-
-  input: {
-    marginTop: 4,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 14,
+  body: {
+    paddingHorizontal: UI.padX,
+    paddingTop: 8,
+    gap: 14,
+  },
+  card: {
+    backgroundColor: "#ffffff",
+    borderRadius: 20,
     borderWidth: 1,
     borderColor: UI.border,
+    padding: 16,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: "900",
     color: UI.text,
-    backgroundColor: "rgba(17,24,39,0.03)",
-    fontWeight: "700",
+    marginBottom: 10,
   },
-
-  btn: { paddingVertical: 12, paddingHorizontal: 14, borderRadius: 14, alignItems: "center", flex: 1 },
-  btnMini: { paddingVertical: 10, paddingHorizontal: 12, borderRadius: 14, alignItems: "center" },
-
-  btnDark: { backgroundColor: UI.text },
-  btnDarkText: { color: "white", fontWeight: "900" },
-
-  btnLight: { backgroundColor: "rgba(17,24,39,0.06)" },
-  btnLightText: { fontWeight: "900", color: UI.text },
-
-  btnAccent: { backgroundColor: UI.accent },
-
-  btnDisabled: { opacity: 0.6 },
-
-  ok: { fontWeight: "900", color: UI.text },
-  err: { fontWeight: "900", color: UI.text },
-
-  note: {
-    paddingVertical: 10,
-    paddingHorizontal: 12,
+  label: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: "rgba(0,0,0,0.52)",
+    marginBottom: 6,
+  },
+  labelTop: {
+    marginTop: 12,
+  },
+  input: {
+    minHeight: 48,
     borderRadius: 14,
-    backgroundColor: "rgba(17,24,39,0.06)",
+    borderWidth: 1,
+    borderColor: UI.border,
+    backgroundColor: "#fff",
+    paddingHorizontal: 14,
+    fontSize: 15,
+    color: UI.text,
+  },
+  meta: {
+    marginTop: 6,
+    fontSize: 12,
+    color: "rgba(0,0,0,0.50)",
+  },
+  mono: {
+    fontSize: 13,
+    color: UI.text,
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
+  },
+  row: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 12,
+  },
+  inlineRow: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "center",
+  },
+  inlineFill: {
+    flex: 1,
+  },
+  btn: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  btnWide: {
+    marginTop: 12,
+    minHeight: 48,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  btnMini: {
+    minHeight: 38,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  btnPrimaryText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  btnGhost: {
+    backgroundColor: "#fff",
     borderWidth: 1,
     borderColor: UI.border,
   },
-  noteText: { color: UI.text, fontWeight: "800" },
+  btnGhostText: {
+    color: UI.text,
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  btnDanger: {
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "rgba(230,40,40,0.18)",
+  },
+  btnDangerText: {
+    color: "rgba(190,0,0,0.9)",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  btnDisabled: {
+    opacity: 0.55,
+  },
+  supportText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: "rgba(0,0,0,0.62)",
+  },
+  infoBox: {
+    borderRadius: 16,
+    backgroundColor: "rgba(0,0,0,0.03)",
+    padding: 12,
+  },
+  errorBox: {
+    backgroundColor: "rgba(255,120,120,0.10)",
+  },
+  infoText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: UI.text,
+  },
 });

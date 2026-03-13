@@ -12,12 +12,10 @@ export async function GET(req: Request) {
 
     enforceRateLimit(`mobile:${auth.apiKeyId}`, { limit: 60, windowMs: 60_000 });
 
-    // Ops telemetry
     const now = new Date();
     await prisma.mobileApiKey.update({ where: { id: auth.apiKeyId }, data: { lastUsedAt: now } });
     await prisma.mobileDevice.update({ where: { id: auth.deviceId }, data: { lastSeenAt: now } });
 
-    // Leak-safe device scope check
     const device = await prisma.mobileDevice.findFirst({
       where: { id: auth.deviceId, tenantId: auth.tenantId },
       select: { id: true },
@@ -52,15 +50,16 @@ export async function GET(req: Request) {
     const name = displayName ?? legalName ?? tenant.name;
 
     const accentColor = profile?.accentColor ?? tenant.accentColor ?? null;
-
     const hasLogo = !!tenant.logoKey && !!tenant.logoMime;
 
     return jsonOk(req, {
       tenant: {
         slug: tenant.slug,
+        name: tenant.name,
       },
       branding: {
         name,
+        tenantName: name,
         legalName,
         displayName,
         accentColor,
@@ -68,6 +67,7 @@ export async function GET(req: Request) {
         logoMime: hasLogo ? tenant.logoMime : null,
         logoUpdatedAt: tenant.logoUpdatedAt ? tenant.logoUpdatedAt.toISOString() : null,
         logoUrl: hasLogo ? "/api/mobile/v1/branding/logo" : null,
+        logoBase64Url: hasLogo ? "/api/mobile/v1/branding/logo-base64" : null,
       },
     });
   } catch (e) {
