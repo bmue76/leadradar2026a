@@ -132,6 +132,71 @@ function fmtDateTime(iso: string | null | undefined): string {
   }
 }
 
+function formatBytes(n?: number | null): string {
+  if (!n || n <= 0) return "—";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function attachmentFileExt(filename: string | null | undefined): string {
+  const raw = String(filename || "").trim().toLowerCase();
+  const idx = raw.lastIndexOf(".");
+  return idx >= 0 ? raw.slice(idx) : "";
+}
+
+function isImageAttachment(a: { type: string; filename: string; mimeType: string | null }): boolean {
+  const mime = String(a.mimeType || "").toLowerCase();
+  const ext = attachmentFileExt(a.filename);
+  if (mime.startsWith("image/")) return true;
+  if ([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".heif"].includes(ext)) return true;
+  return String(a.type || "").toUpperCase() === "IMAGE" || String(a.type || "").toUpperCase() === "BUSINESS_CARD_IMAGE";
+}
+
+function isAudioAttachment(a: { type: string; filename: string; mimeType: string | null }): boolean {
+  const mime = String(a.mimeType || "").toLowerCase();
+  const ext = attachmentFileExt(a.filename);
+  if (mime.startsWith("audio/")) return true;
+  if ([".m4a", ".mp3", ".wav", ".aac", ".ogg", ".oga", ".webm"].includes(ext)) return true;
+  const type = String(a.type || "").toUpperCase();
+  return type === "AUDIO" || type === "VOICE" || type === "VOICE_MESSAGE" || type === "AUDIO_RECORDING";
+}
+
+function isPdfAttachment(a: { type: string; filename: string; mimeType: string | null }): boolean {
+  const mime = String(a.mimeType || "").toLowerCase();
+  const ext = attachmentFileExt(a.filename);
+  if (mime === "application/pdf") return true;
+  return String(a.type || "").toUpperCase() === "PDF" || ext === ".pdf";
+}
+
+function attachmentLabel(a: { type: string; filename: string; mimeType: string | null }): string {
+  const type = String(a.type || "").toUpperCase();
+  if (type === "BUSINESS_CARD_IMAGE") return "Visitenkarte";
+  if (isAudioAttachment(a)) return "Sprachnachricht / Audio";
+  if (isPdfAttachment(a)) return "PDF";
+  if (isImageAttachment(a)) return "Bild";
+  return type || "Datei";
+}
+
+function attachmentMeta(a: {
+  type: string;
+  filename: string;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  createdAt: string | null;
+}): string {
+  const parts = [attachmentLabel(a)];
+  if (a.mimeType) parts.push(a.mimeType);
+  if (typeof a.sizeBytes === "number") parts.push(formatBytes(a.sizeBytes));
+  if (a.createdAt) parts.push(`Erstellt: ${fmtDateTime(a.createdAt)}`);
+  return parts.join(" · ");
+}
+
 function statusLabel(s: "NEW" | "REVIEWED"): string {
   return s === "REVIEWED" ? "Bearbeitet" : "Neu";
 }
@@ -829,8 +894,45 @@ export default function LeadsClient() {
     const bc = list.find((a) => String(a.type || "").toUpperCase() === "BUSINESS_CARD_IMAGE");
     if (bc) return bc;
     const img = list.find((a) => String(a.mimeType || "").toLowerCase().startsWith("image/"));
-    return img ?? list[0] ?? null;
+    return img ?? null;
   }, [detail]);
+
+  const businessCardUsesFallback = useMemo(() => {
+    if (!pickBusinessCardAttachment) return false;
+    return String(pickBusinessCardAttachment.type || "").toUpperCase() !== "BUSINESS_CARD_IMAGE";
+  }, [pickBusinessCardAttachment]);
+
+  const attachmentInlineHref = (attachmentId: string): string => {
+    if (!detail?.id) return "#";
+    return `/api/admin/v1/leads/${detail.id}/attachments/${attachmentId}/download?disposition=inline`;
+  };
+
+  const attachmentDownloadHref = (attachmentId: string): string => {
+    if (!detail?.id) return "#";
+    return `/api/admin/v1/leads/${detail.id}/attachments/${attachmentId}/download?disposition=attachment`;
+  };
+
+  const nonBusinessAttachments = useMemo(() => {
+    if (!detail?.attachments?.length) return [];
+    if (!pickBusinessCardAttachment?.id) return detail.attachments;
+    return detail.attachments.filter((a) => a.id !== pickBusinessCardAttachment.id);
+  }, [detail, pickBusinessCardAttachment]);
+
+  const audioAttachments = useMemo(
+    () => nonBusinessAttachments.filter((a) => isAudioAttachment(a)),
+    [nonBusinessAttachments]
+  );
+
+  const imageAttachments = useMemo(
+    () => nonBusinessAttachments.filter((a) => isImageAttachment(a) && !isAudioAttachment(a) && !isPdfAttachment(a)),
+    [nonBusinessAttachments]
+  );
+
+  const documentAttachments = useMemo(
+    () => nonBusinessAttachments.filter((a) => !isAudioAttachment(a) && !isImageAttachment(a)),
+    [nonBusinessAttachments]
+  );
+
 
   const loadOcr = useCallback(async () => {
     if (!detail || ocrLoading) return;
@@ -1340,85 +1442,255 @@ export default function LeadsClient() {
             </Card>
 
             <Card title="Anhänge / OCR">
-              {pickBusinessCardAttachment ? (
-                <div className="space-y-3">
-                  <div className="text-sm text-slate-700">
-                    <span className="text-slate-500">Business Card:</span> {pickBusinessCardAttachment.filename}
-                  </div>
-
-                  <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
-                    {String(pickBusinessCardAttachment.mimeType || "")
-                      .toLowerCase()
-                      .startsWith("image/") ? (
-                      <>
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          alt="Business Card"
-                          className="h-auto w-full object-contain"
-                          src={`/api/admin/v1/leads/${detail.id}/attachments/${pickBusinessCardAttachment.id}/download?disposition=inline`}
-                        />
-                      </>
-                    ) : (
-                      <div className="p-4 text-sm text-slate-600">Vorschau nicht verfügbar.</div>
-                    )}
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <a
-                      className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
-                      href={`/api/admin/v1/leads/${detail.id}/attachments/${pickBusinessCardAttachment.id}/download?disposition=attachment`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Download
-                    </a>
-
-                    <Button
-                      label={ocrLoading ? "OCR lade…" : "OCR laden"}
-                      kind="secondary"
-                      onClick={() => void loadOcr()}
-                      disabled={ocrLoading}
-                    />
-                    <Button
-                      label={ocrApplying ? "Wende an…" : "OCR anwenden"}
-                      kind="secondary"
-                      onClick={() => void applyOcr()}
-                      disabled={!ocrData?.ocr?.id || ocrApplying}
-                      title={!ocrData?.ocr?.id ? "Zuerst OCR laden." : undefined}
-                    />
-                  </div>
-
-                  {ocrError ? (
-                    <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3">
-                      <div className="text-sm font-medium text-rose-900">OCR Fehler</div>
-                      <div className="mt-1 text-sm text-rose-800">{ocrError.message}</div>
-                      {ocrError.traceId ? (
-                        <div className="mt-2 text-xs text-rose-700">Support-Code: {ocrError.traceId}</div>
-                      ) : null}
-                    </div>
-                  ) : null}
-
-                  {ocrData?.ocr ? (
-                    <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                      <div className="text-sm font-medium text-slate-900">OCR Summary</div>
-                      <div className="mt-1 text-sm text-slate-700">
-                        Status: <span className="font-medium">{ocrData.ocr.status}</span> · Engine:{" "}
-                        <span className="font-medium">{ocrData.ocr.engine}</span>
-                        {typeof ocrData.ocr.confidence === "number" ? (
-                          <>
-                            {" "}
-                            · Confidence:{" "}
-                            <span className="font-medium">{Math.round(ocrData.ocr.confidence * 100)}%</span>
-                          </>
+              <div className="space-y-4">
+                {pickBusinessCardAttachment ? (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">Visitenkarte</div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {attachmentMeta(pickBusinessCardAttachment)}
+                        </div>
+                        {businessCardUsesFallback ? (
+                          <div className="mt-2 text-xs text-amber-700">
+                            Keine explizite <span className="font-medium">BUSINESS_CARD_IMAGE</span> gefunden. Bild-Fallback wird verwendet.
+                          </div>
                         ) : null}
                       </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <a
+                          className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                          href={attachmentInlineHref(pickBusinessCardAttachment.id)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Öffnen
+                        </a>
+                        <a
+                          className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                          href={attachmentDownloadHref(pickBusinessCardAttachment.id)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Download
+                        </a>
+
+                        <Button
+                          label={ocrLoading ? "OCR lade…" : "OCR laden"}
+                          kind="secondary"
+                          onClick={() => void loadOcr()}
+                          disabled={ocrLoading}
+                        />
+                        <Button
+                          label={ocrApplying ? "Wende an…" : "OCR anwenden"}
+                          kind="secondary"
+                          onClick={() => void applyOcr()}
+                          disabled={!ocrData?.ocr?.id || ocrApplying}
+                          title={!ocrData?.ocr?.id ? "Zuerst OCR laden." : undefined}
+                        />
+                      </div>
                     </div>
-                  ) : null}
-                </div>
-              ) : (
-                <div className="text-sm text-slate-600">Keine Anhänge vorhanden.</div>
-              )}
+
+                    <div className="mt-3 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                      {isImageAttachment(pickBusinessCardAttachment) ? (
+                        <>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            alt="Business Card"
+                            className="h-auto w-full object-contain"
+                            src={attachmentInlineHref(pickBusinessCardAttachment.id)}
+                          />
+                        </>
+                      ) : (
+                        <div className="p-4 text-sm text-slate-600">Vorschau nicht verfügbar.</div>
+                      )}
+                    </div>
+
+                    {ocrError ? (
+                      <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 p-3">
+                        <div className="text-sm font-medium text-rose-900">OCR Fehler</div>
+                        <div className="mt-1 text-sm text-rose-800">{ocrError.message}</div>
+                        {ocrError.traceId ? (
+                          <div className="mt-2 text-xs text-rose-700">Support-Code: {ocrError.traceId}</div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {ocrData?.ocr ? (
+                      <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-3">
+                        <div className="text-sm font-medium text-slate-900">OCR Summary</div>
+                        <div className="mt-1 text-sm text-slate-700">
+                          Status: <span className="font-medium">{ocrData.ocr.status}</span> · Engine:{" "}
+                          <span className="font-medium">{ocrData.ocr.engine}</span>
+                          {typeof ocrData.ocr.confidence === "number" ? (
+                            <>
+                              {" "}
+                              · Confidence:{" "}
+                              <span className="font-medium">{Math.round(ocrData.ocr.confidence * 100)}%</span>
+                            </>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mt-3 text-sm text-slate-600">
+                        Noch kein OCR geladen.
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+
+                {audioAttachments.length > 0 ? (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">Sprachnachrichten / Audio</div>
+                        <div className="mt-1 text-xs text-slate-500">{audioAttachments.length} Datei(en)</div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 space-y-3">
+                      {audioAttachments.map((att) => (
+                        <div key={att.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium text-slate-900">{att.filename}</div>
+                              <div className="mt-1 text-xs text-slate-500">{attachmentMeta(att)}</div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2">
+                              <a
+                                className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                                href={attachmentInlineHref(att.id)}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Öffnen
+                              </a>
+                              <a
+                                className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                                href={attachmentDownloadHref(att.id)}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Download
+                              </a>
+                            </div>
+                          </div>
+
+                          <div className="mt-3 rounded-xl border border-slate-200 bg-white p-2">
+                            <audio controls preload="none" className="w-full">
+                              <source src={attachmentInlineHref(att.id)} type={att.mimeType ?? undefined} />
+                            </audio>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {imageAttachments.length > 0 ? (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">Weitere Bilder</div>
+                        <div className="mt-1 text-xs text-slate-500">{imageAttachments.length} Datei(en)</div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      {imageAttachments.map((att) => (
+                        <div key={att.id} className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                          <div className="border-b border-slate-200 bg-white">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              alt={att.filename || "Bild"}
+                              className="h-44 w-full object-cover"
+                              src={attachmentInlineHref(att.id)}
+                            />
+                          </div>
+
+                          <div className="p-3">
+                            <div className="truncate text-sm font-medium text-slate-900">{att.filename}</div>
+                            <div className="mt-1 text-xs text-slate-500">{attachmentMeta(att)}</div>
+
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                              <a
+                                className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                                href={attachmentInlineHref(att.id)}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Öffnen
+                              </a>
+                              <a
+                                className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                                href={attachmentDownloadHref(att.id)}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Download
+                              </a>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {documentAttachments.length > 0 ? (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">PDFs / Dateien</div>
+                        <div className="mt-1 text-xs text-slate-500">{documentAttachments.length} Datei(en)</div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 space-y-2">
+                      {documentAttachments.map((att) => {
+                        const canOpen = isPdfAttachment(att);
+                        return (
+                          <div key={att.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium text-slate-900">{att.filename}</div>
+                              <div className="mt-1 text-xs text-slate-500">{attachmentMeta(att)}</div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2">
+                              {canOpen ? (
+                                <a
+                                  className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                                  href={attachmentInlineHref(att.id)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  Öffnen
+                                </a>
+                              ) : null}
+                              <a
+                                className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
+                                href={attachmentDownloadHref(att.id)}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Download
+                              </a>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+
+                {!pickBusinessCardAttachment && audioAttachments.length === 0 && imageAttachments.length === 0 && documentAttachments.length === 0 ? (
+                  <div className="text-sm text-slate-600">Keine Anhänge vorhanden.</div>
+                ) : null}
+              </div>
             </Card>
+
 
             {drawerErr ? (
               <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">

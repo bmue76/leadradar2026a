@@ -14,6 +14,15 @@ Die Lead-Detailansicht im Admin soll alle erfassten Anhänge klar, ruhig und GoL
 - Audio / Sprachnachricht sichtbar und abspielbar
 - tenant-safe, ohne API-/DB-Regression
 
+## Korrektur zum ersten Versuch
+
+Der erste technische Ansatz hat versehentlich `LeadDetailDrawer.tsx` angepasst.  
+Die tatsächlich aktive Detailansicht läuft im aktuellen Admin jedoch in:
+
+- `src/app/(admin)/admin/leads/LeadsClient.tsx`
+
+TP 9.6a wurde deshalb auf den **live verwendeten Drawer in `LeadsClient.tsx`** korrigiert.
+
 ## Ist-Analyse
 
 Die bestehende Detail-API liefert für `attachments` bereits alle relevanten Daten:
@@ -42,38 +51,40 @@ Keine Änderung am Vertrag erforderlich.
 Bestehende tenant-scoped Download-Route wird weiterverwendet.
 
 ### DTO
-`leads.types.ts` wurde präzisiert:
-
-- Attachment-Typen als open-ended dokumentiert
-- `AdminLeadDetail` um bekannte Detailfelder ergänzt
-- Kompatibilitätsfelder für gemischte Response-Formen beibehalten
+Keine neue Pflicht-Erweiterung.  
+Die Detaildarstellung nutzt den bestehenden Attachment-Contract.
 
 ### UI
-`LeadDetailDrawer.tsx` wurde gezielt erweitert:
+Die aktive Drawer-Ansicht in `LeadsClient.tsx` wurde gezielt erweitert:
 
-1. **Business Card / OCR**
-   - Business Card bleibt separat im OCR-Bereich sichtbar
-   - Preview ist auch dann sichtbar, wenn noch kein OCR-Resultat vorliegt
-   - Open + Download vorhanden
-   - Fallback-Hinweis, wenn keine explizite `BUSINESS_CARD_IMAGE` vorhanden ist und stattdessen das erste Bild verwendet wird
+1. **Visitenkarte / OCR**
+   - Business Card bleibt separat sichtbar
+   - Preview, Öffnen und Download vorhanden
+   - OCR-Steuerung bleibt intakt
+   - defensiver Bild-Fallback bleibt möglich
+   - Hinweis sichtbar, wenn Fallback statt expliziter `BUSINESS_CARD_IMAGE` genutzt wird
 
-2. **Attachments & media**
-   - klare Trennung in:
-     - Voice messages / audio
-     - Additional images
-     - PDFs & files
-   - Business Card wird nicht nochmals doppelt in der allgemeinen Attachment-Liste angezeigt
-   - Audio erhält Inline-Player + Open + Download
-   - Bilder erhalten Inline-Preview + Open + Download
-   - PDFs erhalten Open + Download
-   - Weitere Dateien erhalten Download
+2. **Sprachnachrichten / Audio**
+   - eigener Block
+   - Audio-Player inline
+   - Öffnen + Download
+   - Dateiname, Typ, MimeType, Größe, CreatedAt sichtbar
 
-3. **Metadaten**
-   - pro Attachment sinnvoll sichtbar:
-     - fachlicher Typ
-     - MimeType
-     - Größe
-     - CreatedAt
+3. **Weitere Bilder**
+   - eigener Block
+   - Inline-Preview
+   - Öffnen + Download
+   - Metadaten sichtbar
+
+4. **PDFs / Dateien**
+   - eigener Block
+   - PDF: Öffnen + Download
+   - sonstige Dateien: Download
+   - Metadaten sichtbar
+
+5. **Saubere Trennung**
+   - Business Card wird nicht nochmals doppelt in allgemeinen Anhängen angezeigt
+   - Audio erscheint nicht mehr als unbekannte Datei
 
 ## Akzeptanzkriterien
 
@@ -98,25 +109,25 @@ Manual Smoke
 
 Lead mit Business Card öffnen
 
-OCR-Bereich zeigt Visitenkarte mit Preview
+OCR-/Visitenkartenbereich zeigt Preview
 
-Open / Download funktionieren
+Öffnen / Download funktionieren
 
 Lead mit zusätzlichem Bild öffnen
 
-Bild erscheint unter Additional images
+Bild erscheint unter Weitere Bilder
 
-Open / Download funktionieren
+Öffnen / Download funktionieren
 
 Lead mit PDF öffnen
 
-PDF erscheint unter PDFs & files
+PDF erscheint unter PDFs / Dateien
 
-Open / Download funktionieren
+Öffnen / Download funktionieren
 
 Lead mit Sprachnachricht öffnen
 
-Audio erscheint unter Voice messages / audio
+Audio erscheint unter Sprachnachrichten / Audio
 
 Audio-Player funktioniert
 
@@ -124,7 +135,7 @@ Download funktioniert
 
 Lead mit Kombination aus Business Card + Zusatzbild + PDF + Audio öffnen
 
-Business Card nur im OCR-Bereich
+Business Card separat
 
 zusätzliche Medien sauber getrennt
 
@@ -136,7 +147,7 @@ Risiken / Hinweise
 
 OCR-API kann weiterhin einen Bild-Fallback verwenden, falls keine explizite BUSINESS_CARD_IMAGE vorhanden ist. Das ist absichtlich defensiv, um ältere Leads nicht zu verschlechtern.
 
-Audio-Playback hängt browserseitig vom unterstützten MIME-/Codec-Format ab. Download bleibt in jedem Fall verfügbar.
+Audio-Playback hängt browserseitig vom unterstützten MIME-/Codec-Format ab. Download bleibt unabhängig davon verfügbar.
 
 Next Step
 
@@ -144,8 +155,8 @@ Nach lokalem Proof:
 
 Commit:
 
-feat(tp9.6a): improve admin lead attachment visibility
+fix(tp9.6a): wire admin attachment visibility into live leads drawer
 
-optional separater Docs-Commit:
+optional zusätzlicher Docs-Commit:
 
-docs(tp9.6a): document admin lead attachment visibility
+docs(tp9.6a): correct live admin attachment visibility path
